@@ -1,0 +1,60 @@
+name: Sleep History Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      trigger_source:
+        description: Trigger source
+        required: false
+        default: manual
+  schedule:
+    - cron: "0 22 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sleep-history-production
+  cancel-in-progress: false
+
+jobs:
+  produce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install media and Python dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Produce, archive, and request review
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_TTS_VOICE_ID: ${{ secrets.GEMINI_TTS_VOICE_ID }}
+          GEMINI_TTS_VOICE_NAME: ${{ secrets.GEMINI_TTS_VOICE_NAME }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
+          IAS3_ACCESS_KEY: ${{ secrets.IAS3_ACCESS_KEY }}
+          IAS3_SECRET_KEY: ${{ secrets.IAS3_SECRET_KEY }}
+          PINK_NOISE_URL: ${{ secrets.PINK_NOISE_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/cloud_pipeline.py produce
+      - name: Persist topic and archive catalogues
+        if: always()
+        run: |
+          git config user.name "sleep-history-bot"
+          git config user.email "marwalfarsi2000@gmail.com"
+          git add config/topics_history.json config/archive_index.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Update sleep history catalogue"
+            git push
+          fi
+

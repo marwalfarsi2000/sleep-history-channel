@@ -1,0 +1,55 @@
+[
+  {
+    "slug": "ur-daily-life-2000-bce",
+    "topic": "الحياة اليومية في أور نحو 2000–1800 ق.م.",
+    "status": "rejected",
+    "story_path": "stories/2026-10-07_ur-daily-life-2000-bce"
+  },
+  {
+    "slug": "dhofar-incense-network",
+    "topic": "من شجرة اللبان في ظفار إلى القوافل والموانئ القديمة",
+    "status": "pending_approval",
+    "story_path": "stories/2026-10-07_dhofar-incense-network"
+  },
+  {
+    "slug": "a-day-in-the-life-of-a-scribe-in-ancient-thebes",
+    "topic": "يوم في حياة كاتب في طيبة القديمة",
+    "angle": "روتين كاتب مصري قديم بين أدوات الكتابة والسجلات والحياة اليومية في طيبة خلال الدولة الحديثة",
+    "status": "published",
+    "story_path": "stories/2026-10-08_a-day-in-the-life-of-a-scribe-in-ancient-thebes",
+    "created_at": "2026-10-08T22:04:28.332155+04:00",
+    "youtube_video_id": "OoPOEiWb7zc"
+  },
+  {
+    "slug": "daily-life-in-palmyra-roman-era",
+    "topic": "الحياة اليومية في مدينة تدمر خلال العصر الروماني",
+    "angle": "تتبع يوم في حياة تاجر تدمرِي بين الأسواق المزدحمة، طقوس المعابد، وتجهيز القوافل المتجهة نحو طريق الحرير",
+    "status": "pending_approval",
+    "story_path": "stories/2026-10-08_daily-life-in-palmyra-roman-era",
+    "created_at": "2026-10-08T22:10:57.869140+04:00"
+  },
+  {
+    "slug": "daily-life-in-kairouan-aghlabid-era",
+    "topic": "الحياة اليومية في مدينة القيروان خلال العصر الأغلبي",
+    "angle": "استعراض تفاصيل الحياة في حاضرة العلم والتجارة، من أصوات الأسواق المزدحمة في القيروان إلى طقوس العبادة في جامع عقبة بن نافع، مع التركيز على نمط معيشة العلماء والحرفيين في القرن التاسع الميلادي.",
+    "status": "pending_approval",
+    "story_path": "stories/2026-10-10_daily-life-in-kairouan-aghlabid-era",
+    "created_at": "2026-10-10T02:32:42.371498+04:00"
+  },
+  {
+    "slug": "daily-life-in-caliphate-cordoba",
+    "topic": "الحياة اليومية في مدينة قرطبة خلال العصر الأموي",
+    "angle": "رحلة في أزقة قرطبة المزدهرة، من هندسة المياه والحدائق إلى روتين طلبة العلم في مكتبة الحكم المستنصر، مع التركيز على التعايش الثقافي والابتكارات العلمية في القرن العاشر الميلادي.",
+    "status": "pending_approval",
+    "story_path": "stories/2026-10-12_daily-life-in-caliphate-cordoba",
+    "created_at": "2026-10-12T00:51:49.531998+04:00"
+  },
+  {
+    "slug": "daily-life-in-venice-spice-trade-era",
+    "topic": "الحياة اليومية في مدينة البندقية خلال ذروة تجارة التوابل والحرير",
+    "angle": "رحلة في أزقة البندقية المائية في القرن الخامس عشر، تتبع يوم في حياة تاجر وسيط بين الشرق والغرب، مع وصف دقيق لبناء السفن في الترسانة (الأرسنال)، حركة الموانئ، وتأثير السلع الشرقية على نمط الحياة المنزلي والاجتماعي.",
+    "story_path": "stories/2026-10-12_daily-life-in-venice-spice-trade-era",
+    "created_at": "2026-10-12T15:57:56.801827+04:00",
+    "status": "drafting"
+  }
+]

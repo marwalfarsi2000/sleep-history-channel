@@ -1,0 +1,65 @@
+name: Sleep History Review Decision
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: publish, reject, or regenerate
+        required: true
+        type: choice
+        options: [publish, reject, regenerate]
+      identifier:
+        description: Internet Archive identifier
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sleep-history-${{ inputs.identifier }}
+  cancel-in-progress: false
+
+jobs:
+  decide:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Apply review decision
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_TTS_VOICE_ID: ${{ secrets.GEMINI_TTS_VOICE_ID }}
+          GEMINI_TTS_VOICE_NAME: ${{ secrets.GEMINI_TTS_VOICE_NAME }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
+          IAS3_ACCESS_KEY: ${{ secrets.IAS3_ACCESS_KEY }}
+          IAS3_SECRET_KEY: ${{ secrets.IAS3_SECRET_KEY }}
+          PINK_NOISE_URL: ${{ secrets.PINK_NOISE_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: python scripts/cloud_pipeline.py "${{ inputs.action }}" --identifier "${{ inputs.identifier }}"
+      - name: Persist decision
+        if: always()
+        run: |
+          git config user.name "sleep-history-bot"
+          git config user.email "marwalfarsi2000@gmail.com"
+          git add config/topics_history.json config/archive_index.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Record review decision for ${{ inputs.identifier }}"
+            git push
+          fi
+
