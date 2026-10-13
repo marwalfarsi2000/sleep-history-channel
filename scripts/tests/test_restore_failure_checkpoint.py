@@ -26,17 +26,25 @@ class RestoreFailureCheckpointTests(unittest.TestCase):
             )
             self.assertEqual(latest_unfinished_story(root), "stories/current")
 
-    def test_only_matching_story_logs_are_restored(self):
+    def test_only_matching_story_checkpoint_files_are_restored(self):
         payload = io.BytesIO()
         with zipfile.ZipFile(payload, "w") as archive:
             archive.writestr("stories/current/logs/chapter_01.md", "ok")
+            archive.writestr("stories/current/tts_chunks/001.txt", "tts")
+            archive.writestr("stories/current/audio_chunks/001.mp3", "audio")
+            archive.writestr("stories/current/06_story_tts_annotated.md", "annotated")
             archive.writestr("stories/other/logs/chapter_01.md", "wrong")
-            archive.writestr("stories/current/15_metadata.json", "wrong")
+            archive.writestr("stories/current/14_video_final.mp4", "wrong")
             archive.writestr("../escape.txt", "wrong")
         payload.seek(0)
         with zipfile.ZipFile(payload) as archive:
             names = [item.filename for item in safe_story_members(archive, "stories/current")]
-        self.assertEqual(names, ["stories/current/logs/chapter_01.md"])
+        self.assertEqual(names, [
+            "stories/current/logs/chapter_01.md",
+            "stories/current/tts_chunks/001.txt",
+            "stories/current/audio_chunks/001.mp3",
+            "stories/current/06_story_tts_annotated.md",
+        ])
 
     def test_artifact_redirect_does_not_forward_github_token(self):
         class RedirectingOpener:

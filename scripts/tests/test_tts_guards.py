@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import base64
+import io
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -157,6 +159,65 @@ class TtsGuardTests(unittest.TestCase):
         content = payload["input"][0]["content"][0]
         self.assertEqual(content["text"], "نَصٌّ هادِئٌ.")
         self.assertEqual(content["annotations"][0]["type"], "speech_metadata")
+
+    def test_gemini_retries_minute_quota_then_succeeds(self):
+        wav = b"RIFF" + b"0" * 2048
+        response = _FakeResponse(json.dumps({
+            "output_audio": {"data": base64.b64encode(wav).decode("ascii")}
+        }).encode("utf-8"))
+        minute_error = urllib.error.HTTPError(
+            "https://example.invalid", 429, "Too Many Requests",
+            {"Retry-After": "0"}, io.BytesIO(b'{"quotaId":"GenerateRequestsPerMinutePerProjectPerModel"}')
+        )
+        calls = [minute_error, response]
+
+        def fake_urlopen(_request, timeout):
+            item = calls.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        def fake_run(command, check=True):
+            Path(command[-1]).write_bytes(b"ID3" + b"0" * 2048)
+
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "sample.mp3"
+            with mock.patch.dict(
+                pipeline.SECRETS,
+                {"GEMINI_API_KEY": "test-key", "GEMINI_TTS_VOICE_ID": "voice-test"},
+                clear=False,
+            ), mock.patch.object(pipeline.urllib.request, "urlopen", fake_urlopen), mock.patch.object(
+                pipeline.time, "sleep"
+            ) as sleep, mock.patch.object(pipeline, "run", fake_run):
+                pipeline.gemini_tts_one("نَصٌّ هادِئٌ.", output)
+            self.assertTrue(output.exists())
+            sleep.assert_called_once_with(60)
+
+    def test_gemini_daily_quota_stops_without_retry(self):
+        daily_error = urllib.error.HTTPError(
+            "https://example.invalid", 429, "Too Many Requests", {},
+            io.BytesIO(b'{"quotaId":"GenerateRequestsPerDayPerProjectPerModel"}')
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "sample.mp3"
+            with mock.patch.dict(
+                pipeline.SECRETS,
+                {"GEMINI_API_KEY": "test-key", "GEMINI_TTS_VOICE_ID": "voice-test"},
+                clear=False,
+            ), mock.patch.object(
+                pipeline.urllib.request, "urlopen", side_effect=daily_error
+            ), mock.patch.object(pipeline.time, "sleep") as sleep:
+                with self.assertRaisesRegex(RuntimeError, "daily free quota exhausted"):
+                    pipeline.gemini_tts_one("نَصٌّ هادِئٌ.", output)
+            sleep.assert_not_called()
+
+    def test_gemini_uses_larger_free_quota_chunks(self):
+        sentence = "هٰذِهِ جُمْلَةٌ تاريخيةٌ هادئةٌ ومُشَكَّلَةٌ بعناية."
+        text = " ".join([sentence] * 220)
+        old_chunks = pipeline.split_chunks(text, limit=2600)
+        new_chunks = pipeline.split_chunks(text, limit=int(pipeline.SETTINGS["gemini_tts_chunk_char_limit"]))
+        self.assertLess(len(new_chunks), len(old_chunks))
+        self.assertTrue(all(len(chunk) <= 4200 for chunk in new_chunks))
 
     def test_gemini_voice_identity_must_match_selected_voice(self):
         response = _FakeResponse(json.dumps({
