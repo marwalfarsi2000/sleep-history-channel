@@ -47,6 +47,18 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python scripts/cloud_pipeline.py produce
+      - name: Preserve diagnostic logs after failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sleep-history-failure-${{ github.run_id }}
+          path: |
+            logs/*.log
+            stories/*/logs/**
+            stories/*/15_metadata.json
+            stories/*/17_status.md
+          if-no-files-found: warn
+          retention-days: 7
       - name: Persist topic and archive catalogues
         if: always()
         run: |
