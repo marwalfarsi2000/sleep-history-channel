@@ -2,9 +2,12 @@ import io
 import json
 import tempfile
 import unittest
+import urllib.error
 import zipfile
 from pathlib import Path
+from unittest import mock
 
+from scripts import restore_failure_checkpoint
 from scripts.restore_failure_checkpoint import latest_unfinished_story, safe_story_members
 
 
@@ -34,6 +37,38 @@ class RestoreFailureCheckpointTests(unittest.TestCase):
         with zipfile.ZipFile(payload) as archive:
             names = [item.filename for item in safe_story_members(archive, "stories/current")]
         self.assertEqual(names, ["stories/current/logs/chapter_01.md"])
+
+    def test_artifact_redirect_does_not_forward_github_token(self):
+        class RedirectingOpener:
+            def open(self, request, timeout):
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    302,
+                    "Found",
+                    {"Location": "https://example.blob.core.windows.net/file.zip?sig=signed"},
+                    None,
+                )
+
+        response = io.BytesIO(b"zip-bytes")
+        with mock.patch.object(
+            restore_failure_checkpoint.urllib.request,
+            "build_opener",
+            return_value=RedirectingOpener(),
+        ), mock.patch.object(
+            restore_failure_checkpoint.urllib.request,
+            "urlopen",
+            return_value=response,
+        ) as redirected_open:
+            result = restore_failure_checkpoint.download(
+                "https://api.github.com/repos/o/r/actions/artifacts/1/zip",
+                "secret-token",
+            )
+
+        self.assertEqual(result, b"zip-bytes")
+        redirected_request = redirected_open.call_args.args[0]
+        self.assertNotIn("Authorization", redirected_request.headers)
+        self.assertEqual(redirected_request.full_url.split("?", 1)[0],
+                         "https://example.blob.core.windows.net/file.zip")
 
 
 if __name__ == "__main__":
