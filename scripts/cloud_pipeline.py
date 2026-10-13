@@ -19,11 +19,34 @@ SETTINGS = json.loads((ROOT / "config" / "settings.json").read_text(encoding="ut
 def run(command: list[str], log_name: str) -> str:
     logs = ROOT / "logs"
     logs.mkdir(exist_ok=True)
-    result = subprocess.run(command, cwd=ROOT, text=True, encoding="utf-8", errors="replace", capture_output=True)
-    (logs / log_name).write_text(result.stdout + "\n--- STDERR ---\n" + result.stderr, encoding="utf-8")
-    if result.returncode:
-        raise RuntimeError(f"Command failed ({result.returncode}); see logs/{log_name}")
-    return result.stdout
+    log_path = logs / log_name
+    output: list[str] = []
+    process = subprocess.Popen(
+        command,
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+    )
+    if process.stdout is None:
+        raise RuntimeError("Unable to capture child process output")
+    with log_path.open("w", encoding="utf-8") as log:
+        for line in process.stdout:
+            output.append(line)
+            log.write(line)
+            log.flush()
+            print(line, end="", flush=True)
+    process.stdout.close()
+    return_code = process.wait()
+    combined = "".join(output)
+    if return_code:
+        raise RuntimeError(
+            f"Command failed ({return_code}); diagnostic log: {log_path.relative_to(ROOT)}"
+        )
+    return combined
 
 
 def ensure_background_audio() -> None:
