@@ -59,7 +59,12 @@ jobs:
           name: sleep-history-failure-${{ github.run_id }}
           path: |
             logs/*.log
+            stories/*/05_story_clean.md
+            stories/*/06_story_tts_annotated.md
+            stories/*/07_story_tts_api.md
             stories/*/logs/**
+            stories/*/tts_chunks/**
+            stories/*/audio_chunks/**
             stories/*/15_metadata.json
             stories/*/17_status.md
           if-no-files-found: warn
