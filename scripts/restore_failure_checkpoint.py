@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import urllib.request
+import urllib.error
+import urllib.parse
 import zipfile
 
 
@@ -40,6 +42,10 @@ def github_json(url: str, token: str) -> dict:
 
 
 def download(url: str, token: str) -> bytes:
+    class StopRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+            return None
+
     request = urllib.request.Request(
         url,
         headers={
@@ -49,8 +55,26 @@ def download(url: str, token: str) -> bytes:
             "User-Agent": "sleep-history-checkpoint-restorer",
         },
     )
-    with urllib.request.urlopen(request, timeout=120) as response:
-        return response.read()
+    # GitHub responds with a short-lived signed Azure Blob URL. Never forward
+    # the repository bearer token to that different host; Azure rejects the
+    # extra Authorization header and the token should remain scoped to GitHub.
+    opener = urllib.request.build_opener(StopRedirect)
+    try:
+        with opener.open(request, timeout=60) as response:
+            return response.read()
+    except urllib.error.HTTPError as error:
+        if error.code not in {301, 302, 303, 307, 308}:
+            raise
+        location = error.headers.get("Location", "")
+        parsed = urllib.parse.urlparse(location)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise RuntimeError("GitHub returned an invalid artifact redirect") from error
+        redirected = urllib.request.Request(
+            location,
+            headers={"User-Agent": "sleep-history-checkpoint-restorer"},
+        )
+        with urllib.request.urlopen(redirected, timeout=120) as response:
+            return response.read()
 
 
 def safe_story_members(archive: zipfile.ZipFile, story_path: str) -> list[zipfile.ZipInfo]:
