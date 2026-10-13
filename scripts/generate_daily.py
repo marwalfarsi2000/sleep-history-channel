@@ -73,7 +73,8 @@ def gemini(prompt: str, *, json_mode: bool = False, search: bool = False,
     )
     result = None
     last_error = ""
-    for attempt in range(4):
+    retry_delays = (5, 15, 30, 60, 90, 120, 180)
+    for attempt in range(len(retry_delays) + 1):
         try:
             with urllib.request.urlopen(request, timeout=180) as response:
                 result = json.loads(response.read().decode("utf-8"))
@@ -81,11 +82,22 @@ def gemini(prompt: str, *, json_mode: bool = False, search: bool = False,
         except urllib.error.HTTPError as error:
             body = error.read().decode("utf-8", errors="replace")
             last_error = f"Gemini HTTP {error.code}: {body[:600]}"
-            if attempt == 3 and search and error.code in (429, 503):
+            if attempt == len(retry_delays) and search and error.code in (429, 503):
                 break
-            if error.code not in (429, 500, 502, 503, 504) or attempt == 3:
+            if error.code not in (429, 500, 502, 503, 504) or attempt == len(retry_delays):
                 raise RuntimeError(last_error) from error
-            time.sleep((2, 5, 12)[attempt])
+            retry_after = error.headers.get("Retry-After") if error.headers else None
+            try:
+                delay = max(retry_delays[attempt], int(retry_after or 0))
+            except ValueError:
+                delay = retry_delays[attempt]
+            print(
+                f"Gemini temporary HTTP {error.code}; retrying in {delay}s "
+                f"({attempt + 1}/{len(retry_delays)})",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(delay)
     if result is None and search and ("HTTP 429" in last_error or "HTTP 503" in last_error):
         fallback_payload = dict(payload)
         fallback_payload.pop("tools", None)
@@ -266,6 +278,10 @@ def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path)
             chapter = chapter_path.read_text(encoding="utf-8").strip()
         else:
             chapter, _ = gemini(prompt, max_tokens=7000, temperature=0.45)
+            # Save the first usable response before any optional expansion. A
+            # hosted runner can then restore and expand it after a transient
+            # provider failure instead of generating the chapter again.
+            write(chapter_path, chapter)
         if word_count(chapter) < 600:
             expansion_prompt = f"""أعد كتابة المسودة التالية ووسّعها إلى ما بين {target_words} و{target_words + 150} كلمة عربية.
 حافظ على الحقائق والنبرة الهادئة وتسلسل الفقرة، وأضف فقط تفاصيل يومية وتاريخية يدعمها المصدر المعرفي. لا تضف عنوانًا ولا مقدمة للمستمع ولا خاتمة شكر.
