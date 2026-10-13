@@ -166,7 +166,22 @@ def upsert_history_checkpoint(history_path: Path, story: Path, topic: dict, stat
         history.append(record)
     record["status"] = status
     record["story_path"] = story.relative_to(ROOT).as_posix()
+    # Keep enough provider input to rebuild the same episode when a hosted
+    # runner disappears after persisting only the catalogue checkpoint.
+    for key in ("topic_ar", "angle_ar", "search_query_en", "period_ar", "reason_ar"):
+        if topic.get(key):
+            record[key] = topic[key]
     write(history_path, json.dumps(history, ensure_ascii=False, indent=2))
+
+
+def topic_from_checkpoint(record: dict) -> dict:
+    """Restore a complete topic payload from old or new catalogue records."""
+    topic = dict(record)
+    topic["topic_ar"] = record.get("topic_ar") or record.get("topic") or record["slug"]
+    topic["angle_ar"] = record.get("angle_ar") or record.get("angle") or topic["topic_ar"]
+    topic["period_ar"] = record.get("period_ar") or "الفترة التاريخية المذكورة في الموضوع"
+    topic["search_query_en"] = record.get("search_query_en") or record["slug"].replace("-", " ")
+    return topic
 
 
 def choose_topic(history: list[dict]) -> dict:
@@ -387,20 +402,30 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
             candidate = Path(raw)
             return candidate if candidate.is_absolute() else ROOT / candidate
 
+        # Prefer the newest unfinished checkpoint. A GitHub-hosted runner is
+        # ephemeral, so its catalogue commit can survive while the draft
+        # directory is gone. In that case rebuild the same topic instead of
+        # silently selecting a different episode.
         unfinished = next((
-            item for item in history
-            if item.get("status") == "generating"
+            item for item in reversed(history)
+            if item.get("status") in {"generating", "drafting"}
             and checkpoint_path(item)
-            and checkpoint_path(item).exists()
         ), None)
         if unfinished:
-            return resume_partial_story(checkpoint_path(unfinished).resolve())
-    topic = choose_topic(history)
+            saved_story = checkpoint_path(unfinished).resolve()
+            if saved_story.exists():
+                return resume_partial_story(saved_story)
+            topic = topic_from_checkpoint(unfinished)
+            story = saved_story
+        else:
+            topic = choose_topic(history)
+            story = ROOT / "stories" / f"{dt.date.today().isoformat()}_{topic['slug']}"
+    else:
+        topic = choose_topic(history)
+        story = ROOT / "stories" / f"{dt.date.today().isoformat()}_{topic['slug']}"
     if dry_run:
         print(json.dumps({"ok": True, "mode": "dry-run", "topic": topic}, ensure_ascii=False))
         return None
-    date_prefix = dt.date.today().isoformat()
-    story = ROOT / "stories" / f"{date_prefix}_{topic['slug']}"
     if story.exists():
         raise RuntimeError(f"Story directory already exists: {story}")
     story.mkdir(parents=True)
