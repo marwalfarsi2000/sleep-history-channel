@@ -78,13 +78,28 @@ def download(url: str, token: str) -> bytes:
 
 
 def safe_story_members(archive: zipfile.ZipFile, story_path: str) -> list[zipfile.ZipInfo]:
-    prefix = PurePosixPath(story_path).as_posix().rstrip("/") + "/logs/"
+    story_prefix = PurePosixPath(story_path).as_posix().rstrip("/") + "/"
+    allowed_root_files = {
+        "05_story_clean.md",
+        "06_story_tts_annotated.md",
+        "07_story_tts_api.md",
+        "15_metadata.json",
+        "17_status.md",
+    }
+    allowed_directories = {"logs", "tts_chunks", "audio_chunks"}
     members: list[zipfile.ZipInfo] = []
     for member in archive.infolist():
         normalized = PurePosixPath(member.filename).as_posix()
-        if member.is_dir() or not normalized.startswith(prefix):
+        if member.is_dir() or not normalized.startswith(story_prefix):
             continue
-        if ".." in PurePosixPath(normalized).parts:
+        path = PurePosixPath(normalized)
+        if ".." in path.parts:
+            continue
+        relative = PurePosixPath(normalized[len(story_prefix):])
+        if len(relative.parts) == 1:
+            if relative.name not in allowed_root_files:
+                continue
+        elif relative.parts[0] not in allowed_directories:
             continue
         members.append(member)
     return members

@@ -610,6 +610,20 @@ def _gemini_audio_data(payload: dict) -> str:
                 return str(content["data"])
     raise RuntimeError("Gemini TTS returned no audio data")
 
+GEMINI_TTS_RETRY_DELAYS = (60, 120, 300)
+
+
+def _gemini_tts_quota_kind(body: str) -> str:
+    normalized = body.lower()
+    if "perday" in normalized or "per_day" in normalized or "requests per day" in normalized:
+        return "daily"
+    if "perminute" in normalized or "per_minute" in normalized or "requests per minute" in normalized:
+        return "minute"
+    if "tokensperminute" in normalized or "tokens_per_minute" in normalized:
+        return "minute"
+    return "unknown"
+
+
 def gemini_tts_one(text: str, out: Path):
     api_key = SECRETS.get("GEMINI_API_KEY", "")
     voice_id = SECRETS.get("GEMINI_TTS_VOICE_ID", "")
@@ -649,19 +663,50 @@ def gemini_tts_one(text: str, out: Path):
     )
     wav_path = out.with_suffix(".gemini.wav")
     try:
-        with urllib.request.urlopen(request, timeout=240) as response:
-            result = json.loads(response.read().decode("utf-8"))
+        result = None
+        for attempt in range(len(GEMINI_TTS_RETRY_DELAYS) + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=240) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")
+                if exc.code == 402:
+                    raise RuntimeError("BLOCKED_COST_OR_FREE_LIMIT: Gemini TTS payment required") from exc
+                if exc.code == 429:
+                    quota_kind = _gemini_tts_quota_kind(body)
+                    if quota_kind == "daily":
+                        raise RuntimeError(
+                            "BLOCKED_COST_OR_FREE_LIMIT: Gemini TTS daily free quota exhausted; "
+                            "saved chunks will resume after the Pacific-time reset"
+                        ) from exc
+                    if attempt < len(GEMINI_TTS_RETRY_DELAYS):
+                        retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                        try:
+                            delay = max(GEMINI_TTS_RETRY_DELAYS[attempt], int(retry_after or 0))
+                        except ValueError:
+                            delay = GEMINI_TTS_RETRY_DELAYS[attempt]
+                        print(
+                            f"Gemini TTS {quota_kind} quota HTTP 429; retrying in {delay}s "
+                            f"({attempt + 1}/{len(GEMINI_TTS_RETRY_DELAYS)})",
+                            flush=True,
+                        )
+                        time.sleep(delay)
+                        continue
+                    raise RuntimeError(
+                        "BLOCKED_COST_OR_FREE_LIMIT: Gemini TTS rate limit persisted; "
+                        f"quota={quota_kind}; saved chunks will resume later"
+                    ) from exc
+                if exc.code in (401, 403):
+                    raise RuntimeError(f"Gemini TTS authentication failed with HTTP {exc.code}") from exc
+                raise RuntimeError(f"Gemini TTS failed with HTTP {exc.code}") from exc
+        if result is None:
+            raise RuntimeError("Gemini TTS returned no result")
         audio = base64.b64decode(_gemini_audio_data(result), validate=True)
         if len(audio) <= 1024 or not audio.startswith(b"RIFF"):
             raise RuntimeError("Gemini TTS returned invalid or empty WAV audio")
         wav_path.write_bytes(audio)
         run([ffmpeg(), "-y", "-i", str(wav_path), "-c:a", "libmp3lame", "-b:a", "160k", str(out)])
-    except urllib.error.HTTPError as exc:
-        if exc.code in (402, 429):
-            raise RuntimeError(f"BLOCKED_COST_OR_FREE_LIMIT: Gemini TTS returned HTTP {exc.code}") from exc
-        if exc.code in (401, 403):
-            raise RuntimeError(f"Gemini TTS authentication failed with HTTP {exc.code}") from exc
-        raise RuntimeError(f"Gemini TTS failed with HTTP {exc.code}") from exc
     finally:
         wav_path.unlink(missing_ok=True)
 
@@ -799,7 +844,13 @@ def prepare(story: Path):
         }, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
     clean = api_text(annotated)
     (story / "07_story_tts_api.md").write_text(clean + "\n", encoding="utf-8")
-    chunks = split_chunks(clean)
+    provider = SETTINGS.get("tts_provider", "edge").lower()
+    chunk_limit = int(
+        SETTINGS.get("gemini_tts_chunk_char_limit", 4200)
+        if provider == "gemini"
+        else SETTINGS.get("tts_chunk_char_limit", 2600)
+    )
+    chunks = split_chunks(clean, limit=chunk_limit)
     tdir = story / "tts_chunks"; tdir.mkdir(exist_ok=True)
     for old_chunk in tdir.glob("*.txt"):
         old_chunk.unlink()
