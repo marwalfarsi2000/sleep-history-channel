@@ -11,6 +11,7 @@ on:
     - cron: "0 22 * * *"
 
 permissions:
+  actions: read
   contents: write
 
 concurrency:
@@ -33,6 +34,10 @@ jobs:
           sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+      - name: Restore latest failed-run checkpoint
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/restore_failure_checkpoint.py
       - name: Produce, archive, and request review
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -69,4 +74,3 @@ jobs:
             git commit -m "Update sleep history catalogue"
             git push
           fi
-
