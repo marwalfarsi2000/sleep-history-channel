@@ -22,6 +22,7 @@ SECRETS_FILE = Path(os.environ.get(
     ),
 ))
 MODEL = SETTINGS.get("llm_model", "gemini-flash-latest")
+GEMINI_RETRY_DELAYS = (5, 15, 30, 60, 90, 120, 180)
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -41,6 +42,18 @@ def load_secrets() -> dict[str, str]:
             if not values.get(key):
                 values[key] = value.strip()
     return values
+
+
+def _daily_quota_exhausted(body: str) -> bool:
+    """Return True when retrying before the daily reset cannot succeed."""
+    normalized = body.lower().replace("_", "").replace("-", "")
+    markers = (
+        "quotaexceeded",
+        "perday",
+        "requestsperday",
+        "dailyquota",
+    )
+    return any(marker in normalized for marker in markers)
 
 
 def gemini(prompt: str, *, json_mode: bool = False, search: bool = False,
@@ -73,7 +86,7 @@ def gemini(prompt: str, *, json_mode: bool = False, search: bool = False,
     )
     result = None
     last_error = ""
-    retry_delays = (5, 15, 30, 60, 90, 120, 180)
+    retry_delays = GEMINI_RETRY_DELAYS
     for attempt in range(len(retry_delays) + 1):
         try:
             with urllib.request.urlopen(request, timeout=180) as response:
@@ -82,6 +95,22 @@ def gemini(prompt: str, *, json_mode: bool = False, search: bool = False,
         except urllib.error.HTTPError as error:
             body = error.read().decode("utf-8", errors="replace")
             last_error = f"Gemini HTTP {error.code}: {body[:600]}"
+            # Search grounding has a separate allowance and is unavailable on
+            # some free-tier combinations. Retrying the identical grounded
+            # request only wastes runner time; continue immediately without
+            # the search tool while preserving the original research prompt.
+            if search and error.code == 429:
+                print(
+                    "Gemini Search grounding returned HTTP 429; continuing "
+                    "without the search tool.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                break
+            if error.code == 429 and _daily_quota_exhausted(body):
+                raise RuntimeError(
+                    "Gemini daily quota is exhausted; checkpoint preserved for the next run"
+                ) from error
             if attempt == len(retry_delays) and search and error.code in (429, 503):
                 break
             if error.code not in (429, 500, 502, 503, 504) or attempt == len(retry_delays):
@@ -118,12 +147,33 @@ def gemini(prompt: str, *, json_mode: bool = False, search: bool = False,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(fallback_request, timeout=180) as response:
-                result = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            body = error.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Gemini fallback HTTP {error.code}: {body[:600]}") from error
+        fallback_error = ""
+        for attempt in range(len(retry_delays) + 1):
+            try:
+                with urllib.request.urlopen(fallback_request, timeout=180) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError as error:
+                body = error.read().decode("utf-8", errors="replace")
+                fallback_error = f"Gemini fallback HTTP {error.code}: {body[:600]}"
+                if error.code == 429 and _daily_quota_exhausted(body):
+                    raise RuntimeError(
+                        "Gemini daily quota is exhausted; checkpoint preserved for the next run"
+                    ) from error
+                if error.code not in (429, 500, 502, 503, 504) or attempt == len(retry_delays):
+                    raise RuntimeError(fallback_error) from error
+                retry_after = error.headers.get("Retry-After") if error.headers else None
+                try:
+                    delay = max(retry_delays[attempt], int(retry_after or 0))
+                except ValueError:
+                    delay = retry_delays[attempt]
+                print(
+                    f"Gemini fallback temporary HTTP {error.code}; retrying in {delay}s "
+                    f"({attempt + 1}/{len(retry_delays)})",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                time.sleep(delay)
     if result is None:
         raise RuntimeError(last_error or "Gemini request failed")
     candidates = result.get("candidates") or []
