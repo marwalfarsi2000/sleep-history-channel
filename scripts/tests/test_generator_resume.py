@@ -50,6 +50,28 @@ class GeneratorResumeTests(unittest.TestCase):
             resume.assert_called_once_with(story.resolve())
             choose.assert_not_called()
 
+    def test_pending_approval_without_archive_is_resumed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            story = root / "stories" / "upload-failed"
+            story.mkdir(parents=True)
+            (root / "config").mkdir()
+            history = [{
+                "slug": "upload-failed",
+                "status": "pending_approval",
+                "story_path": "stories/upload-failed",
+            }]
+            (root / "config" / "topics_history.json").write_text(
+                json.dumps(history), encoding="utf-8"
+            )
+            with mock.patch.object(generate_daily, "ROOT", root), \
+                 mock.patch.object(generate_daily, "resume_partial_story", return_value=story) as resume, \
+                 mock.patch.object(generate_daily, "choose_topic") as choose:
+                result = generate_daily.create_daily_story()
+            self.assertEqual(result, story)
+            resume.assert_called_once_with(story.resolve())
+            choose.assert_not_called()
+
     def test_latest_missing_draft_rebuilds_same_topic(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
