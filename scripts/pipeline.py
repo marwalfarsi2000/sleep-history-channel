@@ -624,6 +624,15 @@ def _gemini_tts_quota_kind(body: str) -> str:
     return "unknown"
 
 
+def _gemini_tts_models() -> list[str]:
+    primary = str(SETTINGS.get("gemini_tts_model", "gemini-3.8-flash-tts")).strip()
+    configured = SETTINGS.get("gemini_tts_fallback_models", [])
+    if not isinstance(configured, list):
+        raise RuntimeError("gemini_tts_fallback_models must be a JSON list")
+    models = [primary, *(str(model).strip() for model in configured)]
+    return list(dict.fromkeys(model for model in models if model))
+
+
 def gemini_tts_one(text: str, out: Path):
     api_key = SECRETS.get("GEMINI_API_KEY", "")
     voice_id = SECRETS.get("GEMINI_TTS_VOICE_ID", "")
@@ -634,72 +643,93 @@ def gemini_tts_one(text: str, out: Path):
         raise RuntimeError(
             f"Gemini generation speed guard failed: expected normal 1.0, got {generation_speed}"
         )
-    model = SETTINGS.get("gemini_tts_model", "gemini-3.8-flash-tts")
-    payload = json.dumps({
-        "model": model,
-        "input": [{
-            "type": "user_input",
-            "content": [{
-                "type": "text",
-                "text": text,
-                "annotations": [{
-                    "type": "speech_metadata",
-                    "style": SETTINGS.get("gemini_tts_style", "Calm Arabic historical sleep narration."),
-                }],
-            }],
-        }],
-        "response_format": {"type": "audio"},
-        "generation_config": {"speech_config": [{"voice": voice_id}]},
-    }, ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(
-        "https://generativelanguage.googleapis.com/v1beta/interactions",
-        data=payload,
-        method="POST",
-        headers={
-            "x-goog-api-key": api_key,
-            "Content-Type": "application/json; charset=utf-8",
-            "Accept": "application/json",
-        },
-    )
     wav_path = out.with_suffix(".gemini.wav")
     try:
         result = None
-        for attempt in range(len(GEMINI_TTS_RETRY_DELAYS) + 1):
-            try:
-                with urllib.request.urlopen(request, timeout=240) as response:
-                    result = json.loads(response.read().decode("utf-8"))
-                break
-            except urllib.error.HTTPError as exc:
-                body = exc.read().decode("utf-8", errors="replace")
-                if exc.code == 402:
-                    raise RuntimeError("BLOCKED_COST_OR_FREE_LIMIT: Gemini TTS payment required") from exc
-                if exc.code == 429:
-                    quota_kind = _gemini_tts_quota_kind(body)
-                    if quota_kind == "daily":
+        exhausted_models = []
+        models = _gemini_tts_models()
+        for model_index, model in enumerate(models):
+            payload = json.dumps({
+                "model": model,
+                "input": [{
+                    "type": "user_input",
+                    "content": [{
+                        "type": "text",
+                        "text": text,
+                        "annotations": [{
+                            "type": "speech_metadata",
+                            "style": SETTINGS.get("gemini_tts_style", "Calm Arabic historical sleep narration."),
+                        }],
+                    }],
+                }],
+                "response_format": {"type": "audio"},
+                "generation_config": {"speech_config": [{"voice": voice_id}]},
+            }, ensure_ascii=False).encode("utf-8")
+            request = urllib.request.Request(
+                "https://generativelanguage.googleapis.com/v1beta/interactions",
+                data=payload,
+                method="POST",
+                headers={
+                    "x-goog-api-key": api_key,
+                    "Content-Type": "application/json; charset=utf-8",
+                    "Accept": "application/json",
+                },
+            )
+            for attempt in range(len(GEMINI_TTS_RETRY_DELAYS) + 1):
+                try:
+                    with urllib.request.urlopen(request, timeout=240) as response:
+                        result = json.loads(response.read().decode("utf-8"))
+                    break
+                except urllib.error.HTTPError as exc:
+                    body = exc.read().decode("utf-8", errors="replace")
+                    if exc.code == 402:
+                        raise RuntimeError("BLOCKED_COST_OR_FREE_LIMIT: Gemini TTS payment required") from exc
+                    if exc.code == 429:
+                        quota_kind = _gemini_tts_quota_kind(body)
+                        if quota_kind == "daily":
+                            exhausted_models.append(model)
+                            if model_index + 1 < len(models):
+                                print(
+                                    f"Gemini TTS daily free quota exhausted for {model}; "
+                                    f"switching to free fallback {models[model_index + 1]}",
+                                    flush=True,
+                                )
+                                break
+                            raise RuntimeError(
+                                "BLOCKED_COST_OR_FREE_LIMIT: Gemini TTS daily free quota exhausted "
+                                f"for all configured models ({', '.join(exhausted_models)}); "
+                                "saved chunks will resume after the Pacific-time reset"
+                            ) from exc
+                        if attempt < len(GEMINI_TTS_RETRY_DELAYS):
+                            retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                            try:
+                                delay = max(GEMINI_TTS_RETRY_DELAYS[attempt], int(retry_after or 0))
+                            except ValueError:
+                                delay = GEMINI_TTS_RETRY_DELAYS[attempt]
+                            print(
+                                f"Gemini TTS {quota_kind} quota HTTP 429 for {model}; retrying in {delay}s "
+                                f"({attempt + 1}/{len(GEMINI_TTS_RETRY_DELAYS)})",
+                                flush=True,
+                            )
+                            time.sleep(delay)
+                            continue
+                        exhausted_models.append(model)
+                        if model_index + 1 < len(models):
+                            print(
+                                f"Gemini TTS rate limit persisted for {model}; "
+                                f"switching to free fallback {models[model_index + 1]}",
+                                flush=True,
+                            )
+                            break
                         raise RuntimeError(
-                            "BLOCKED_COST_OR_FREE_LIMIT: Gemini TTS daily free quota exhausted; "
-                            "saved chunks will resume after the Pacific-time reset"
+                            "BLOCKED_COST_OR_FREE_LIMIT: Gemini TTS rate limit persisted for all "
+                            f"configured models ({', '.join(exhausted_models)}); saved chunks will resume later"
                         ) from exc
-                    if attempt < len(GEMINI_TTS_RETRY_DELAYS):
-                        retry_after = exc.headers.get("Retry-After") if exc.headers else None
-                        try:
-                            delay = max(GEMINI_TTS_RETRY_DELAYS[attempt], int(retry_after or 0))
-                        except ValueError:
-                            delay = GEMINI_TTS_RETRY_DELAYS[attempt]
-                        print(
-                            f"Gemini TTS {quota_kind} quota HTTP 429; retrying in {delay}s "
-                            f"({attempt + 1}/{len(GEMINI_TTS_RETRY_DELAYS)})",
-                            flush=True,
-                        )
-                        time.sleep(delay)
-                        continue
-                    raise RuntimeError(
-                        "BLOCKED_COST_OR_FREE_LIMIT: Gemini TTS rate limit persisted; "
-                        f"quota={quota_kind}; saved chunks will resume later"
-                    ) from exc
-                if exc.code in (401, 403):
-                    raise RuntimeError(f"Gemini TTS authentication failed with HTTP {exc.code}") from exc
-                raise RuntimeError(f"Gemini TTS failed with HTTP {exc.code}") from exc
+                    if exc.code in (401, 403):
+                        raise RuntimeError(f"Gemini TTS authentication failed with HTTP {exc.code}") from exc
+                    raise RuntimeError(f"Gemini TTS model {model} failed with HTTP {exc.code}") from exc
+            if result is not None:
+                break
         if result is None:
             raise RuntimeError("Gemini TTS returned no result")
         audio = base64.b64decode(_gemini_audio_data(result), validate=True)
