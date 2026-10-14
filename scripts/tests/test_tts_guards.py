@@ -194,10 +194,11 @@ class TtsGuardTests(unittest.TestCase):
             sleep.assert_called_once_with(60)
 
     def test_gemini_daily_quota_stops_without_retry(self):
-        daily_error = urllib.error.HTTPError(
-            "https://example.invalid", 429, "Too Many Requests", {},
-            io.BytesIO(b'{"quotaId":"GenerateRequestsPerDayPerProjectPerModel"}')
-        )
+        def daily_error():
+            return urllib.error.HTTPError(
+                "https://example.invalid", 429, "Too Many Requests", {},
+                io.BytesIO(b'{"quotaId":"GenerateRequestsPerDayPerProjectPerModel"}')
+            )
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder) / "sample.mp3"
             with mock.patch.dict(
@@ -205,11 +206,48 @@ class TtsGuardTests(unittest.TestCase):
                 {"GEMINI_API_KEY": "test-key", "GEMINI_TTS_VOICE_ID": "voice-test"},
                 clear=False,
             ), mock.patch.object(
-                pipeline.urllib.request, "urlopen", side_effect=daily_error
+                pipeline.urllib.request, "urlopen", side_effect=[daily_error(), daily_error()]
             ), mock.patch.object(pipeline.time, "sleep") as sleep:
                 with self.assertRaisesRegex(RuntimeError, "daily free quota exhausted"):
                     pipeline.gemini_tts_one("نَصٌّ هادِئٌ.", output)
             sleep.assert_not_called()
+
+    def test_gemini_daily_quota_uses_free_fallback_model(self):
+        wav = b"RIFF" + b"0" * 2048
+        response = _FakeResponse(json.dumps({
+            "output_audio": {"data": base64.b64encode(wav).decode("ascii")}
+        }).encode("utf-8"))
+        daily_error = urllib.error.HTTPError(
+            "https://example.invalid", 429, "Too Many Requests", {},
+            io.BytesIO(b'{"quotaId":"GenerateRequestsPerDayPerProjectPerModel"}')
+        )
+        requested_models = []
+
+        def fake_urlopen(request, timeout):
+            requested_models.append(json.loads(request.data.decode("utf-8"))["model"])
+            if len(requested_models) == 1:
+                raise daily_error
+            return response
+
+        def fake_run(command, check=True):
+            Path(command[-1]).write_bytes(b"ID3" + b"0" * 2048)
+
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "sample.mp3"
+            with mock.patch.dict(
+                pipeline.SECRETS,
+                {"GEMINI_API_KEY": "test-key", "GEMINI_TTS_VOICE_ID": "voice-test"},
+                clear=False,
+            ), mock.patch.object(pipeline.urllib.request, "urlopen", fake_urlopen), mock.patch.object(
+                pipeline, "run", fake_run
+            ):
+                pipeline.gemini_tts_one("نَصٌّ هادِئٌ.", output)
+            self.assertTrue(output.exists())
+
+        self.assertEqual(requested_models, [
+            "gemini-3.8-flash-tts",
+            "gemini-3.8-flash-lite-tts",
+        ])
 
     def test_gemini_uses_larger_free_quota_chunks(self):
         sentence = "هٰذِهِ جُمْلَةٌ تاريخيةٌ هادئةٌ ومُشَكَّلَةٌ بعناية."
