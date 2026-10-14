@@ -102,7 +102,10 @@ def verify_upload(identifier: str, video: Path) -> dict:
     files = {entry.get("name"): entry for entry in payload.get("files") or []}
     remote = files.get(video.name)
     if not remote:
-        raise RuntimeError("Internet Archive metadata does not list the uploaded video")
+        request = urllib.request.Request(public_file_url(identifier, video.name), method="HEAD")
+        with urllib.request.urlopen(request, timeout=60) as response:
+            remote_size = int(response.headers.get("Content-Length") or 0)
+        remote = {"size": remote_size}
     if int(remote.get("size") or 0) != video.stat().st_size:
         raise RuntimeError("Internet Archive video size differs from the local file")
     expected = sha256(video)
@@ -110,6 +113,23 @@ def verify_upload(identifier: str, video: Path) -> dict:
     if remote_sha and remote_sha != expected:
         raise RuntimeError("Internet Archive video checksum verification failed")
     return {"size": video.stat().st_size, "sha256": expected}
+
+
+def verify_existing_upload(identifier: str, filename: str) -> dict:
+    payload = archive_metadata(identifier)
+    files = {entry.get("name"): entry for entry in payload.get("files") or []}
+    remote = files.get(filename)
+    if remote:
+        return {
+            "size": int(remote.get("size") or 0),
+            "sha256": str(remote.get("sha256") or "").lower(),
+        }
+    request = urllib.request.Request(public_file_url(identifier, filename), method="HEAD")
+    with urllib.request.urlopen(request, timeout=60) as response:
+        size = int(response.headers.get("Content-Length") or 0)
+    if size <= 0:
+        raise RuntimeError("Internet Archive uploaded video is unavailable")
+    return {"size": size, "sha256": ""}
 
 
 def update_index(record: dict) -> None:
@@ -122,28 +142,8 @@ def update_index(record: dict) -> None:
     ARCHIVE_INDEX.write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def upload_story(story: Path) -> dict:
-    access, secret = credentials()
+def finalize_story(story: Path, identifier: str, verified: dict) -> dict:
     metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
-    identifier = safe_identifier(metadata["slug"], metadata.get("created_at", ""))
-    files = story_files(story)
-    responses = upload(
-        identifier,
-        files,
-        metadata=metadata_for_story(story, identifier),
-        headers={"x-archive-keep-old-version": "0", "x-archive-queue-derive": "1"},
-        access_key=access,
-        secret_key=secret,
-        checksum=True,
-        retries=10,
-        retries_sleep=15,
-        verbose=False,
-    )
-    for response in responses if isinstance(responses, list) else [responses]:
-        status = getattr(response, "status_code", 200)
-        if status >= 400:
-            raise RuntimeError(f"Internet Archive upload failed with HTTP {status}")
-    verified = verify_upload(identifier, story / "14_video_final.mp4")
     record = {
         "identifier": identifier,
         "slug": metadata["slug"],
@@ -170,6 +170,38 @@ def upload_story(story: Path) -> dict:
             item.pop("story_path", None)
     history_path.write_text(json.dumps(history, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return record
+
+
+def finalize_existing_upload(story: Path) -> dict:
+    metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
+    identifier = safe_identifier(metadata["slug"], metadata.get("created_at", ""))
+    verified = verify_existing_upload(identifier, "14_video_final.mp4")
+    return finalize_story(story, identifier, verified)
+
+
+def upload_story(story: Path) -> dict:
+    access, secret = credentials()
+    metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
+    identifier = safe_identifier(metadata["slug"], metadata.get("created_at", ""))
+    files = story_files(story)
+    responses = upload(
+        identifier,
+        files,
+        metadata=metadata_for_story(story, identifier),
+        headers={"x-archive-keep-old-version": "0", "x-archive-queue-derive": "1"},
+        access_key=access,
+        secret_key=secret,
+        checksum=True,
+        retries=10,
+        retries_sleep=15,
+        verbose=False,
+    )
+    for response in responses if isinstance(responses, list) else [responses]:
+        status = getattr(response, "status_code", 200)
+        if status >= 400:
+            raise RuntimeError(f"Internet Archive upload failed with HTTP {status}")
+    verified = verify_upload(identifier, story / "14_video_final.mp4")
+    return finalize_story(story, identifier, verified)
 
 
 def delete_rejected(identifier: str) -> None:
