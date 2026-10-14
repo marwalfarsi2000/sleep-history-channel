@@ -474,7 +474,13 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
         # silently selecting a different episode.
         unfinished = next((
             item for item in reversed(history)
-            if item.get("status") in {"generating", "drafting"}
+            if (
+                item.get("status") in {"generating", "drafting"}
+                or (
+                    item.get("status") == "pending_approval"
+                    and not item.get("archive_identifier")
+                )
+            )
             and checkpoint_path(item)
         ), None)
         if unfinished:
