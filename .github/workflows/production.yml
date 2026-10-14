@@ -34,16 +34,19 @@ jobs:
           python-version: "3.13"
           cache: pip
       - name: Install media and Python dependencies
+        id: install
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Restore latest failed-run checkpoint
+        id: restore
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python scripts/restore_failure_checkpoint.py
       - name: Produce, archive, and request review
+        id: produce
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_TTS_VOICE_ID: ${{ secrets.GEMINI_TTS_VOICE_ID }}
@@ -62,6 +65,16 @@ jobs:
           else
             python scripts/cloud_pipeline.py produce
           fi
+      - name: Notify Telegram about failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          RESTORE_OUTCOME: ${{ steps.restore.outcome }}
+          PRODUCE_OUTCOME: ${{ steps.produce.outcome }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python scripts/notify_failure.py
       - name: Preserve diagnostic logs after failure
         if: failure()
         uses: actions/upload-artifact@v4

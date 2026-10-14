@@ -22,7 +22,7 @@ SECRETS_FILE = Path(os.environ.get(
     ),
 ))
 MODEL = SETTINGS.get("llm_model", "gemini-flash-latest")
-GEMINI_RETRY_DELAYS = (5, 15, 30, 60, 90, 120, 180)
+GEMINI_RETRY_DELAYS = (5, 15, 30)
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -56,13 +56,20 @@ def _daily_quota_exhausted(body: str) -> bool:
     return any(marker in normalized for marker in markers)
 
 
-def gemini(prompt: str, *, json_mode: bool = False, search: bool = False,
-           max_tokens: int = 8192, temperature: float = 0.4) -> tuple[str, list[dict]]:
+def _llm_models() -> list[str]:
+    configured = SETTINGS.get("llm_fallback_models", [])
+    if not isinstance(configured, list):
+        raise RuntimeError("llm_fallback_models must be a JSON list")
+    return list(dict.fromkeys([MODEL, *(str(model).strip() for model in configured)]))
+
+
+def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: bool = False,
+                max_tokens: int = 8192, temperature: float = 0.4) -> tuple[str, list[dict]]:
     key = load_secrets().get("GEMINI_API_KEY", "")
     if not key:
         raise RuntimeError(f"GEMINI_API_KEY is missing from {SECRETS_FILE}")
     url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         f"?key={key}"
     )
     config: dict = {
@@ -194,6 +201,34 @@ def gemini(prompt: str, *, json_mode: bool = False, search: bool = False,
         if uri and not any(item["url"] == uri for item in sources):
             sources.append({"title": web.get("title") or uri, "url": uri})
     return text, sources
+
+
+def gemini(prompt: str, *, json_mode: bool = False, search: bool = False,
+           max_tokens: int = 8192, temperature: float = 0.4) -> tuple[str, list[dict]]:
+    last_error: RuntimeError | None = None
+    models = _llm_models()
+    for index, model in enumerate(models):
+        try:
+            return _gemini_one(
+                model,
+                prompt,
+                json_mode=json_mode,
+                search=search,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        except RuntimeError as error:
+            last_error = error
+            message = str(error).lower()
+            recoverable = any(marker in message for marker in ("http 429", "http 503", "daily quota", "unavailable"))
+            if not recoverable or index + 1 >= len(models):
+                raise
+            print(
+                f"Gemini writing model {model} is unavailable; switching to free fallback {models[index + 1]}",
+                file=sys.stderr,
+                flush=True,
+            )
+    raise last_error or RuntimeError("Gemini request failed")
 
 
 def parse_json(text: str) -> dict:
