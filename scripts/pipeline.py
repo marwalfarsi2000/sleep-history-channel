@@ -967,14 +967,26 @@ def background(story: Path, force: bool = True):
     generator = ROOT / "scripts" / "image_generate.py"
     run([sys.executable, str(generator), str(story)])
 
+def video_codec() -> list[str]:
+    # GitHub-hosted runners expose NVENC in FFmpeg's encoder list but do not
+    # provide an NVIDIA GPU. Force the CPU encoder there and retain NVENC on
+    # local machines where it is available.
+    if os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
+        return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "28"]
+    encoders = subprocess.run(
+        [ffmpeg(), "-hide_banner", "-encoders"],
+        capture_output=True,
+        text=True,
+    ).stdout
+    if "h264_nvenc" in encoders:
+        return ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "30", "-b:v", "0"]
+    return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "28"]
+
 def render(story: Path):
     background(story, force=False)
     audio=story/"12_audio_full.mp3"; out=story/"14_video_final.mp4"
     exact_duration=duration(audio)
-    encoders=subprocess.run([ffmpeg(),"-hide_banner","-encoders"],capture_output=True,text=True).stdout
-    if "h264_nvenc" in encoders:
-        codec=["-c:v","h264_nvenc","-preset","p4","-cq","30","-b:v","0"]
-    else: codec=["-c:v","libx264","-preset","veryfast","-crf","28"]
+    codec=video_codec()
     run([ffmpeg(),"-y","-loop","1","-framerate","1","-i",str(story/"10_background.png"),"-i",str(audio),"-vf","format=yuv420p","-r","2",*codec,"-c:a","aac","-b:a","128k","-t",f"{exact_duration:.3f}","-movflags","+faststart",str(out)])
 
 def validate(story: Path):
