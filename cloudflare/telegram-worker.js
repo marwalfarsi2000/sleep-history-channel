@@ -203,7 +203,14 @@ export default {
       return json({ ok: true, ignored: true });
     }
     try {
-      const requestedVoiceText = update.message ? voiceText(update.message.text) : null;
+      const incomingText = update.message?.text || "";
+      const explicitVoiceText = update.message ? voiceText(incomingText) : null;
+      const requestedVoiceText = update.message
+        && !isNewVideo(incomingText)
+        && explicitVoiceText === null
+        && !incomingText.trim().startsWith("/")
+        ? incomingText.trim()
+        : explicitVoiceText;
       if (requestedVoiceText !== null) {
         if (!requestedVoiceText) {
           await telegram(env, "sendMessage", {

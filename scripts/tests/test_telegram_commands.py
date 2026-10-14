@@ -40,6 +40,10 @@ class TelegramWorkerContractTests(unittest.TestCase):
         self.assertIn("ctx.waitUntil(createVoiceFile", self.source)
         self.assertIn("MAX_VOICE_TEXT_CHARS", self.source)
 
+    def test_plain_text_is_accepted_without_catching_video_commands(self):
+        self.assertIn("!isNewVideo(incomingText)", self.source)
+        self.assertIn('!incomingText.trim().startsWith("/")', self.source)
+
     def test_failures_do_not_expose_stack_or_secrets_to_telegram(self):
         self.assertNotIn("error.stack", self.source)
         self.assertNotIn("env.GITHUB_TOKEN,", self.source)
