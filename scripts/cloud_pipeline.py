@@ -9,7 +9,13 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from archive_storage import archive_metadata, delete_rejected, set_index_status, upload_story
+from archive_storage import (
+    archive_metadata,
+    delete_rejected,
+    finalize_existing_upload,
+    set_index_status,
+    upload_story,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,23 +101,7 @@ def send_message(text: str, keyboard: dict | None = None) -> None:
     telegram("sendMessage", payload)
 
 
-def produce() -> dict:
-    ensure_background_audio()
-    output = run([sys.executable, str(ROOT / "scripts" / "generate_daily.py")], "cloud-generate.log")
-    generated = None
-    for line in reversed(output.splitlines()):
-        try:
-            candidate = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(candidate, dict) and candidate.get("story_path"):
-            generated = candidate
-            break
-    if not generated:
-        raise RuntimeError("Daily generator did not return a story path")
-    story = Path(generated["story_path"]).resolve()
-    run([sys.executable, str(ROOT / "scripts" / "pipeline.py"), "all", str(story)], "cloud-pipeline.log")
-    record = upload_story(story)
+def notify_review(record: dict) -> None:
     minutes = round(float(record.get("video_duration_seconds") or 0) / 60, 1)
     keyboard = {"inline_keyboard": [
         [{"text": "🚀 اعتماد ونشر", "callback_data": f"publish:{record['identifier']}"}],
@@ -129,6 +119,37 @@ def produce() -> dict:
         "لن تُنشر على YouTube دون اعتمادك.",
         keyboard,
     )
+
+
+def resume_review() -> dict:
+    history = json.loads((ROOT / "config" / "topics_history.json").read_text(encoding="utf-8"))
+    candidate = next((item for item in reversed(history) if item.get("status") == "pending_approval" and not item.get("archive_identifier") and item.get("story_path")), None)
+    if not candidate:
+        raise RuntimeError("No uploaded pending-review checkpoint is available")
+    story = (ROOT / candidate["story_path"]).resolve()
+    record = finalize_existing_upload(story)
+    notify_review(record)
+    return record
+
+
+def produce() -> dict:
+    ensure_background_audio()
+    output = run([sys.executable, str(ROOT / "scripts" / "generate_daily.py")], "cloud-generate.log")
+    generated = None
+    for line in reversed(output.splitlines()):
+        try:
+            candidate = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict) and candidate.get("story_path"):
+            generated = candidate
+            break
+    if not generated:
+        raise RuntimeError("Daily generator did not return a story path")
+    story = Path(generated["story_path"]).resolve()
+    run([sys.executable, str(ROOT / "scripts" / "pipeline.py"), "all", str(story)], "cloud-pipeline.log")
+    record = upload_story(story)
+    notify_review(record)
     return record
 
 
@@ -203,11 +224,13 @@ def regenerate(identifier: str) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["produce", "publish", "reject", "regenerate"])
+    parser.add_argument("command", choices=["produce", "resume-review", "publish", "reject", "regenerate"])
     parser.add_argument("--identifier")
     args = parser.parse_args()
     if args.command == "produce":
         result = produce()
+    elif args.command == "resume-review":
+        result = resume_review()
     elif args.command == "publish":
         if not args.identifier:
             parser.error("--identifier is required")

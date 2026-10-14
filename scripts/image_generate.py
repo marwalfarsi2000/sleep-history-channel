@@ -107,6 +107,23 @@ def validate_image(image: Image.Image) -> None:
         )
 
 
+def prepare_image(image_bytes: bytes, temporary: Path) -> Image.Image:
+    """Normalize provider output and reject unusable images before accepting it."""
+    temporary.write_bytes(image_bytes)
+    with Image.open(temporary) as source:
+        image = source.convert("RGB")
+    image = ImageOps.fit(
+        image,
+        (1920, 1080),
+        method=Image.Resampling.LANCZOS,
+        centering=(0.5, 0.5),
+    )
+    image = ImageEnhance.Contrast(image).enhance(1.03)
+    image = ImageEnhance.Sharpness(image).enhance(1.06)
+    validate_image(image)
+    return image
+
+
 def image_provider_label() -> str:
     provider = SETTINGS.get("image_provider", "pollinations")
     if provider == "cloudflare_workers_ai":
@@ -390,6 +407,7 @@ def generate(story: Path, seed: int | None = None) -> None:
                 image_bytes, provider_record = generate_pollinations(legacy_prompt, api_key, seed)
             else:
                 raise RuntimeError(f"Unsupported image_provider: {provider}")
+            image = prepare_image(image_bytes, temporary)
         except RuntimeError:
             fallback = SETTINGS.get("image_fallback_provider")
             if provider != "cloudflare_workers_ai" or fallback != "pollinations":
@@ -401,18 +419,7 @@ def generate(story: Path, seed: int | None = None) -> None:
             actual_model = SETTINGS.get("pollinations_image_model", "microsoft/mai-image-2.6")
             actual_cost_mode = SETTINGS.get("pollinations_cost_mode", "quest_pollen_only")
             image_bytes, provider_record = generate_pollinations(legacy_prompt, api_key, seed)
-        temporary.write_bytes(image_bytes)
-        with Image.open(temporary) as source:
-            image = source.convert("RGB")
-        image = ImageOps.fit(
-            image,
-            (1920, 1080),
-            method=Image.Resampling.LANCZOS,
-            centering=(0.5, 0.5),
-        )
-        image = ImageEnhance.Contrast(image).enhance(1.03)
-        image = ImageEnhance.Sharpness(image).enhance(1.06)
-        validate_image(image)
+            image = prepare_image(image_bytes, temporary)
         background = story / "10_background.png"
         thumbnail = story / "11_thumbnail_base.jpg"
         image.save(background, format="PNG", optimize=True)

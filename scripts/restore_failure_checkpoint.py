@@ -22,7 +22,12 @@ def latest_unfinished_story(root: Path = ROOT) -> str | None:
     history_path = root / "config" / "topics_history.json"
     history = json.loads(history_path.read_text(encoding="utf-8"))
     for item in reversed(history):
-        if item.get("status") in {"generating", "drafting"} and item.get("story_path"):
+        status = item.get("status")
+        upload_incomplete = (
+            status == "pending_approval"
+            and not item.get("archive_identifier")
+        )
+        if (status in {"generating", "drafting"} or upload_incomplete) and item.get("story_path"):
             return PurePosixPath(str(item["story_path"]).replace("\\", "/")).as_posix()
     return None
 

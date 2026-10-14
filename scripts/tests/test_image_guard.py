@@ -165,6 +165,59 @@ class ImageCostGuardTests(unittest.TestCase):
             image_generate.SETTINGS.clear()
             image_generate.SETTINGS.update(settings)
 
+    def test_cloudflare_low_quality_output_uses_pollinations_fallback(self):
+        settings = dict(image_generate.SETTINGS)
+        try:
+            image_generate.SETTINGS.update(
+                {
+                    "image_provider": "cloudflare_workers_ai",
+                    "image_model": "@cf/black-forest-labs/flux-1-schnell",
+                    "image_cost_mode": "free_allocation_only",
+                    "image_fallback_provider": "pollinations",
+                    "pollinations_image_model": "microsoft/mai-image-2.6",
+                    "pollinations_cost_mode": "quest_pollen_only",
+                }
+            )
+            bad_buffer = io.BytesIO()
+            Image.new("RGB", (512, 512), "gray").save(bad_buffer, format="JPEG")
+            good_buffer = io.BytesIO()
+            good_image = Image.new("RGB", (512, 512))
+            for x in range(512):
+                for y in range(512):
+                    good_image.putpixel((x, y), ((x * 3) % 256, (y * 5) % 256, ((x + y) * 7) % 256))
+            good_image.save(good_buffer, format="JPEG", quality=90)
+
+            with tempfile.TemporaryDirectory() as directory:
+                story = Path(directory)
+                (story / "08_image_prompt_en.txt").write_text("ORIGINAL DYNAMIC PROMPT", encoding="utf-8")
+                with mock.patch.object(
+                    image_generate,
+                    "load_secrets",
+                    return_value={
+                        "CLOUDFLARE_ACCOUNT_ID": "account-id",
+                        "CLOUDFLARE_API_TOKEN": "token",
+                        "POLLINATIONS_API_KEY": "pollinations-key",
+                    },
+                ), mock.patch.object(
+                    image_generate,
+                    "generate_cloudflare",
+                    return_value=(bad_buffer.getvalue(), {"success": True}),
+                ) as cloudflare, mock.patch.object(
+                    image_generate,
+                    "generate_pollinations",
+                    return_value=(good_buffer.getvalue(), {"name": "microsoft/mai-image-2.6"}),
+                ) as pollinations:
+                    image_generate.generate(story, seed=123)
+
+                cloudflare.assert_called_once()
+                pollinations.assert_called_once()
+                source = (story / "09_image_source.md").read_text(encoding="utf-8")
+                self.assertIn("pollinations", source)
+                self.assertTrue((story / "10_background.png").exists())
+        finally:
+            image_generate.SETTINGS.clear()
+            image_generate.SETTINGS.update(settings)
+
     def test_bytez_requires_explicit_cost_mode_and_no_fallback(self):
         settings = dict(image_generate.SETTINGS)
         try:

@@ -26,6 +26,26 @@ class RestoreFailureCheckpointTests(unittest.TestCase):
             )
             self.assertEqual(latest_unfinished_story(root), "stories/current")
 
+    def test_pending_approval_without_archive_is_still_unfinished(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "config").mkdir()
+            (root / "config" / "topics_history.json").write_text(
+                json.dumps([
+                    {
+                        "status": "pending_approval",
+                        "story_path": "stories/archived",
+                        "archive_identifier": "archived-item",
+                    },
+                    {
+                        "status": "pending_approval",
+                        "story_path": "stories/upload-failed",
+                    },
+                ]),
+                encoding="utf-8",
+            )
+            self.assertEqual(latest_unfinished_story(root), "stories/upload-failed")
+
     def test_only_matching_story_checkpoint_files_are_restored(self):
         payload = io.BytesIO()
         with zipfile.ZipFile(payload, "w") as archive:

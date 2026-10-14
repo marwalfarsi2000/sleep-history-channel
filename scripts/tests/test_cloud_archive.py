@@ -41,6 +41,17 @@ class ArchiveStorageTests(unittest.TestCase):
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0]["status"], "published")
 
+    def test_verify_upload_accepts_direct_file_before_metadata_updates(self):
+        with tempfile.TemporaryDirectory() as folder:
+            video = Path(folder) / "14_video_final.mp4"
+            video.write_bytes(b"video")
+            response = mock.MagicMock()
+            response.__enter__.return_value.headers = {"Content-Length": "5"}
+            with mock.patch.object(archive_storage, "archive_metadata", return_value={"files": []}), \
+                 mock.patch.object(archive_storage.urllib.request, "urlopen", return_value=response):
+                verified = archive_storage.verify_upload("episode-id", video)
+            self.assertEqual(verified["size"], 5)
+
 
 if __name__ == "__main__":
     unittest.main()
