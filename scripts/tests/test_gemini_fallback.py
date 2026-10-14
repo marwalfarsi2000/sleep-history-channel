@@ -52,6 +52,11 @@ class GeminiFallbackTests(unittest.TestCase):
         requested_urls = [call.args[0].full_url for call in urlopen.call_args_list]
         self.assertIn("gemini-3.1-flash-lite", requested_urls[0])
         self.assertIn("gemini-3.5-flash-lite", requested_urls[1])
+        fallback_payload = json.loads(urlopen.call_args_list[1].args[0].data.decode("utf-8"))
+        self.assertEqual(
+            fallback_payload["generationConfig"]["thinkingConfig"],
+            {"thinkingLevel": "minimal"},
+        )
 
     def test_search_quota_falls_back_immediately_and_retries_transient_503(self):
         success = {"candidates": [{"content": {"parts": [{"text": "بحث موثوق"}]}}]}

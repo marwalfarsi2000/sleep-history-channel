@@ -75,7 +75,11 @@ def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: boo
     config: dict = {
         "temperature": temperature,
         "maxOutputTokens": max_tokens,
-        "thinkingConfig": {"thinkingBudget": 0},
+        "thinkingConfig": (
+            {"thinkingLevel": "minimal"}
+            if model.startswith("gemini-3.5-")
+            else {"thinkingBudget": 0}
+        ),
     }
     if json_mode:
         config["responseMimeType"] = "application/json"
