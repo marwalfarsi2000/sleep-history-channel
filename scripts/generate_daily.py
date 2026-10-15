@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SETTINGS = json.loads((ROOT / "config" / "settings.json").read_text(encoding="utf-8"))
+MASTER_RULES_PATH = ROOT / "config" / "master_production_rules.md"
 SECRETS_FILE = Path(os.environ.get(
     "SLEEP_HISTORY_SECRETS_FILE",
     SETTINGS.get(
@@ -253,6 +254,25 @@ def write(path: Path, content: str) -> None:
     path.write_text(content.rstrip() + "\n", encoding="utf-8")
 
 
+def production_rules(*section_numbers: int) -> str:
+    """Return only the master-rule sections relevant to one model request."""
+    text = MASTER_RULES_PATH.read_text(encoding="utf-8")
+    wanted = set(section_numbers)
+    parts: list[str] = []
+    matches = list(re.finditer(r"(?m)^# (\d+)\. .+$", text))
+    for index, match in enumerate(matches):
+        if int(match.group(1)) not in wanted:
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        parts.append(text[match.start():end].strip().rstrip("-").rstrip())
+    missing = wanted - {
+        int(match.group(1)) for match in matches if int(match.group(1)) in wanted
+    }
+    if missing:
+        raise RuntimeError(f"Missing master production rule sections: {sorted(missing)}")
+    return "\n\n---\n\n".join(parts)
+
+
 def upsert_history_checkpoint(history_path: Path, story: Path, topic: dict, status: str) -> None:
     history = json.loads(history_path.read_text(encoding="utf-8"))
     record = next((item for item in history if item.get("slug") == topic["slug"]), None)
@@ -290,7 +310,11 @@ def choose_topic(history: list[dict]) -> dict:
         f"- {item.get('topic', item.get('slug', ''))} | {item.get('angle', '')}"
         for item in history
     ) or "لا يوجد سجل سابق"
+    rules = production_rules(*range(2, 17))
     prompt = f"""أنت محرر قناة عربية اسمها «لن تُكمل هذه القصة» تقدم سردًا تاريخيًا حقيقيًا هادئًا للنوم.
+التزم بالقواعد التالية التزامًا إلزاميًا:
+{rules}
+
 اختر موضوع الحلقة اليومية التالية. يجب أن تتوفر له مصادر متحفية أو جامعية أو أثرية كثيرة، وأن يسمح بوصف الحياة اليومية والمكان لمدة ساعة، وألا يكرر موضوعًا أو زاوية في السجل.
 
 السجل السابق:
@@ -311,7 +335,11 @@ reason_ar: سبب الاختيار في جملة
 
 
 def research_topic(topic: dict) -> tuple[str, list[dict]]:
-    prompt = f"""ابحث بحثًا تاريخيًا موثقًا للحلقة التالية:
+    rules = production_rules(18, 19, 20, 21)
+    prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
+{rules}
+
+ابحث بحثًا تاريخيًا موثقًا للحلقة التالية:
 الموضوع: {topic['topic_ar']}
 الزاوية: {topic['angle_ar']}
 الفترة: {topic['period_ar']}
@@ -324,7 +352,11 @@ def research_topic(topic: dict) -> tuple[str, list[dict]]:
 
 
 def make_outline(topic: dict, research: str) -> list[dict]:
-    prompt = f"""أنشئ مخططًا من 9 أقسام لسرد تاريخي عربي هادئ مخصص للنوم عن:
+    rules = production_rules(17, 22)
+    prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
+{rules}
+
+أنشئ مخططًا من 9 أقسام لسرد تاريخي عربي هادئ مخصص للنوم عن:
 {topic['topic_ar']} — {topic['angle_ar']}
 
 ملاحظات البحث:
@@ -343,12 +375,16 @@ def make_outline(topic: dict, research: str) -> list[dict]:
 
 
 def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path) -> str:
+    rules = production_rules(2, 3, 4, 5, 6, 7, 17, 23)
     chapters: list[str] = []
     for index, section in enumerate(sections, 1):
         previous = chapters[-1][-2500:] if chapters else "هذه بداية السرد."
         chapter_path = log_dir / f"chapter_{index:02d}.md"
         target_words = max(850, int(section.get("target_words", 700)))
-        prompt = f"""اكتب القسم {index} من {len(sections)} من قصة تاريخية حقيقية طويلة للنوم.
+        prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
+{rules}
+
+اكتب القسم {index} من {len(sections)} من قصة تاريخية حقيقية طويلة للنوم.
 الموضوع: {topic['topic_ar']}
 الزاوية: {topic['angle_ar']}
 عنوان القسم: {section.get('title', '')}
@@ -429,7 +465,10 @@ def build_metadata_files(story: Path, topic: dict, research: str, sources: list[
     if not sources:
         source_lines += ["- راجع الروابط المباشرة الواردة داخل `04_research_notes.md` قبل الاعتماد."]
 
-    title_prompt = f"""أنشئ عنوان YouTube عربيًا واحدًا صادقًا وهادئًا للنوم عن «{topic['topic_ar']}» وفق قالب مثل «ستنام قبل النهاية 😴 | ...» أو «لن تُكمل هذه القصة 😴 | ...». أعد العنوان فقط، بلا اقتباس وبحد أقصى 95 حرفًا."""
+    title_rules = production_rules(44)
+    title_prompt = f"""{title_rules}
+
+أنشئ عنوان YouTube عربيًا واحدًا صادقًا وهادئًا للنوم عن «{topic['topic_ar']}» وفق قالب مثل «ستنام قبل النهاية 😴 | ...» أو «لن تُكمل هذه القصة 😴 | ...». أعد العنوان فقط، بلا اقتباس وبحد أقصى 95 حرفًا."""
     title, _ = gemini(title_prompt, max_tokens=250, temperature=0.5)
     title = title.splitlines()[0].strip().strip('"')
 
@@ -450,7 +489,11 @@ def build_metadata_files(story: Path, topic: dict, research: str, sources: list[
     api_text = story_text
     image_prompt = f"""16:9 horizontal YouTube background, 1920x1080, ultra realistic cinematic historical reconstruction of {topic['search_query_en']}, calm quiet night, soft warm low lighting, subtle moonlight, sleep-inducing composition, historically plausible environment, no action, no text, no logo, no watermark, no fantasy, no modern objects."""
 
-    fact_prompt = f"""نفّذ تدقيقًا تاريخيًا ثانيًا مستقلًا للنص التالي اعتمادًا على ملاحظات البحث. استخرج الأسماء والتواريخ والأرقام والمواقع والادعاءات الأثرية. أعد تقرير Markdown بثلاثة أقسام VERIFIED وUNCERTAIN وCORRECTED. لا تدّعِ التحقق مما لا تدعمه الملاحظات.
+    fact_rules = production_rules(26, 27, 28, 29)
+    fact_prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
+{fact_rules}
+
+نفّذ تدقيقًا تاريخيًا ثانيًا مستقلًا للنص التالي اعتمادًا على ملاحظات البحث. استخرج الأسماء والتواريخ والأرقام والمواقع والادعاءات الأثرية. أعد تقرير Markdown بثلاثة أقسام VERIFIED وUNCERTAIN وCORRECTED. لا تدّعِ التحقق مما لا تدعمه الملاحظات.
 
 ملاحظات البحث:
 {research[:45000]}
