@@ -13,7 +13,7 @@
 
 ## التشغيل
 
-- يوميًا الساعة `02:00 Asia/Dubai` عبر `.github/workflows/production.yml`.
+- يوميًا الساعة `12:30 Asia/Dubai` (بعد إعادة تعيين حصة Gemini اليومية) عبر `.github/workflows/production.yml`.
 - عند الطلب من Telegram: `/new` أو `فيديو جديد` أو `حلقة جديدة`.
 - المراجعة والنشر والرفض عبر `.github/workflows/review.yml`.
 - لا توجد خطوة ترفع إلى Internet Archive أو YouTube قبل الضغط على `🚀 اعتماد ونشر`.

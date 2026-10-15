@@ -13,7 +13,9 @@ on:
         type: boolean
         default: false
   schedule:
-    - cron: "0 22 * * *"
+    # 12:30 Dubai (08:30 UTC): always after the Gemini daily quota reset
+    # (midnight Pacific = 07:00 UTC in summer, 08:00 UTC in winter).
+    - cron: "30 8 * * *"
 
 permissions:
   actions: read

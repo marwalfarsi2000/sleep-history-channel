@@ -1,7 +1,7 @@
 {
   "channel_name": "لن تُكمل هذه القصة",
   "timezone": "Asia/Dubai",
-  "daily_cron": "0 2 * * *",
+  "daily_cron": "30 12 * * *",
   "tts_provider": "gemini",
   "tts_voice": "ar-AE-FatimaNeural",
   "tts_rate": "+0%",
