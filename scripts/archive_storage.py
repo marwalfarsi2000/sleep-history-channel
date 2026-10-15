@@ -42,6 +42,16 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def md5(path: Path) -> str:
+    # Internet Archive exposes MD5 for original files. It is used only as a
+    # non-adversarial content identity check, never for security decisions.
+    digest = hashlib.md5(usedforsecurity=False)
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def safe_identifier(slug: str, created_at: str = "") -> str:
     date = (created_at or "")[:10].replace("-", "")
     if not re.fullmatch(r"\d{8}", date):
@@ -113,6 +123,7 @@ def wait_for_remote_file(
     delay_seconds: int = 30,
     expected_size: int | None = None,
     expected_sha256: str = "",
+    expected_md5: str = "",
 ) -> dict:
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
@@ -142,6 +153,7 @@ def wait_for_remote_file(
         for remote in candidates:
             remote_size = int(remote.get("size") or 0)
             remote_sha = str(remote.get("sha256") or "").lower()
+            remote_md5 = str(remote.get("md5") or "").lower()
             if expected_size is not None and remote_size != expected_size:
                 last_error = RuntimeError(
                     f"remote size {remote_size} is not the expected {expected_size}"
@@ -149,6 +161,14 @@ def wait_for_remote_file(
                 continue
             if expected_sha256 and remote_sha and remote_sha != expected_sha256.lower():
                 last_error = RuntimeError("remote checksum is still the previous version")
+                continue
+            if expected_md5 and remote_md5 and remote_md5 != expected_md5.lower():
+                last_error = RuntimeError("remote checksum is still the previous version")
+                continue
+            if (expected_sha256 or expected_md5) and not (
+                (expected_sha256 and remote_sha) or (expected_md5 and remote_md5)
+            ):
+                last_error = RuntimeError("remote checksum is not available yet")
                 continue
             return remote
 
@@ -168,13 +188,15 @@ def wait_for_remote_file(
 
 def verify_upload(identifier: str, video: Path) -> dict:
     expected = sha256(video)
+    expected_md5 = md5(video)
     wait_for_remote_file(
         identifier,
         video.name,
         expected_size=video.stat().st_size,
         expected_sha256=expected,
+        expected_md5=expected_md5,
     )
-    return {"size": video.stat().st_size, "sha256": expected}
+    return {"size": video.stat().st_size, "sha256": expected, "md5": expected_md5}
 
 
 def verify_uploaded_files(identifier: str, files: dict[str, str]) -> dict[str, dict]:
@@ -182,13 +204,19 @@ def verify_uploaded_files(identifier: str, files: dict[str, str]) -> dict[str, d
     for filename, local_name in files.items():
         local = Path(local_name)
         expected = sha256(local)
+        expected_md5 = md5(local)
         wait_for_remote_file(
             identifier,
             filename,
             expected_size=local.stat().st_size,
             expected_sha256=expected,
+            expected_md5=expected_md5,
         )
-        verified[filename] = {"size": local.stat().st_size, "sha256": expected}
+        verified[filename] = {
+            "size": local.stat().st_size,
+            "sha256": expected,
+            "md5": expected_md5,
+        }
     return verified
 
 

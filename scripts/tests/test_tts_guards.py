@@ -44,11 +44,12 @@ class TtsGuardTests(unittest.TestCase):
             pipeline.require_pausal_sentence_endings("هذا طَرِيقٌ هادِئٌ.")
 
     def test_sentence_pauses_do_not_split_decimal_numbers(self):
-        source = "بَلَغَ العُمْقُ 4.80 أَمْتَارٍ. ثُمَّ تَوَقَّفَ."
-        result = pipeline.api_text(source)
-        self.assertIn("4.80", result)
-        self.assertNotIn("4.\n\n80", result)
-        self.assertTrue(pipeline.lexical_fidelity(source, result)[0])
+        for number in ("4.80", "12.5", "٤.٨٠", "١٢.٥"):
+            with self.subTest(number=number):
+                source = f"بَلَغَ العُمْقُ {number} أَمْتَارٍ. ثُمَّ تَوَقَّفَ."
+                result = pipeline.api_text(source)
+                self.assertIn(number, result)
+                self.assertTrue(pipeline.lexical_fidelity(source, result)[0])
 
     def test_fish_request_uses_native_speed(self):
         captured = {}

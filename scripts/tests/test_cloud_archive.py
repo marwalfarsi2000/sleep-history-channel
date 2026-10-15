@@ -48,7 +48,14 @@ class ArchiveStorageTests(unittest.TestCase):
             video.write_bytes(b"video")
             response = mock.MagicMock()
             response.__enter__.return_value.headers = {"Content-Length": "5"}
-            with mock.patch.object(archive_storage, "archive_metadata", return_value={"files": []}), \
+            metadata = {
+                "files": [{
+                    "name": "14_video_final.mp4",
+                    "size": "5",
+                    "md5": "421b47ffd946ca083b65cd668c6b17e6",
+                }]
+            }
+            with mock.patch.object(archive_storage, "archive_metadata", return_value=metadata), \
                  mock.patch.object(archive_storage.urllib.request, "urlopen", return_value=response):
                 verified = archive_storage.verify_upload("episode-id", video)
             self.assertEqual(verified["size"], 5)
@@ -104,6 +111,31 @@ class ArchiveStorageTests(unittest.TestCase):
             )
         self.assertEqual(verified["size"], "5")
         self.assertEqual(verified["sha256"], "new")
+        sleep.assert_called_once_with(1)
+
+    def test_verification_rejects_same_size_previous_content(self):
+        old = {"files": [{"name": "14_video_final.mp4", "size": "5", "md5": "old"}]}
+        new = {"files": [{"name": "14_video_final.mp4", "size": "5", "md5": "new"}]}
+        head = mock.MagicMock()
+        head.__enter__.return_value.headers = {"Content-Length": "5"}
+        with mock.patch.object(
+            archive_storage,
+            "archive_metadata",
+            side_effect=[old, new],
+        ), mock.patch.object(
+            archive_storage.urllib.request,
+            "urlopen",
+            return_value=head,
+        ), mock.patch.object(archive_storage.time, "sleep") as sleep:
+            verified = archive_storage.wait_for_remote_file(
+                "episode-id",
+                "14_video_final.mp4",
+                attempts=2,
+                delay_seconds=1,
+                expected_size=5,
+                expected_md5="new",
+            )
+        self.assertEqual(verified["md5"], "new")
         sleep.assert_called_once_with(1)
 
 
