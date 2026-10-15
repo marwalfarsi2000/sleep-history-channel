@@ -459,6 +459,56 @@ def api_text(text: str) -> str:
     return text.strip()
 
 
+def apply_pronunciation_replacement(text: str, current: str, replacement: str) -> tuple[str, int]:
+    """Apply a mark-only correction even when Gemini omits existing marks.
+
+    The pronunciation reviewer occasionally returns the right source letters
+    with fewer (or differently ordered) diacritics than the annotated story.
+    Exact matching would reject that safe correction.  Match a second time on
+    the immutable, undiacritized character stream while preserving the
+    original span boundaries.
+    """
+    current_bare = DIACRITICS_RE.sub("", current)
+    replacement_bare = DIACRITICS_RE.sub("", replacement)
+    if not current_bare or current_bare != replacement_bare:
+        raise RuntimeError("PRONUNCIATION_VALIDATION_FAILED: pronunciation changes altered letters")
+
+    if current in text:
+        count = text.count(current)
+        return text.replace(current, replacement), count
+
+    bare_chars: list[str] = []
+    source_indexes: list[int] = []
+    for index, char in enumerate(text):
+        if DIACRITICS_RE.fullmatch(char):
+            continue
+        bare_chars.append(char)
+        source_indexes.append(index)
+    bare_text = "".join(bare_chars)
+
+    starts: list[int] = []
+    cursor = 0
+    while True:
+        found = bare_text.find(current_bare, cursor)
+        if found < 0:
+            break
+        starts.append(found)
+        cursor = found + len(current_bare)
+    if not starts:
+        raise RuntimeError("PRONUNCIATION_VALIDATION_FAILED: proposed source text was not found")
+
+    spans: list[tuple[int, int]] = []
+    for start in starts:
+        original_start = source_indexes[start]
+        original_end = source_indexes[start + len(current_bare) - 1] + 1
+        while original_end < len(text) and DIACRITICS_RE.fullmatch(text[original_end]):
+            original_end += 1
+        spans.append((original_start, original_end))
+    for start, end in reversed(spans):
+        text = text[:start] + replacement + text[end:]
+    return text, len(spans)
+
+
 def pronunciation_validate(clean_story: str, annotated: str, story: Path) -> str:
     prompt = f"""أنت بوابة نطق مستقلة لنص تاريخي عربي سيحوّل إلى صوت.
 راجع فقط أسماء الأشخاص والمدن والمواقع والسلالات والحضارات والكلمات الأجنبية المعربة.
@@ -471,6 +521,11 @@ def pronunciation_validate(clean_story: str, annotated: str, story: Path) -> str
 """
     result_text, _ = gemini(prompt, json_mode=True, max_tokens=5000, temperature=0.0)
     result = parse_json(result_text)
+    validation_log = story / "logs" / "pronunciation_validation.json"
+    validation_log.write_text(
+        json.dumps({**result, "application_status": "validating"}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     if result.get("status") not in {"PASS", "FAIL"}:
         raise RuntimeError("PRONUNCIATION_VALIDATION_FAILED: invalid response status")
     revised = annotated
@@ -478,10 +533,10 @@ def pronunciation_validate(clean_story: str, annotated: str, story: Path) -> str
     for item in result.get("replacements") or []:
         current = str(item.get("current", ""))
         replacement = str(item.get("replacement", ""))
-        if not current or not replacement or current not in revised:
+        if not current or not replacement:
             raise RuntimeError("PRONUNCIATION_VALIDATION_FAILED: proposed source text was not found")
-        revised = revised.replace(current, replacement)
-        applied.append(item)
+        revised, occurrences = apply_pronunciation_replacement(revised, current, replacement)
+        applied.append({**item, "occurrences": occurrences})
     faithful, _ = lexical_fidelity(clean_story, revised)
     if not faithful:
         raise RuntimeError("PRONUNCIATION_VALIDATION_FAILED: pronunciation changes altered letters")
@@ -490,7 +545,8 @@ def pronunciation_validate(clean_story: str, annotated: str, story: Path) -> str
         raise RuntimeError("PRONUNCIATION_VALIDATION_FAILED: " + json.dumps(result, ensure_ascii=False))
     result["applied"] = applied
     result["status"] = "PASS"
-    (story / "logs" / "pronunciation_validation.json").write_text(
+    result["application_status"] = "passed"
+    validation_log.write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     return revised

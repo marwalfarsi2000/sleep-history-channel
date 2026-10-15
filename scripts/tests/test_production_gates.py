@@ -56,6 +56,44 @@ class ProductionGateTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "TTS_CHUNKING_FAILED"):
             pipeline.split_chunks("ا" * 101 + ".", limit=100)
 
+    def test_pronunciation_validation_matches_source_without_exact_diacritics(self):
+        annotated = "مَرْحَبًا فِي قُرْطُبَةَ."
+        response = json.dumps({
+            "status": "PASS",
+            "replacements": [{
+                "current": "قرطبة",
+                "replacement": "قُرْطُبَة",
+                "reason": "ضبط اسم المدينة",
+            }],
+            "unresolved": [],
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            story = Path(directory)
+            (story / "logs").mkdir()
+            with mock.patch.object(pipeline, "gemini", return_value=(response, [])):
+                revised = pipeline.pronunciation_validate("مرحبا في قرطبة.", annotated, story)
+            self.assertEqual(revised, "مَرْحَبًا فِي قُرْطُبَة.")
+            saved = json.loads((story / "logs" / "pronunciation_validation.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["application_status"], "passed")
+            self.assertEqual(saved["applied"][0]["occurrences"], 1)
+
+    def test_pronunciation_validation_still_rejects_changed_letters(self):
+        response = json.dumps({
+            "status": "PASS",
+            "replacements": [{
+                "current": "قُرْطُبَة",
+                "replacement": "غَرْنَاطَة",
+                "reason": "unsafe",
+            }],
+            "unresolved": [],
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            story = Path(directory)
+            (story / "logs").mkdir()
+            with mock.patch.object(pipeline, "gemini", return_value=(response, [])):
+                with self.assertRaisesRegex(RuntimeError, "altered letters"):
+                    pipeline.pronunciation_validate("قرطبة", "قُرْطُبَة", story)
+
     def test_production_uploads_review_copy_to_archive_as_review_pending(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
