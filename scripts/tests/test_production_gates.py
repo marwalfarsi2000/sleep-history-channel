@@ -12,6 +12,10 @@ import cloud_pipeline
 
 
 class ProductionGateTests(unittest.TestCase):
+    def test_duration_policy_accepts_full_sleep_story_range(self):
+        self.assertLessEqual(float(pipeline.SETTINGS["target_min_seconds"]), 3600)
+        self.assertGreaterEqual(float(pipeline.SETTINGS["target_max_seconds"]), 5400)
+
     def test_research_rejects_too_few_grounded_sources(self):
         with mock.patch.object(
             generate_daily,

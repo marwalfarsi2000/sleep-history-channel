@@ -97,6 +97,6 @@
   "archive_collection": "opensource_movies",
   "archive_license_url": "https://creativecommons.org/licenses/by-nc-nd/4.0/",
   "target_min_seconds": 3480,
-  "target_max_seconds": 3900,
+  "target_max_seconds": 5400,
   "publish_requires": "APPROVE_AND_PUBLISH"
 }
