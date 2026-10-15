@@ -113,6 +113,38 @@ def base_signature(text: str) -> str:
     text = DIACRITICS_RE.sub("", text)
     return re.sub(r"\s+", " ", text).strip()
 
+def align_source_diacritics(source: str, candidate: str) -> str:
+    """Rebuild `source` with the candidate's marks wherever the words align.
+
+    Used when the model merged, split, dropped, or changed words: aligned words
+    keep their vocalization on the original letters, unaligned words stay as
+    written in the source, so the result can never change the story text.
+    """
+    word_pattern = re.compile(r"(?:[ء-ي][ؐ-ًؚ-ٰٟۖ-ۭ]*)+")
+    source_matches = list(word_pattern.finditer(source))
+    candidate_words = [match.group() for match in word_pattern.finditer(without_direction_tags(candidate))]
+    source_bare = [DIACRITICS_RE.sub("", match.group()) for match in source_matches]
+    candidate_bare = [DIACRITICS_RE.sub("", word) for word in candidate_words]
+    chosen = [match.group() for match in source_matches]
+    matcher = difflib.SequenceMatcher(None, source_bare, candidate_bare, autojunk=False)
+    for opcode, i1, i2, j1, j2 in matcher.get_opcodes():
+        if opcode == "equal":
+            for offset in range(i2 - i1):
+                chosen[i1 + offset] = candidate_words[j1 + offset]
+        elif opcode == "replace" and (i2 - i1) == (j2 - j1):
+            for offset in range(i2 - i1):
+                restored = restore_source_lexemes(source_bare[i1 + offset], candidate_words[j1 + offset])
+                if DIACRITICS_RE.sub("", restored) == source_bare[i1 + offset]:
+                    chosen[i1 + offset] = restored
+    pieces, cursor = [], 0
+    for match, word in zip(source_matches, chosen):
+        pieces.append(source[cursor:match.start()])
+        pieces.append(word)
+        cursor = match.end()
+    pieces.append(source[cursor:])
+    return "".join(pieces)
+
+
 def lexical_fidelity(source: str, candidate: str) -> tuple[bool, list[tuple[str, str]]]:
     token_re = re.compile(r"[\u0621-\u064A]+|[A-Za-z]+|\d+(?:[.,]\d+)?")
     source_tokens = token_re.findall(DIACRITICS_RE.sub("", without_direction_tags(source)))
@@ -338,6 +370,10 @@ def diacritize_and_annotate(clean_story: str, cache_dir: Path | None = None, lim
                 continue
             candidate = normalize_arabic_diacritics(restore_source_lexemes(block, candidate))
             faithful, corrections = lexical_fidelity(block, candidate)
+            if not faithful:
+                # Keep the marks that align and restore every original word.
+                candidate = normalize_arabic_diacritics(align_source_diacritics(block, candidate))
+                faithful, corrections = lexical_fidelity(block, candidate)
             if not faithful:
                 last_error = f"lexical content changed in block {index}"
                 prompt += "\nتنبيه صارم: المحاولة السابقة غيّرت النص. لا تغير أي حرف أصلي؛ أضف الحركات ووسم الأداء فقط."
