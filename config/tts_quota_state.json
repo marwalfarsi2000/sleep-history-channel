@@ -1,1 +1,5 @@
-{}
+{
+  "gemini_exhausted_quota_day": "2026-10-15",
+  "reason": "BLOCKED_COST_OR_FREE_LIMIT: TTS engine gemini-narrator exhausted: every Gemini TTS model is out of quota",
+  "updated_at": "2026-10-15T17:46:03.430569+00:00"
+}

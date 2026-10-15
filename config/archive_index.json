@@ -32,5 +32,20 @@
     "video_duration_seconds": 5064.0,
     "youtube_video_id": "Cg7H1Z1tXTM",
     "youtube_url": "https://www.youtube.com/watch?v=Cg7H1Z1tXTM"
+  },
+  {
+    "identifier": "lan-tukmil-alqissa-20261015-daily-life-in-caliphate-c",
+    "slug": "daily-life-in-caliphate-cordoba",
+    "title": "لن تُكمل هذه القصة 😴 | تفاصيل الحياة اليومية بهدوء في قرطبة العصر الأموي",
+    "created_at": "2026-10-15T21:43:04.247303+04:00",
+    "status": "REVIEW_PENDING",
+    "video_filename": "14_video_final.mp4",
+    "item_url": "https://archive.org/details/lan-tukmil-alqissa-20261015-daily-life-in-caliphate-c",
+    "video_url": "https://archive.org/download/lan-tukmil-alqissa-20261015-daily-life-in-caliphate-c/14_video_final.mp4",
+    "thumbnail_url": "https://archive.org/download/lan-tukmil-alqissa-20261015-daily-life-in-caliphate-c/11_thumbnail_base.jpg",
+    "video_size": 57497605,
+    "video_sha256": "6fd55e144dc0d1b0e199ce780fd49dda1161a21c82552f34dae7c8ae2be1b962",
+    "audio_duration_seconds": 3802.56,
+    "video_duration_seconds": 3803.0
   }
 ]
