@@ -460,10 +460,14 @@ def research_from_search_providers(topic: dict, prompt: str) -> tuple[str, list[
     grounded_prompt = (
         prompt
         + "\n\nاعتمد حصريًا على المصادر المرقمة التالية التي جُمعت من البحث على الإنترنت. "
-        "لا تضف أي معلومة غير موجودة فيها، واذكر رابط المصدر بجانب كل ادعاء مهم وفي «خريطة الادعاءات».\n\n"
+        "لا تضف أي معلومة غير موجودة فيها، وأشر إلى المصدر برقمه بين قوسين مثل [1] بجانب كل ادعاء مهم وفي «خريطة الادعاءات».\n\n"
         + evidence
     )
     research, _ = gemini(grounded_prompt, max_tokens=12000, temperature=0.2)
+    # The model cites by number; the reference list maps each [n] to its real URL,
+    # so the notes always carry direct, verifiable links.
+    references = "\n".join(f"[{index}] {item['title']} — {item['url']}" for index, item in enumerate(results, 1))
+    research = f"{research.rstrip()}\n\n## المصادر\n{references}\n"
     sources = [{"title": item["title"], "url": item["url"], "provider": provider} for item in results]
     return research, sources
 

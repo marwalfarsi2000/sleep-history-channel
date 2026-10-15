@@ -56,6 +56,15 @@ class SearchFallbackTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "GROUNDED_RESEARCH_UNAVAILABLE"):
                 generate_daily._collect_sources(TOPIC)
 
+    def test_fallback_notes_always_carry_direct_source_urls(self):
+        results = _results("a.org", "b.org", "c.org")
+        with mock.patch.object(generate_daily, "_collect_sources", return_value=("exa", results)), \
+             mock.patch.object(generate_daily, "gemini", return_value=("ملاحظات [1] [2]\n## خريطة الادعاءات\n- ادعاء [3]", [])):
+            research, sources = generate_daily.research_from_search_providers(TOPIC, "prompt")
+        for item in results:
+            self.assertIn(item["url"], research)
+        self.assertEqual([source["url"] for source in sources], [item["url"] for item in results])
+
     def test_research_uses_search_providers_when_grounding_is_exhausted(self):
         notes = "ملاحظات https://a.org/1 https://b.org/2 https://c.org/3\n## خريطة الادعاءات"
         sources = [{"title": "t", "url": f"https://{d}/x"} for d in ("a.org", "b.org", "c.org")]
