@@ -1308,6 +1308,49 @@ def validate_audio(story: Path) -> dict:
     return result
 
 
+QC_RETRY_DELAYS = (10, 30, 60, 120)
+QC_TRANSIENT_CODES = {429, 500, 502, 503, 504}
+
+
+def _qc_models(primary: str) -> list[str]:
+    approved = set(SETTINGS.get("approved_llm_models") or [])
+    chain = [primary, SETTINGS.get("llm_model", ""), *(SETTINGS.get("llm_fallback_models") or [])]
+    return [model for model in dict.fromkeys(chain) if model and model in approved]
+
+
+def _qc_request_with_fallback(request: urllib.request.Request, primary: str) -> dict:
+    """Transcript QC stays mandatory, but a busy or exhausted model is retried
+    with backoff and then replaced by the next approved model."""
+    last_error: Exception | None = None
+    for model in _qc_models(primary):
+        model_request = urllib.request.Request(
+            request.full_url.replace(f"/models/{primary}:", f"/models/{model}:"),
+            data=request.data,
+            headers=dict(request.header_items()),
+            method="POST",
+        )
+        for attempt in range(len(QC_RETRY_DELAYS) + 1):
+            try:
+                with urllib.request.urlopen(model_request, timeout=240) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                last_error = exc
+                if exc.code == 404 or exc.code not in QC_TRANSIENT_CODES:
+                    break
+                body = exc.read().decode("utf-8", errors="replace").lower()
+                if exc.code == 429 and ("perday" in body.replace("_", "") or "per day" in body):
+                    break
+            except (urllib.error.URLError, TimeoutError) as exc:
+                last_error = exc
+            if attempt < len(QC_RETRY_DELAYS):
+                print(f"Audio QC transcript {model} temporarily unavailable; retrying in {QC_RETRY_DELAYS[attempt]}s", flush=True)
+                time.sleep(QC_RETRY_DELAYS[attempt])
+        print(f"Audio QC transcript model {model} unavailable; trying the next approved model", flush=True)
+    raise RuntimeError(
+        f"AUDIO_QC_FAILED: transcript provider unavailable: {type(last_error).__name__ if last_error else 'no approved model'}"
+    ) from last_error
+
+
 def transcribe_audio_for_qc(path: Path, model: str) -> str:
     api_key = SECRETS.get("GEMINI_API_KEY", "")
     if not api_key:
@@ -1325,11 +1368,7 @@ def transcribe_audio_for_qc(path: Path, model: str) -> str:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=240) as response:
-            result = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
-        raise RuntimeError(f"AUDIO_QC_FAILED: transcript provider unavailable: {type(exc).__name__}") from exc
+    result = _qc_request_with_fallback(request, model)
     transcript = "".join(
         part.get("text", "")
         for part in (result.get("candidates") or [{}])[0].get("content", {}).get("parts", [])
