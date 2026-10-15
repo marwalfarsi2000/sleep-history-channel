@@ -479,7 +479,8 @@ def api_text(text: str) -> str:
     text = apply_pausal_sentence_endings(text)
     # Fish respects punctuation and paragraph boundaries. A blank line after a
     # completed sentence creates a short natural pause without unsupported SSML.
-    text = re.sub(r"\s*([.!؟])\s*", r"\1\n\n", text)
+    # A dot between digits is a decimal separator, not a sentence boundary.
+    text = re.sub(r"\s*((?<!\d)\.|\.(?!\d)|[!؟])\s*", r"\1\n\n", text)
     text = re.sub(r"\s*(؛)\s*", r"\1\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()

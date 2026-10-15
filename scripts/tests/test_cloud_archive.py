@@ -80,6 +80,32 @@ class ArchiveStorageTests(unittest.TestCase):
         self.assertEqual(verified["size"], "5")
         sleep.assert_called_once_with(1)
 
+    def test_verification_waits_for_replaced_archive_file(self):
+        old = {"files": [{"name": "14_video_final.mp4", "size": "4", "sha256": "old"}]}
+        new = {"files": [{"name": "14_video_final.mp4", "size": "5", "sha256": "new"}]}
+        head = mock.MagicMock()
+        head.__enter__.return_value.headers = {"Content-Length": "4"}
+        with mock.patch.object(
+            archive_storage,
+            "archive_metadata",
+            side_effect=[old, new],
+        ), mock.patch.object(
+            archive_storage.urllib.request,
+            "urlopen",
+            return_value=head,
+        ), mock.patch.object(archive_storage.time, "sleep") as sleep:
+            verified = archive_storage.wait_for_remote_file(
+                "episode-id",
+                "14_video_final.mp4",
+                attempts=2,
+                delay_seconds=1,
+                expected_size=5,
+                expected_sha256="new",
+            )
+        self.assertEqual(verified["size"], "5")
+        self.assertEqual(verified["sha256"], "new")
+        sleep.assert_called_once_with(1)
+
 
 if __name__ == "__main__":
     unittest.main()

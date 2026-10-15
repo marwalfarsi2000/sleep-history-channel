@@ -43,6 +43,13 @@ class TtsGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "TTS_PAUSAL_ENDINGS_FAILED"):
             pipeline.require_pausal_sentence_endings("هذا طَرِيقٌ هادِئٌ.")
 
+    def test_sentence_pauses_do_not_split_decimal_numbers(self):
+        source = "بَلَغَ العُمْقُ 4.80 أَمْتَارٍ. ثُمَّ تَوَقَّفَ."
+        result = pipeline.api_text(source)
+        self.assertIn("4.80", result)
+        self.assertNotIn("4.\n\n80", result)
+        self.assertTrue(pipeline.lexical_fidelity(source, result)[0])
+
     def test_fish_request_uses_native_speed(self):
         captured = {}
 

@@ -111,15 +111,18 @@ def wait_for_remote_file(
     *,
     attempts: int = 40,
     delay_seconds: int = 30,
+    expected_size: int | None = None,
+    expected_sha256: str = "",
 ) -> dict:
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
+        candidates = []
         try:
             payload = archive_metadata(identifier)
             files = {entry.get("name"): entry for entry in payload.get("files") or []}
             remote = files.get(filename)
             if remote and int(remote.get("size") or 0) > 0:
-                return remote
+                candidates.append(remote)
         except urllib.error.HTTPError as exc:
             if exc.code != 404:
                 raise
@@ -130,15 +133,28 @@ def wait_for_remote_file(
             with urllib.request.urlopen(request, timeout=60) as response:
                 remote_size = int(response.headers.get("Content-Length") or 0)
             if remote_size > 0:
-                return {"size": remote_size}
+                candidates.append({"size": remote_size})
         except urllib.error.HTTPError as exc:
             if exc.code != 404:
                 raise
             last_error = exc
 
+        for remote in candidates:
+            remote_size = int(remote.get("size") or 0)
+            remote_sha = str(remote.get("sha256") or "").lower()
+            if expected_size is not None and remote_size != expected_size:
+                last_error = RuntimeError(
+                    f"remote size {remote_size} is not the expected {expected_size}"
+                )
+                continue
+            if expected_sha256 and remote_sha and remote_sha != expected_sha256.lower():
+                last_error = RuntimeError("remote checksum is still the previous version")
+                continue
+            return remote
+
         if attempt < attempts:
             print(
-                f"Internet Archive is still processing {filename}; "
+                f"Internet Archive is still processing or serving the previous {filename}; "
                 f"verification retry {attempt}/{attempts - 1} in {delay_seconds}s",
                 flush=True,
             )
@@ -151,13 +167,13 @@ def wait_for_remote_file(
 
 
 def verify_upload(identifier: str, video: Path) -> dict:
-    remote = wait_for_remote_file(identifier, video.name)
-    if int(remote.get("size") or 0) != video.stat().st_size:
-        raise RuntimeError("Internet Archive video size differs from the local file")
     expected = sha256(video)
-    remote_sha = str(remote.get("sha256") or "").lower()
-    if remote_sha and remote_sha != expected:
-        raise RuntimeError("Internet Archive video checksum verification failed")
+    wait_for_remote_file(
+        identifier,
+        video.name,
+        expected_size=video.stat().st_size,
+        expected_sha256=expected,
+    )
     return {"size": video.stat().st_size, "sha256": expected}
 
 
@@ -165,13 +181,13 @@ def verify_uploaded_files(identifier: str, files: dict[str, str]) -> dict[str, d
     verified = {}
     for filename, local_name in files.items():
         local = Path(local_name)
-        remote = wait_for_remote_file(identifier, filename)
-        if int(remote.get("size") or 0) != local.stat().st_size:
-            raise RuntimeError(f"Internet Archive size differs for {filename}")
         expected = sha256(local)
-        remote_sha = str(remote.get("sha256") or "").lower()
-        if remote_sha and remote_sha != expected:
-            raise RuntimeError(f"Internet Archive checksum differs for {filename}")
+        wait_for_remote_file(
+            identifier,
+            filename,
+            expected_size=local.stat().st_size,
+            expected_sha256=expected,
+        )
         verified[filename] = {"size": local.stat().st_size, "sha256": expected}
     return verified
 
