@@ -692,7 +692,34 @@ def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path)
 المسودة:
 {chapter}
 """
-            chapter, _ = gemini(expansion_prompt, max_tokens=8000, temperature=0.35)
+            expanded, _ = gemini(expansion_prompt, max_tokens=8000, temperature=0.35)
+            if word_count(expanded) > word_count(chapter):
+                chapter = expanded
+                write(chapter_path, chapter)
+        # Rewrites tend to compress, so a still-short chapter is extended by
+        # appending continuation paragraphs, checkpointing each improvement.
+        for _attempt in range(3):
+            if word_count(chapter) >= 600:
+                break
+            missing = max(250, target_words - word_count(chapter))
+            continuation_prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
+{rules}
+
+أكمل القسم التالي من قصة تاريخية للنوم بفقرات جديدة تأتي بعد نهايته مباشرة، بنحو {missing} كلمة عربية.
+لا تكرر ما سبق ولا تلخصه، ولا تضف عنوانًا أو خاتمة شكر. أضف فقط تفاصيل يومية وتاريخية يدعمها المصدر المعرفي، بنفس النبرة الهادئة.
+
+الموضوع: {topic['topic_ar']}
+القسم: {section.get('title', '')} — {section.get('brief', '')}
+المصدر المعرفي:
+{research[:36000]}
+
+نص القسم حتى الآن:
+{chapter}
+"""
+            continuation, _ = gemini(continuation_prompt, max_tokens=4000, temperature=0.4)
+            if word_count(continuation) > 0:
+                chapter = f"{chapter.rstrip()}\n\n{continuation.strip()}"
+                write(chapter_path, chapter)
         if word_count(chapter) < 600:
             raise RuntimeError(f"Chapter {index} is too short after expansion: {word_count(chapter)} words")
         write(chapter_path, chapter)
