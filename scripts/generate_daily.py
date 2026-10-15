@@ -353,6 +353,121 @@ def choose_valid_topic(history: list[dict], attempts: int = 3) -> dict:
     raise last_error or RuntimeError("TOPIC_GATE_REJECTED: no acceptable topic was found")
 
 
+def _http_json(url: str, *, headers: dict, body: dict | None = None, timeout: int = 90) -> dict:
+    data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method="POST" if body is not None else "GET",
+        headers={**headers, "Accept": "application/json", **({"Content-Type": "application/json"} if body is not None else {})},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def search_exa(query: str, key: str) -> list[dict]:
+    data = _http_json(
+        "https://api.exa.ai/search",
+        headers={"x-api-key": key},
+        body={"query": query, "numResults": 8, "contents": {"text": {"maxCharacters": 3000}}},
+    )
+    return [
+        {"title": item.get("title") or item.get("url"), "url": item.get("url"), "excerpt": item.get("text") or ""}
+        for item in data.get("results", [])
+    ]
+
+
+def search_brave(query: str, key: str) -> list[dict]:
+    params = urllib.parse.urlencode({"q": query, "count": 10, "extra_snippets": "true"})
+    data = _http_json(
+        f"https://api.search.brave.com/res/v1/web/search?{params}",
+        headers={"X-Subscription-Token": key},
+    )
+    return [
+        {
+            "title": item.get("title") or item.get("url"),
+            "url": item.get("url"),
+            "excerpt": " ".join([item.get("description") or "", *(item.get("extra_snippets") or [])]),
+        }
+        for item in (data.get("web") or {}).get("results", [])
+    ]
+
+
+def search_firecrawl(query: str, key: str) -> list[dict]:
+    data = _http_json(
+        "https://api.firecrawl.dev/v2/search",
+        headers={"Authorization": f"Bearer {key}"},
+        body={"query": query[:500], "limit": 6, "scrapeOptions": {"formats": [{"type": "markdown"}]}},
+        timeout=180,
+    )
+    return [
+        {
+            "title": item.get("title") or item.get("url"),
+            "url": item.get("url"),
+            "excerpt": item.get("markdown") or item.get("description") or "",
+        }
+        for item in (data.get("data") or {}).get("web", [])
+    ]
+
+
+# Used in order after Gemini's Google Search grounding is exhausted.
+SEARCH_PROVIDERS = (
+    ("exa", "EXA_API_KEY", search_exa),
+    ("brave", "BRAVE_SEARCH_API_KEY", search_brave),
+    ("firecrawl", "FIRECRAWL_API_KEY", search_firecrawl),
+)
+
+
+def _collect_sources(topic: dict) -> tuple[str, list[dict]]:
+    """Return (provider, sources) from the first search provider with enough evidence."""
+    secrets = load_secrets()
+    queries = [
+        str(topic.get("search_query_en") or "").strip(),
+        f"{topic['topic_ar']} {topic['period_ar']}".strip(),
+    ]
+    failures = []
+    for name, secret, search in SEARCH_PROVIDERS:
+        key = secrets.get(secret, "")
+        if not key:
+            failures.append(f"{name}: no key")
+            continue
+        results: list[dict] = []
+        try:
+            for query in filter(None, queries):
+                for item in search(query, key):
+                    url = str(item.get("url") or "")
+                    if url.startswith("https://") and not any(found["url"] == url for found in results):
+                        results.append(item)
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as error:
+            code = getattr(error, "code", "")
+            failures.append(f"{name}: {type(error).__name__} {code}".strip())
+            print(f"Research search provider {name} failed ({code or type(error).__name__}); trying next", file=sys.stderr, flush=True)
+            continue
+        domains = {urllib.parse.urlparse(item["url"]).netloc.lower().removeprefix("www.") for item in results}
+        if len(results) >= 3 and len(domains) >= 2:
+            print(f"Research sources collected via {name} ({len(results)} results)", file=sys.stderr, flush=True)
+            return name, results[:10]
+        failures.append(f"{name}: only {len(results)} usable results")
+    raise RuntimeError("GROUNDED_RESEARCH_UNAVAILABLE: all search providers failed (" + "; ".join(failures) + ")")
+
+
+def research_from_search_providers(topic: dict, prompt: str) -> tuple[str, list[dict]]:
+    provider, results = _collect_sources(topic)
+    evidence = "\n\n".join(
+        f"[{index}] {item['title']}\n{item['url']}\n{' '.join(str(item['excerpt']).split())[:2500]}"
+        for index, item in enumerate(results, 1)
+    )
+    grounded_prompt = (
+        prompt
+        + "\n\nاعتمد حصريًا على المصادر المرقمة التالية التي جُمعت من البحث على الإنترنت. "
+        "لا تضف أي معلومة غير موجودة فيها، واذكر رابط المصدر بجانب كل ادعاء مهم وفي «خريطة الادعاءات».\n\n"
+        + evidence
+    )
+    research, _ = gemini(grounded_prompt, max_tokens=12000, temperature=0.2)
+    sources = [{"title": item["title"], "url": item["url"], "provider": provider} for item in results]
+    return research, sources
+
+
 def research_topic(topic: dict) -> tuple[str, list[dict]]:
     rules = production_rules(18, 19, 20, 21)
     prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
@@ -367,7 +482,13 @@ def research_topic(topic: dict) -> tuple[str, list[dict]]:
 اكتب ملاحظات بحث عربية مفصلة ومنظمة تشمل: المكان والزمن، البيئة، البيوت، الطعام، الملابس، الحرف، التجارة، النقل، الإدارة، المعتقدات اللازمة للفهم، الأدلة الأثرية، التسلسل التاريخي، وما هو مختلف عليه.
 أنشئ في النهاية قسمًا بعنوان «خريطة الادعاءات» يربط الادعاءات المهمة بالمصادر المذكورة. لا تخترع أسماء أو تواريخ أو اقتباسات. ضع روابط المصادر صراحة داخل النص أيضًا.
 """
-    research, sources = gemini(prompt, search=True, max_tokens=12000, temperature=0.2)
+    try:
+        research, sources = gemini(prompt, search=True, max_tokens=12000, temperature=0.2)
+    except RuntimeError as error:
+        if "GROUNDED_RESEARCH_UNAVAILABLE" not in str(error) and "daily quota" not in str(error).lower():
+            raise
+        print(f"Google Search grounding unavailable ({str(error)[:160]}); using search providers", file=sys.stderr, flush=True)
+        research, sources = research_from_search_providers(topic, prompt)
     valid_sources = []
     domains = set()
     for source in sources:

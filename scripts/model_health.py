@@ -17,10 +17,38 @@ ROOT = Path(__file__).resolve().parents[1]
 SETTINGS = json.loads((ROOT / "config" / "settings.json").read_text(encoding="utf-8"))
 
 
-def get_json(url: str, headers: dict | None = None) -> dict:
-    request = urllib.request.Request(url, headers=headers or {})
+def get_json(url: str, headers: dict | None = None, body: dict | None = None) -> dict:
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(url, data=data, headers=headers or {}, method="POST" if data else "GET")
     with urllib.request.urlopen(request, timeout=60) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+SEARCH_PROBES = (
+    ("Exa", "EXA_API_KEY", lambda key: get_json(
+        "https://api.exa.ai/search", {"x-api-key": key, "Content-Type": "application/json"},
+        {"query": "history of Cordoba", "numResults": 1}).get("results")),
+    ("Brave", "BRAVE_SEARCH_API_KEY", lambda key: (get_json(
+        "https://api.search.brave.com/res/v1/web/search?q=history+of+Cordoba&count=1",
+        {"X-Subscription-Token": key, "Accept": "application/json"}).get("web") or {}).get("results")),
+    ("Firecrawl", "FIRECRAWL_API_KEY", lambda key: (get_json(
+        "https://api.firecrawl.dev/v2/search", {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        {"query": "history of Cordoba", "limit": 1}).get("data") or {}).get("web")),
+)
+
+
+def search_report() -> list[str]:
+    lines = []
+    for name, secret, probe in SEARCH_PROBES:
+        key = os.environ.get(secret, "")
+        if not key:
+            lines.append(f"Search {name}: not configured ({secret})")
+            continue
+        try:
+            lines.append(f"Search {name}: {'working' if probe(key) else 'NO RESULTS'}")
+        except Exception as error:  # report every provider even if one fails
+            lines.append(f"Search {name}: FAILED {type(error).__name__} {getattr(error, 'code', '')}".strip())
+    return lines
 
 
 def gemini_models(api_key: str) -> set[str]:
