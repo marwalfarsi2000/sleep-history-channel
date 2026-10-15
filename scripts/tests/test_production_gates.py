@@ -16,6 +16,19 @@ class ProductionGateTests(unittest.TestCase):
         self.assertLessEqual(float(pipeline.SETTINGS["target_min_seconds"]), 3600)
         self.assertGreaterEqual(float(pipeline.SETTINGS["target_max_seconds"]), 5400)
 
+    def test_existing_review_notification_reuses_archive_without_regeneration(self):
+        payload = {"metadata": {
+            "approval_status": "REVIEW_PENDING",
+            "title": "حلقة قرطبة",
+            "video_duration_seconds": "3821",
+        }}
+        with mock.patch.object(cloud_pipeline, "archive_metadata", return_value=payload), \
+             mock.patch.object(cloud_pipeline, "send_message") as send_message:
+            record = cloud_pipeline.notify_existing_review("cordoba-id")
+        self.assertEqual(record["identifier"], "cordoba-id")
+        self.assertEqual(record["video_duration_seconds"], 3821.0)
+        send_message.assert_called_once()
+
     def test_research_rejects_too_few_grounded_sources(self):
         with mock.patch.object(
             generate_daily,

@@ -25,6 +25,7 @@
   "image_provider": "cloudflare_workers_ai",
   "image_model": "@cf/black-forest-labs/flux-1-schnell",
   "image_steps": 4,
+  "image_accuracy_retry_attempts": 3,
   "image_cost_mode": "free_allocation_only",
   "image_fallback_provider": "pollinations",
   "pollinations_image_model": "microsoft/mai-image-2.6",

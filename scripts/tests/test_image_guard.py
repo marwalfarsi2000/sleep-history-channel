@@ -14,6 +14,29 @@ from PIL import Image
 
 
 class ImageCostGuardTests(unittest.TestCase):
+    def test_historical_accuracy_rejection_generates_a_new_candidate(self):
+        rejected = RuntimeError(
+            'IMAGE_ACCURACY_GATE_FAILED: {"status": "FAIL", "issues": ["modern wires"]}'
+        )
+        with mock.patch.object(
+            image_generate, "generate", side_effect=[rejected, None]
+        ) as generate, mock.patch.dict(
+            image_generate.SETTINGS, {"image_accuracy_retry_attempts": 3}
+        ):
+            image_generate.generate_with_accuracy_retries(Path("story"), seed=100)
+        self.assertEqual(generate.call_count, 2)
+        self.assertEqual(generate.call_args_list[0].args[1], 100)
+        self.assertEqual(generate.call_args_list[1].args[1], 101)
+
+    def test_non_accuracy_failure_is_not_retried(self):
+        failure = RuntimeError("BLOCKED_COST: quota exhausted")
+        with mock.patch.object(
+            image_generate, "generate", side_effect=failure
+        ) as generate:
+            with self.assertRaisesRegex(RuntimeError, "BLOCKED_COST"):
+                image_generate.generate_with_accuracy_retries(Path("story"), seed=100)
+        generate.assert_called_once()
+
     def test_cloudflare_sends_original_prompt_and_supported_fields_only(self):
         settings = dict(image_generate.SETTINGS)
         try:

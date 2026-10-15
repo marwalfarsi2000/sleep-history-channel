@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: publish, reject, or regenerate
+        description: publish, reject, regenerate, or resume a review notification
         required: true
         type: choice
-        options: [publish, reject, regenerate]
+        options: [publish, reject, regenerate, notify-existing-review]
       identifier:
         description: Internet Archive identifier of the REVIEW_PENDING item
         required: true

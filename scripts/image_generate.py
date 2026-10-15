@@ -506,12 +506,33 @@ def generate(story: Path, seed: int | None = None) -> None:
     print(json.dumps({"status": "ok", "provider": actual_provider, "model": actual_model, "seed": seed}))
 
 
+def generate_with_accuracy_retries(story: Path, seed: int | None = None) -> None:
+    attempts = max(1, int(SETTINGS.get("image_accuracy_retry_attempts", 3)))
+    for attempt in range(attempts):
+        attempt_seed = seed + attempt if seed is not None else None
+        try:
+            generate(story, attempt_seed)
+            return
+        except RuntimeError as exc:
+            quality_rejection = (
+                str(exc).startswith("IMAGE_ACCURACY_GATE_FAILED: {")
+                and '"status": "FAIL"' in str(exc)
+            )
+            if not quality_rejection or attempt + 1 >= attempts:
+                raise
+            print(
+                f"Historical image rejected; generating a new candidate "
+                f"({attempt + 2}/{attempts})",
+                flush=True,
+            )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("story")
     parser.add_argument("--seed", type=int)
     args = parser.parse_args()
-    generate(Path(args.story).resolve(), args.seed)
+    generate_with_accuracy_retries(Path(args.story).resolve(), args.seed)
 
 
 if __name__ == "__main__":

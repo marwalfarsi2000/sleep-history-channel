@@ -132,6 +132,22 @@ def notify_review(record: dict) -> None:
     )
 
 
+def notify_existing_review(identifier: str) -> dict:
+    payload = archive_metadata(identifier)
+    metadata = payload.get("metadata") or {}
+    if str(metadata.get("approval_status") or "") != "REVIEW_PENDING":
+        raise RuntimeError("HUMAN_APPROVAL_GATE_FAILED: archive item is not REVIEW_PENDING")
+    record = {
+        "identifier": identifier,
+        "title": str(metadata.get("title") or identifier),
+        "video_duration_seconds": float(metadata.get("video_duration_seconds") or 0),
+        "review_url": f"https://archive.org/details/{identifier}",
+        "status": "REVIEW_PENDING",
+    }
+    notify_review(record)
+    return record
+
+
 def resume_review() -> dict:
     history = json.loads((ROOT / "config" / "topics_history.json").read_text(encoding="utf-8"))
     candidate = next((item for item in reversed(history) if item.get("status") in ("pending_approval", "READY_FOR_APPROVAL") and not item.get("archive_identifier") and item.get("story_path")), None)
@@ -277,7 +293,10 @@ def regenerate(identifier: str) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["produce", "notify-review", "resume-review", "publish", "reject", "regenerate"])
+    parser.add_argument("command", choices=[
+        "produce", "notify-review", "notify-existing-review", "resume-review",
+        "publish", "reject", "regenerate",
+    ])
     parser.add_argument("--identifier")
     args = parser.parse_args()
     if args.command == "produce":
@@ -286,6 +305,10 @@ def main() -> None:
         result = notify_saved_review()
     elif args.command == "resume-review":
         result = resume_review()
+    elif args.command == "notify-existing-review":
+        if not args.identifier:
+            parser.error("--identifier is required")
+        result = notify_existing_review(args.identifier)
     elif args.command == "publish":
         if not args.identifier:
             parser.error("--identifier is required")
