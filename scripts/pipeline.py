@@ -815,6 +815,7 @@ def gemini_tts_one(text: str, out: Path, model: str):
 
 
 TTS_USAGE_PATH = ROOT / "config" / "tts_usage.json"
+TTS_QUOTA_STATE_PATH = ROOT / "config" / "tts_quota_state.json"
 GOOGLE_CLOUD_PREFIX = "google-cloud:"
 
 
@@ -929,10 +930,6 @@ def tts_cloud_engines() -> list[str]:
     return [GOOGLE_CLOUD_PREFIX + v["name"] for v in _google_cloud_voices()]
 
 
-def emergency_after_days() -> int:
-    return int((SETTINGS.get("voice_policy") or {}).get("emergency_fallback_after_days", 2))
-
-
 def quota_day() -> str:
     """Gemini daily quotas reset at midnight Pacific time."""
     try:
@@ -940,6 +937,47 @@ def quota_day() -> str:
         return dt.datetime.now(ZoneInfo("America/Los_Angeles")).date().isoformat()
     except Exception:
         return (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=8)).date().isoformat()
+
+
+def _quota_state() -> dict:
+    if not TTS_QUOTA_STATE_PATH.exists():
+        return {}
+    try:
+        value = json.loads(TTS_QUOTA_STATE_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _save_quota_state(value: dict) -> None:
+    TTS_QUOTA_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = TTS_QUOTA_STATE_PATH.with_suffix(TTS_QUOTA_STATE_PATH.suffix + ".tmp")
+    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(TTS_QUOTA_STATE_PATH)
+
+
+def gemini_quota_exhausted_today() -> bool:
+    policy = SETTINGS.get("voice_policy") or {}
+    if not policy.get("skip_exhausted_gemini_for_quota_day", True):
+        return False
+    return _quota_state().get("gemini_exhausted_quota_day") == quota_day()
+
+
+def mark_gemini_quota_exhausted(reason: str) -> None:
+    state = _quota_state()
+    state.update(
+        gemini_exhausted_quota_day=quota_day(),
+        reason=reason,
+        updated_at=dt.datetime.now(dt.timezone.utc).isoformat(),
+    )
+    _save_quota_state(state)
+
+
+def clear_expired_gemini_quota_state() -> None:
+    state = _quota_state()
+    exhausted_day = state.get("gemini_exhausted_quota_day")
+    if exhausted_day and exhausted_day != quota_day():
+        _save_quota_state({})
 
 
 async def tts_one(text: str, out: Path, engine: str = ""):
@@ -1147,18 +1185,16 @@ async def synthesize(story: Path):
     chunk_models = {name: value for name, value in old_models.items() if name in valid_names}
     # Permanent voice rules (see voice_policy in settings):
     # - Gemini TTS models share one narrator voice and may alternate per chunk.
-    # - When every Gemini model is out of quota the episode keeps its chunks and
-    #   waits for the next quota day with the same narrator.
-    # - Google Cloud voices are an emergency fallback after N consecutive quota
-    #   days without any Gemini progress; switching discards all Gemini chunks so
-    #   one episode never mixes narrators.
+    # - When every Gemini model is out of quota, Google Cloud takes over
+    #   immediately and regenerates the full narration with one voice.
+    # - The exhausted Gemini quota day is shared across episodes, so later stories
+    #   do not waste requests retrying Gemini before its next quota reset.
+    # - Switching discards all Gemini chunks so one episode never mixes narrators.
     state_path = story / "logs" / "tts_voice_state.json"
     state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
     voice = state.get("voice", GEMINI_VOICE) if provider == "gemini" else ""
     if voice != GEMINI_VOICE and voice not in tts_cloud_engines():
         voice = GEMINI_VOICE if provider == "gemini" else ""
-    produced_this_run = 0
-
     def save_state() -> None:
         if provider == "gemini":
             state["voice"] = voice
@@ -1171,6 +1207,23 @@ async def synthesize(story: Path):
         old_hashes, old_models, new_hashes, chunk_models = {}, {}, {}, {}
         hash_path.unlink(missing_ok=True)
         model_path.unlink(missing_ok=True)
+
+    if provider == "gemini" and voice == GEMINI_VOICE:
+        clear_expired_gemini_quota_state()
+        if gemini_quota_exhausted_today():
+            cloud_engines = tts_cloud_engines()
+            if not cloud_engines:
+                raise RuntimeError(
+                    "TTS_WAITING_FOR_QUOTA: Gemini quota is exhausted for this quota day and no "
+                    "Google Cloud fallback is available"
+                )
+            print(
+                f"Gemini quota is already exhausted for {quota_day()}; starting this episode with "
+                f"{cloud_engines[0]}",
+                flush=True,
+            )
+            voice = cloud_engines[0]
+            reset_chunks()
 
     while True:
         save_state()
@@ -1235,7 +1288,6 @@ async def synthesize(story: Path):
                     actual_model = await tts_one(text, out, voice)
                 chunk_models[src.name] = actual_model or provider_model
                 if out.stat().st_size <= 1024: raise RuntimeError(f"empty audio chunk: {out}")
-                produced_this_run += 1
                 # Persist progress after every successful chunk so an interrupted run
                 # resumes from the next missing/stale chunk instead of starting over.
                 hash_path.write_text(json.dumps(new_hashes, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
@@ -1245,16 +1297,13 @@ async def synthesize(story: Path):
             if provider != "gemini":
                 raise
             if voice == GEMINI_VOICE:
-                today = quota_day()
-                waiting = [] if produced_this_run else list(state.get("days_without_gemini_quota", []))
-                if not produced_this_run and today not in waiting:
-                    waiting.append(today)
-                state["days_without_gemini_quota"] = waiting
+                mark_gemini_quota_exhausted(str(exc))
                 cloud_engines = tts_cloud_engines()
-                if len(waiting) >= emergency_after_days() and cloud_engines:
+                policy = SETTINGS.get("voice_policy") or {}
+                if policy.get("immediate_cloud_fallback", True) and cloud_engines:
                     print(
-                        f"No Gemini quota for {len(waiting)} consecutive days; emergency switch to "
-                        f"{cloud_engines[0]} and regenerating the whole narration",
+                        f"Gemini quota exhausted; switching immediately to {cloud_engines[0]} "
+                        "and regenerating the whole narration",
                         flush=True,
                     )
                     voice = cloud_engines[0]
@@ -1263,7 +1312,7 @@ async def synthesize(story: Path):
                 save_state()
                 raise RuntimeError(
                     f"TTS_WAITING_FOR_QUOTA: Gemini narrator quota is used up; {len(chunk_models)} of "
-                    f"{len(text_sources)} chunks are saved and the same narrator continues after the next quota reset"
+                    f"{len(text_sources)} chunks are saved and no immediate cloud fallback is available"
                 ) from exc
             cloud_engines = tts_cloud_engines()
             following = cloud_engines[cloud_engines.index(voice) + 1:] if voice in cloud_engines else []

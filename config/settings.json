@@ -65,8 +65,8 @@
   },
   "voice_policy": {
     "gemini_models_share_one_narrator": true,
-    "wait_for_gemini_quota": true,
-    "emergency_fallback_after_days": 2,
+    "immediate_cloud_fallback": true,
+    "skip_exhausted_gemini_for_quota_day": true,
     "never_mix_gemini_and_cloud": true
   },
   "approved_tts_models": [

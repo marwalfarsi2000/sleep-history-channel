@@ -258,15 +258,15 @@ class TtsGuardTests(unittest.TestCase):
         self.assertTrue(all(len(piece.encode("utf-8")) <= 4500 for piece in pieces))
         self.assertEqual(" ".join(pieces).split(), text.split())
 
-    def test_emergency_cloud_voices_order_and_policy_defaults(self):
+    def test_cloud_voices_order_and_immediate_fallback_policy(self):
         with mock.patch.dict(pipeline.SECRETS, {"GOOGLE_CLOUD_TTS_API_KEY": "test"}, clear=False):
             engines = pipeline.tts_cloud_engines()
         self.assertEqual(engines, ["google-cloud:ar-XA-Wavenet-B", "google-cloud:ar-XA-Standard-B"])
         policy = pipeline.SETTINGS["voice_policy"]
         self.assertTrue(policy["gemini_models_share_one_narrator"])
-        self.assertTrue(policy["wait_for_gemini_quota"])
+        self.assertTrue(policy["immediate_cloud_fallback"])
+        self.assertTrue(policy["skip_exhausted_gemini_for_quota_day"])
         self.assertTrue(policy["never_mix_gemini_and_cloud"])
-        self.assertEqual(policy["emergency_fallback_after_days"], 2)
 
     def test_gemini_uses_larger_free_quota_chunks(self):
         sentence = "هٰذِهِ جُمْلَةٌ تاريخيةٌ هادئةٌ ومُشَكَّلَةٌ بعناية."
