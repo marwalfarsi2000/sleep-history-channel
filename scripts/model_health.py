@@ -116,6 +116,7 @@ def main() -> int:
         lines.extend(cloud_tts_report(cloud_key))
     else:
         lines.append("Cloud TTS: GOOGLE_CLOUD_TTS_API_KEY not configured; last-resort voice stage is disabled")
+    lines.extend(search_report())
     report = "\n".join(lines)
     print(report)
     token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
