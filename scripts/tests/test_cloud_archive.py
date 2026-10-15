@@ -6,6 +6,7 @@ import sys
 import tempfile
 import types
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -51,6 +52,33 @@ class ArchiveStorageTests(unittest.TestCase):
                  mock.patch.object(archive_storage.urllib.request, "urlopen", return_value=response):
                 verified = archive_storage.verify_upload("episode-id", video)
             self.assertEqual(verified["size"], 5)
+
+    def test_verification_retries_transient_archive_404(self):
+        missing = urllib.error.HTTPError(
+            "https://archive.org/download/episode-id/14_video_final.mp4",
+            404,
+            "Not Found",
+            {},
+            None,
+        )
+        ready = {"files": [{"name": "14_video_final.mp4", "size": "5", "sha256": "abc"}]}
+        with mock.patch.object(
+            archive_storage,
+            "archive_metadata",
+            side_effect=[{"files": []}, ready],
+        ), mock.patch.object(
+            archive_storage.urllib.request,
+            "urlopen",
+            side_effect=missing,
+        ), mock.patch.object(archive_storage.time, "sleep") as sleep:
+            verified = archive_storage.wait_for_remote_file(
+                "episode-id",
+                "14_video_final.mp4",
+                attempts=2,
+                delay_seconds=1,
+            )
+        self.assertEqual(verified["size"], "5")
+        sleep.assert_called_once_with(1)
 
 
 if __name__ == "__main__":

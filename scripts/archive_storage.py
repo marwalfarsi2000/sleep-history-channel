@@ -6,6 +6,8 @@ import json
 import os
 import re
 import sys
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -97,15 +99,53 @@ def archive_metadata(identifier: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def wait_for_remote_file(
+    identifier: str,
+    filename: str,
+    *,
+    attempts: int = 40,
+    delay_seconds: int = 30,
+) -> dict:
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            payload = archive_metadata(identifier)
+            files = {entry.get("name"): entry for entry in payload.get("files") or []}
+            remote = files.get(filename)
+            if remote and int(remote.get("size") or 0) > 0:
+                return remote
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                raise
+            last_error = exc
+
+        try:
+            request = urllib.request.Request(public_file_url(identifier, filename), method="HEAD")
+            with urllib.request.urlopen(request, timeout=60) as response:
+                remote_size = int(response.headers.get("Content-Length") or 0)
+            if remote_size > 0:
+                return {"size": remote_size}
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                raise
+            last_error = exc
+
+        if attempt < attempts:
+            print(
+                f"Internet Archive is still processing {filename}; "
+                f"verification retry {attempt}/{attempts - 1} in {delay_seconds}s",
+                flush=True,
+            )
+            time.sleep(delay_seconds)
+
+    detail = f": {last_error}" if last_error else ""
+    raise RuntimeError(
+        f"Internet Archive file is still processing after {attempts} checks{detail}"
+    )
+
+
 def verify_upload(identifier: str, video: Path) -> dict:
-    payload = archive_metadata(identifier)
-    files = {entry.get("name"): entry for entry in payload.get("files") or []}
-    remote = files.get(video.name)
-    if not remote:
-        request = urllib.request.Request(public_file_url(identifier, video.name), method="HEAD")
-        with urllib.request.urlopen(request, timeout=60) as response:
-            remote_size = int(response.headers.get("Content-Length") or 0)
-        remote = {"size": remote_size}
+    remote = wait_for_remote_file(identifier, video.name)
     if int(remote.get("size") or 0) != video.stat().st_size:
         raise RuntimeError("Internet Archive video size differs from the local file")
     expected = sha256(video)
@@ -116,20 +156,11 @@ def verify_upload(identifier: str, video: Path) -> dict:
 
 
 def verify_existing_upload(identifier: str, filename: str) -> dict:
-    payload = archive_metadata(identifier)
-    files = {entry.get("name"): entry for entry in payload.get("files") or []}
-    remote = files.get(filename)
-    if remote:
-        return {
-            "size": int(remote.get("size") or 0),
-            "sha256": str(remote.get("sha256") or "").lower(),
-        }
-    request = urllib.request.Request(public_file_url(identifier, filename), method="HEAD")
-    with urllib.request.urlopen(request, timeout=60) as response:
-        size = int(response.headers.get("Content-Length") or 0)
-    if size <= 0:
-        raise RuntimeError("Internet Archive uploaded video is unavailable")
-    return {"size": size, "sha256": ""}
+    remote = wait_for_remote_file(identifier, filename)
+    return {
+        "size": int(remote.get("size") or 0),
+        "sha256": str(remote.get("sha256") or "").lower(),
+    }
 
 
 def update_index(record: dict) -> None:
