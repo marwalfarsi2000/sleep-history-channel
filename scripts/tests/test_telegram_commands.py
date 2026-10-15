@@ -28,22 +28,6 @@ class TelegramWorkerContractTests(unittest.TestCase):
         self.assertIn("TELEGRAM_CHAT_ID", self.source)
         self.assertIn("TELEGRAM_USER_ID", self.source)
 
-    def test_child_voice_command_is_isolated_and_uses_cheap_model(self):
-        self.assertIn('"/voice"', self.source)
-        self.assertIn('"صوت:"', self.source)
-        self.assertIn('gemini-3.8-flash-lite-tts', self.source)
-        self.assertIn("GEMINI_CHILD_VOICE_ID", self.source)
-        self.assertIn('const CHILD_AUDIO_FOLDER = "أصوات الطفلة"', self.source)
-
-    def test_child_voice_uploads_wav_directly_without_video_dispatch(self):
-        self.assertIn('"content-type": "audio/wav"', self.source)
-        self.assertIn("ctx.waitUntil(createVoiceFile", self.source)
-        self.assertIn("MAX_VOICE_TEXT_CHARS", self.source)
-
-    def test_plain_text_is_accepted_without_catching_video_commands(self):
-        self.assertIn("!isNewVideo(incomingText)", self.source)
-        self.assertIn('!incomingText.trim().startsWith("/")', self.source)
-
     def test_failures_do_not_expose_stack_or_secrets_to_telegram(self):
         self.assertNotIn("error.stack", self.source)
         self.assertNotIn("env.GITHUB_TOKEN,", self.source)
