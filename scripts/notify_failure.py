@@ -42,10 +42,21 @@ def main() -> None:
     if not token or not chat_id:
         raise RuntimeError("Telegram credentials are unavailable for failure notification")
     run_url = os.environ.get("RUN_URL", "")
-    text = (
+    summary = diagnostic_summary()
+    if "TTS_WAITING_FOR_QUOTA" in summary:
+        # Planned pause, not a fault: the narrator's daily quota is used up.
+        text = (
+            "<b>⏸️ الحلقة بانتظار حصة الراوي</b>\n\n"
+            "انتهت حصة صوت Gemini لليوم. المقاطع المنجزة محفوظة، "
+            "وستكمل الحلقة تلقائيًا في التشغيل القادم بنفس الراوي. لا يلزم أي إجراء.\n"
+            f'<a href="{html.escape(run_url, quote=True)}">فتح سجل التشغيل</a>'
+        )
+    else:
+        text = None
+    text = text or (
         "<b>توقفت أتمتة الفيديو ⚠️</b>\n\n"
         f"المرحلة: <b>{html.escape(failed_stage())}</b>\n"
-        f"السبب المختصر: <code>{html.escape(diagnostic_summary())}</code>\n"
+        f"السبب المختصر: <code>{html.escape(summary)}</code>\n"
         f'<a href="{html.escape(run_url, quote=True)}">فتح سجل التشغيل</a>\n\n'
         "تم حفظ نقطة الاستكمال المتاحة. أرسلي هذه الرسالة إلى Codex لإصلاح السبب دون بدء العمل من الصفر."
     )

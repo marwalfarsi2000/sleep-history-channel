@@ -258,19 +258,27 @@ class TtsGuardTests(unittest.TestCase):
         self.assertTrue(all(len(piece.encode("utf-8")) <= 4500 for piece in pieces))
         self.assertEqual(" ".join(pieces).split(), text.split())
 
-    def test_engine_order_puts_cloud_voices_after_gemini(self):
+    def test_emergency_cloud_voices_order_and_policy_defaults(self):
         with mock.patch.dict(pipeline.SECRETS, {"GOOGLE_CLOUD_TTS_API_KEY": "test"}, clear=False):
-            engines = pipeline.tts_engines()
-        self.assertEqual(engines[:2], ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"])
-        self.assertEqual(engines[2:], ["google-cloud:ar-XA-Wavenet-B", "google-cloud:ar-XA-Standard-B"])
+            engines = pipeline.tts_cloud_engines()
+        self.assertEqual(engines, ["google-cloud:ar-XA-Wavenet-B", "google-cloud:ar-XA-Standard-B"])
+        policy = pipeline.SETTINGS["voice_policy"]
+        self.assertTrue(policy["gemini_models_share_one_narrator"])
+        self.assertTrue(policy["wait_for_gemini_quota"])
+        self.assertTrue(policy["never_mix_gemini_and_cloud"])
+        self.assertEqual(policy["emergency_fallback_after_days"], 2)
 
     def test_gemini_uses_larger_free_quota_chunks(self):
         sentence = "هٰذِهِ جُمْلَةٌ تاريخيةٌ هادئةٌ ومُشَكَّلَةٌ بعناية."
         text = " ".join([sentence] * 220)
         old_chunks = pipeline.split_chunks(text, limit=2600)
         new_chunks = pipeline.split_chunks(text, limit=int(pipeline.SETTINGS["gemini_tts_chunk_char_limit"]))
+        limit = int(pipeline.SETTINGS["gemini_tts_chunk_char_limit"])
         self.assertLess(len(new_chunks), len(old_chunks))
-        self.assertTrue(all(len(chunk) <= 4200 for chunk in new_chunks))
+        self.assertTrue(all(len(chunk) <= limit for chunk in new_chunks))
+        # ~7 minutes of narration per request keeps a margin below the
+        # 16,384 output-token limit (about 8.5 minutes of audio).
+        self.assertLessEqual(limit, 6000)
 
     def test_gemini_voice_identity_must_match_selected_voice(self):
         response = _FakeResponse(json.dumps({

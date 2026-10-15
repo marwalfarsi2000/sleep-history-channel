@@ -63,6 +63,12 @@
     },
     "max_request_bytes": 4500
   },
+  "voice_policy": {
+    "gemini_models_share_one_narrator": true,
+    "wait_for_gemini_quota": true,
+    "emergency_fallback_after_days": 2,
+    "never_mix_gemini_and_cloud": true
+  },
   "approved_tts_models": [
     "gemini-3.8-flash-tts",
     "gemini-3.8-flash-lite-tts",
@@ -73,7 +79,7 @@
   "audio_transcript_qc": true,
   "audio_qc_model": "gemini-3.1-flash-lite",
   "audio_transcript_similarity_min": 0.82,
-  "gemini_tts_chunk_char_limit": 4200,
+  "gemini_tts_chunk_char_limit": 5600,
   "gemini_tts_voice_name": "راوي القصص 1",
   "gemini_tts_style": "Warm, deep adult male Arabic historical narration in clear Modern Standard Arabic. Calm, intimate, gentle, low-energy, and strictly non-theatrical. Use soft rounded articulation, steady volume, natural pronunciation, and short comfortable pauses between sentences. No whispering, excitement, music, ambience, or sound effects.",
   "tts_generation_speed": 1.0,

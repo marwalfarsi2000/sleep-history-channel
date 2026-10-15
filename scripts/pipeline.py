@@ -921,9 +921,25 @@ def google_cloud_tts_one(text: str, out: Path, voice: dict):
             part.unlink(missing_ok=True)
 
 
-def tts_engines() -> list[str]:
-    """Ordered voice engines for one episode; an episode never mixes engines."""
-    return [*_gemini_tts_models(), *(GOOGLE_CLOUD_PREFIX + v["name"] for v in _google_cloud_voices())]
+GEMINI_VOICE = "gemini-narrator"
+
+
+def tts_cloud_engines() -> list[str]:
+    """Emergency Google Cloud voices, in order."""
+    return [GOOGLE_CLOUD_PREFIX + v["name"] for v in _google_cloud_voices()]
+
+
+def emergency_after_days() -> int:
+    return int((SETTINGS.get("voice_policy") or {}).get("emergency_fallback_after_days", 2))
+
+
+def quota_day() -> str:
+    """Gemini daily quotas reset at midnight Pacific time."""
+    try:
+        from zoneinfo import ZoneInfo
+        return dt.datetime.now(ZoneInfo("America/Los_Angeles")).date().isoformat()
+    except Exception:
+        return (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=8)).date().isoformat()
 
 
 async def tts_one(text: str, out: Path, engine: str = ""):
@@ -1129,23 +1145,42 @@ async def synthesize(story: Path):
     valid_names = {src.name for src in text_sources}
     new_hashes = {name: value for name, value in old_hashes.items() if name in valid_names}
     chunk_models = {name: value for name, value in old_models.items() if name in valid_names}
-    # One voice engine per episode. If the locked engine runs out mid-episode,
-    # all chunks are discarded and the whole narration is regenerated with the
-    # next engine, so two voices are never mixed in one episode.
-    lock_path = story / "logs" / "tts_voice_lock.json"
-    engines = tts_engines() if provider == "gemini" else [""]
-    locked = json.loads(lock_path.read_text(encoding="utf-8")).get("engine", "") if lock_path.exists() else ""
-    engine_index = engines.index(locked) if locked in engines else 0
-    while True:
-        engine = engines[engine_index]
+    # Permanent voice rules (see voice_policy in settings):
+    # - Gemini TTS models share one narrator voice and may alternate per chunk.
+    # - When every Gemini model is out of quota the episode keeps its chunks and
+    #   waits for the next quota day with the same narrator.
+    # - Google Cloud voices are an emergency fallback after N consecutive quota
+    #   days without any Gemini progress; switching discards all Gemini chunks so
+    #   one episode never mixes narrators.
+    state_path = story / "logs" / "tts_voice_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+    voice = state.get("voice", GEMINI_VOICE) if provider == "gemini" else ""
+    if voice != GEMINI_VOICE and voice not in tts_cloud_engines():
+        voice = GEMINI_VOICE if provider == "gemini" else ""
+    produced_this_run = 0
+
+    def save_state() -> None:
         if provider == "gemini":
-            lock_path.write_text(json.dumps({"engine": engine}, ensure_ascii=False) + "\n", encoding="utf-8")
+            state["voice"] = voice
+            state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    def reset_chunks() -> None:
+        nonlocal old_hashes, old_models, new_hashes, chunk_models
+        for stale in adir.glob("*.mp3"):
+            stale.unlink()
+        old_hashes, old_models, new_hashes, chunk_models = {}, {}, {}, {}
+        hash_path.unlink(missing_ok=True)
+        model_path.unlink(missing_ok=True)
+
+    while True:
+        save_state()
         try:
-            if engine.startswith(GOOGLE_CLOUD_PREFIX):
-                voice = next(v for v in _google_cloud_voices() if GOOGLE_CLOUD_PREFIX + v["name"] == engine)
+            if voice.startswith(GOOGLE_CLOUD_PREFIX):
+                cloud = next(v for v in _google_cloud_voices() if GOOGLE_CLOUD_PREFIX + v["name"] == voice)
                 needed = sum(len(src.read_text(encoding="utf-8")) for src in text_sources)
-                if needed > google_cloud_remaining(voice["tier"]):
-                    raise TtsEngineExhausted(engine, f"episode needs {needed} characters; monthly cap would be exceeded")
+                if needed > google_cloud_remaining(cloud["tier"]):
+                    raise TtsEngineExhausted(voice, f"episode needs {needed} characters; monthly cap would be exceeded")
+            gemini_models = _gemini_tts_models() if voice == GEMINI_VOICE else []
             for src in text_sources:
                 out = adir / (src.stem + ".mp3")
                 text = src.read_text(encoding="utf-8")
@@ -1158,7 +1193,7 @@ async def synthesize(story: Path):
                 provider_model = (
                     SETTINGS.get("fish_model", "s2.1-pro-free") if provider == "fish"
                     else SETTINGS.get("munsit_model", "faseeh-v1-preview") if provider == "munsit"
-                    else engine if provider == "gemini"
+                    else voice if provider == "gemini"
                     else "edge"
                 )
                 source_hash = hashlib.sha256(
@@ -1175,32 +1210,69 @@ async def synthesize(story: Path):
                     ).encode("utf-8")
                 ).hexdigest()
                 new_hashes[src.name] = source_hash
+                cached_model = old_models.get(src.name, "")
+                allowed_models = set(gemini_models) if voice == GEMINI_VOICE else {provider_model}
                 if (
                     out.exists() and out.stat().st_size > 1024 and old_hashes.get(src.name) == source_hash
-                    and old_models.get(src.name, provider_model) == provider_model
+                    and (cached_model in allowed_models or provider != "gemini")
                 ):
-                    chunk_models[src.name] = old_models.get(src.name, provider_model)
+                    chunk_models[src.name] = cached_model or provider_model
                     hash_path.write_text(json.dumps(new_hashes, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
                     model_path.write_text(json.dumps(chunk_models, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
                     continue
-                actual_model = await tts_one(text, out, engine)
+                if voice == GEMINI_VOICE:
+                    actual_model = ""
+                    for model in list(gemini_models):
+                        try:
+                            actual_model = await tts_one(text, out, model)
+                            break
+                        except TtsEngineExhausted as exc:
+                            print(f"{exc}; continuing this chunk with the next Gemini model (same narrator)", flush=True)
+                            gemini_models.remove(model)
+                    if not actual_model:
+                        raise TtsEngineExhausted(GEMINI_VOICE, "every Gemini TTS model is out of quota")
+                else:
+                    actual_model = await tts_one(text, out, voice)
                 chunk_models[src.name] = actual_model or provider_model
                 if out.stat().st_size <= 1024: raise RuntimeError(f"empty audio chunk: {out}")
+                produced_this_run += 1
                 # Persist progress after every successful chunk so an interrupted run
                 # resumes from the next missing/stale chunk instead of starting over.
                 hash_path.write_text(json.dumps(new_hashes, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
                 model_path.write_text(json.dumps(chunk_models, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
             break
         except TtsEngineExhausted as exc:
-            if engine_index + 1 >= len(engines):
+            if provider != "gemini":
                 raise
-            print(f"{exc}; regenerating the whole narration with {engines[engine_index + 1]}", flush=True)
-            for stale in adir.glob("*.mp3"):
-                stale.unlink()
-            old_hashes, old_models, new_hashes, chunk_models = {}, {}, {}, {}
-            hash_path.unlink(missing_ok=True)
-            model_path.unlink(missing_ok=True)
-            engine_index += 1
+            if voice == GEMINI_VOICE:
+                today = quota_day()
+                waiting = [] if produced_this_run else list(state.get("days_without_gemini_quota", []))
+                if not produced_this_run and today not in waiting:
+                    waiting.append(today)
+                state["days_without_gemini_quota"] = waiting
+                cloud_engines = tts_cloud_engines()
+                if len(waiting) >= emergency_after_days() and cloud_engines:
+                    print(
+                        f"No Gemini quota for {len(waiting)} consecutive days; emergency switch to "
+                        f"{cloud_engines[0]} and regenerating the whole narration",
+                        flush=True,
+                    )
+                    voice = cloud_engines[0]
+                    reset_chunks()
+                    continue
+                save_state()
+                raise RuntimeError(
+                    f"TTS_WAITING_FOR_QUOTA: Gemini narrator quota is used up; {len(chunk_models)} of "
+                    f"{len(text_sources)} chunks are saved and the same narrator continues after the next quota reset"
+                ) from exc
+            cloud_engines = tts_cloud_engines()
+            following = cloud_engines[cloud_engines.index(voice) + 1:] if voice in cloud_engines else []
+            if not following:
+                save_state()
+                raise
+            print(f"{exc}; regenerating the whole narration with {following[0]}", flush=True)
+            voice = following[0]
+            reset_chunks()
     valid_stems = {path.stem for path in tdir.glob("*.txt")}
     for stale_audio in adir.glob("*.mp3"):
         if stale_audio.stem not in valid_stems:
