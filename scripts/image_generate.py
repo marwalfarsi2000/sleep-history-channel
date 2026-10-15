@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import datetime as dt
+import hashlib
 import json
 import os
 import secrets
@@ -122,6 +124,50 @@ def prepare_image(image_bytes: bytes, temporary: Path) -> Image.Image:
     image = ImageEnhance.Sharpness(image).enhance(1.06)
     validate_image(image)
     return image
+
+
+def historical_accuracy_gate(image_path: Path, prompt: str, secrets_values: dict[str, str]) -> dict:
+    api_key = secrets_values.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("IMAGE_ACCURACY_GATE_FAILED: GEMINI_API_KEY is missing")
+    model = str(SETTINGS.get("image_accuracy_gate_model", SETTINGS.get("llm_model", "gemini-3.1-flash-lite")))
+    if SETTINGS.get("cost_policy") != "free_or_preapproved_only" or model not in set(SETTINGS.get("approved_llm_models") or []):
+        raise RuntimeError(f"BLOCKED_COST: unapproved image accuracy model {model}")
+    payload = {
+        "contents": [{"role": "user", "parts": [
+            {"text": (
+                "Act as a strict historical-image quality gate. Compare the image with the requested "
+                "historical scene. Reject visible modern objects, wrong-period architecture/clothing/tools, "
+                "fantasy elements, text, logos, watermarks, black bars, severe anatomy defects, or a scene "
+                "that clearly contradicts the prompt. Return JSON only: "
+                "{\"status\":\"PASS or FAIL\",\"historically_plausible\":true,"
+                "\"no_modern_objects\":true,\"no_text_or_watermark\":true,"
+                "\"topic_match\":true,\"issues\":[]}.\nPrompt: " + prompt
+            )},
+            {"inline_data": {"mime_type": "image/png", "data": base64.b64encode(image_path.read_bytes()).decode("ascii")}},
+        ]}],
+        "generationConfig": {"temperature": 0, "maxOutputTokens": 1200, "responseMimeType": "application/json"},
+    }
+    request = urllib.request.Request(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        text = "".join(
+            part.get("text", "")
+            for part in result.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+        )
+        gate = json.loads(text)
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, KeyError, IndexError) as exc:
+        raise RuntimeError(f"IMAGE_ACCURACY_GATE_FAILED: {type(exc).__name__}") from exc
+    required = ("historically_plausible", "no_modern_objects", "no_text_or_watermark", "topic_match")
+    if gate.get("status") != "PASS" or not all(gate.get(key) is True for key in required):
+        raise RuntimeError("IMAGE_ACCURACY_GATE_FAILED: " + json.dumps(gate, ensure_ascii=False))
+    return gate
 
 
 def image_provider_label() -> str:
@@ -426,6 +472,7 @@ def generate(story: Path, seed: int | None = None) -> None:
         image.resize((1280, 720), Image.Resampling.LANCZOS).save(
             thumbnail, format="JPEG", quality=94, optimize=True
         )
+        accuracy = historical_accuracy_gate(background, original_prompt, secret_values)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -438,6 +485,24 @@ def generate(story: Path, seed: int | None = None) -> None:
         "- ملاحظة تاريخية: إعادة بناء بصرية مولدة آليًا وليست مرجعًا أثريًا حرفيًا.\n",
         encoding="utf-8",
     )
+    metadata_path = story / "15_metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.update({
+        "image_provider": actual_provider,
+        "image_model": actual_model,
+        "image_generation_method": "ai_generated_historical_reconstruction",
+        "image_generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "image_path": str(background),
+        "thumbnail_path": str(thumbnail),
+        "image_generation_status": "passed",
+        "image_accuracy_status": "passed",
+        "image_accuracy_gate": accuracy,
+        "image_prompt_sha256": hashlib.sha256(original_prompt.encode("utf-8")).hexdigest(),
+        "image_sha256": hashlib.sha256(background.read_bytes()).hexdigest(),
+    })
+    temporary_metadata = metadata_path.with_name(metadata_path.name + ".tmp")
+    temporary_metadata.write_text(json.dumps(metadata, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+    temporary_metadata.replace(metadata_path)
     print(json.dumps({"status": "ok", "provider": actual_provider, "model": actual_model, "seed": seed}))
 
 

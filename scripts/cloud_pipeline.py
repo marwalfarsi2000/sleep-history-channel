@@ -7,6 +7,7 @@ import subprocess
 import sys
 import urllib.parse
 import urllib.request
+import datetime as dt
 from pathlib import Path
 
 from archive_storage import (
@@ -20,6 +21,12 @@ from archive_storage import (
 
 ROOT = Path(__file__).resolve().parents[1]
 SETTINGS = json.loads((ROOT / "config" / "settings.json").read_text(encoding="utf-8"))
+
+
+def atomic_json(path: Path, value: object) -> None:
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
 
 
 def run(command: list[str], log_name: str) -> str:
@@ -103,6 +110,12 @@ def send_message(text: str, keyboard: dict | None = None) -> None:
 
 def notify_review(record: dict) -> None:
     minutes = round(float(record.get("video_duration_seconds") or 0) / 60, 1)
+    review_url = record.get("review_url") or record.get("video_url") or record.get("item_url")
+    storage_note = (
+        "لن تُرفع إلى Internet Archive أو YouTube دون اعتمادك."
+        if record.get("review_url")
+        else "هذه حلقة قديمة مؤرشفة؛ لن تُنشر على YouTube دون اعتمادك."
+    )
     keyboard = {"inline_keyboard": [
         [{"text": "🚀 اعتماد ونشر", "callback_data": f"publish:{record['identifier']}"}],
         [
@@ -114,9 +127,8 @@ def notify_review(record: dict) -> None:
         "<b>حلقة جديدة جاهزة للمراجعة</b>\n\n"
         f"{record['title']}\n"
         f"المدة: {minutes} دقيقة\n"
-        f"<a href=\"{record['video_url']}\">▶️ مشاهدة ملف الفيديو الكامل</a>\n"
-        f"<a href=\"{record['item_url']}\">📚 صفحة الحلقة في Internet Archive</a>\n\n"
-        "لن تُنشر على YouTube دون اعتمادك.",
+        f"<a href=\"{review_url}\">▶️ فتح نسخة المراجعة</a>\n\n"
+        + storage_note,
         keyboard,
     )
 
@@ -148,9 +160,49 @@ def produce() -> dict:
         raise RuntimeError("Daily generator did not return a story path")
     story = Path(generated["story_path"]).resolve()
     run([sys.executable, str(ROOT / "scripts" / "pipeline.py"), "all", str(story)], "cloud-pipeline.log")
-    record = upload_story(story)
+    metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
+    if metadata.get("approval_status") != "READY_FOR_APPROVAL":
+        raise RuntimeError("Production did not reach READY_FOR_APPROVAL")
+    review_id = os.environ.get("GITHUB_RUN_ID", "local")
+    record = {
+        "identifier": review_id,
+        "story_path": story.relative_to(ROOT).as_posix(),
+        "title": metadata["title"],
+        "video_duration_seconds": metadata.get("video_duration_seconds", 0),
+        "review_url": os.environ.get("RUN_URL", ""),
+        "status": "READY_FOR_APPROVAL",
+    }
+    runtime = ROOT / ".runtime"
+    runtime.mkdir(exist_ok=True)
+    atomic_json(runtime / "review_record.json", record)
+    history_path = ROOT / "config" / "topics_history.json"
+    history = json.loads(history_path.read_text(encoding="utf-8"))
+    for item in history:
+        if item.get("slug") == metadata.get("slug"):
+            item["status"] = "READY_FOR_APPROVAL"
+            item["review_run_id"] = review_id
+    atomic_json(history_path, history)
+    return record
+
+
+def notify_saved_review() -> dict:
+    record_path = ROOT / ".runtime" / "review_record.json"
+    if not record_path.exists():
+        raise RuntimeError("Review record is missing")
+    record = json.loads(record_path.read_text(encoding="utf-8"))
     notify_review(record)
     return record
+
+
+def restored_review_story() -> Path:
+    candidates = []
+    for metadata_path in ROOT.glob("stories/*/15_metadata.json"):
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata.get("approval_status") == "READY_FOR_APPROVAL":
+            candidates.append((metadata_path.stat().st_mtime, metadata_path.parent))
+    if not candidates:
+        raise RuntimeError("No restored READY_FOR_APPROVAL story was found")
+    return max(candidates)[1]
 
 
 def download_file(identifier: str, filename: str, destination: Path) -> None:
@@ -164,47 +216,58 @@ def download_file(identifier: str, filename: str, destination: Path) -> None:
 
 def publish(identifier: str) -> dict:
     from youtube_publish import publish_archive_item
-
-    result = publish_archive_item(identifier)
-    set_index_status(identifier, "published", youtube_video_id=result["video_id"], youtube_url=result["url"])
+    story = restored_review_story()
+    metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
+    if metadata.get("approval_status") != "READY_FOR_APPROVAL":
+        raise RuntimeError("HUMAN_APPROVAL_GATE_FAILED: story is not ready for approval")
+    metadata["approval_status"] = "APPROVED_FOR_PUBLISH"
+    metadata["approved_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    atomic_json(story / "15_metadata.json", metadata)
+    archive_record = upload_story(story)
+    archive_identifier = archive_record["identifier"]
+    result = publish_archive_item(archive_identifier)
+    set_index_status(archive_identifier, "COMPLETED", youtube_video_id=result["video_id"], youtube_url=result["url"])
     access = os.environ["IAS3_ACCESS_KEY"]
     secret = os.environ["IAS3_SECRET_KEY"]
     from internetarchive import get_item
-    get_item(identifier, access_key=access, secret_key=secret).modify_metadata({
-        "approval_status": "published",
+    get_item(archive_identifier, access_key=access, secret_key=secret).modify_metadata({
+        "approval_status": "COMPLETED",
+        "output_verification_status": "passed",
         "youtube_video_id": result["video_id"],
         "youtube_url": result["url"],
     })
     send_message(
         "<b>تم اعتماد الحلقة ونشرها ✅</b>\n"
         f"<a href=\"{result['url']}\">▶️ مشاهدة الفيديو على YouTube</a>\n"
-        f"<a href=\"https://archive.org/details/{identifier}\">📚 النسخة الكاملة المؤرشفة</a>"
+        f"<a href=\"https://archive.org/details/{archive_identifier}\">📚 النسخة الكاملة المؤرشفة</a>"
     )
     return result
 
 
 def reject(identifier: str) -> dict:
-    delete_rejected(identifier)
-    set_index_status(identifier, "rejected_deleted")
-    send_message(f"تم رفض الحلقة وحذف ملفاتها من Internet Archive.\n<code>{identifier}</code>")
-    return {"identifier": identifier, "status": "rejected_deleted"}
+    story = restored_review_story()
+    metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
+    history_path = ROOT / "config" / "topics_history.json"
+    history = json.loads(history_path.read_text(encoding="utf-8"))
+    for item in history:
+        if item.get("slug") == metadata.get("slug"):
+            item["status"] = "rejected"
+    atomic_json(history_path, history)
+    send_message(f"تم رفض الحلقة. لم تُرفع إلى Internet Archive أو YouTube.\n<code>{identifier}</code>")
+    return {"identifier": identifier, "status": "rejected"}
 
 
 def regenerate(identifier: str) -> dict:
     ensure_background_audio()
-    story = ROOT / "stories" / identifier
-    story.mkdir(parents=True, exist_ok=True)
-    (story / "logs").mkdir(exist_ok=True)
-    for filename in (
-        "01_title.txt", "02_description.txt", "03_sources.md", "04_research_notes.md",
-        "05_story_clean.md", "06_story_tts_annotated.md", "07_story_tts_api.md",
-        "08_image_prompt_en.txt", "15_metadata.json", "16_fact_check.md",
-    ):
-        download_file(identifier, filename, story / filename)
+    story = restored_review_story()
     (story / "09_image_source.md").write_text("# مصدر الصورة\n\nستُعاد توليد الصورة آليًا.\n", encoding="utf-8")
     (story / "17_status.md").write_text("# الحالة\n\n- الحالة الحالية: `regenerating`\n", encoding="utf-8")
     run([sys.executable, str(ROOT / "scripts" / "pipeline.py"), "all", str(story)], "cloud-regenerate.log")
-    record = upload_story(story)
+    metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
+    review_id = os.environ.get("GITHUB_RUN_ID", "local")
+    record = {"identifier": review_id, "story_path": story.relative_to(ROOT).as_posix(), "title": metadata["title"], "video_duration_seconds": metadata.get("video_duration_seconds", 0), "review_url": os.environ.get("RUN_URL", ""), "status": "READY_FOR_APPROVAL"}
+    runtime = ROOT / ".runtime"; runtime.mkdir(exist_ok=True)
+    atomic_json(runtime / "review_record.json", record)
     minutes = round(float(record.get("video_duration_seconds") or 0) / 60, 1)
     keyboard = {"inline_keyboard": [
         [{"text": "🚀 اعتماد ونشر", "callback_data": f"publish:{record['identifier']}"}],
@@ -213,22 +276,18 @@ def regenerate(identifier: str) -> dict:
             {"text": "❌ رفض", "callback_data": f"reject:{record['identifier']}"},
         ],
     ]}
-    send_message(
-        "<b>اكتملت إعادة التوليد ✅</b>\n\n"
-        f"{record['title']}\nالمدة: {minutes} دقيقة\n"
-        f"<a href=\"{record['video_url']}\">▶️ مشاهدة النسخة الجديدة</a>",
-        keyboard,
-    )
     return record
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["produce", "resume-review", "publish", "reject", "regenerate"])
+    parser.add_argument("command", choices=["produce", "notify-review", "resume-review", "publish", "reject", "regenerate"])
     parser.add_argument("--identifier")
     args = parser.parse_args()
     if args.command == "produce":
         result = produce()
+    elif args.command == "notify-review":
+        result = notify_saved_review()
     elif args.command == "resume-review":
         result = resume_review()
     elif args.command == "publish":

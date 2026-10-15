@@ -27,7 +27,8 @@ def latest_unfinished_story(root: Path = ROOT) -> str | None:
             status == "pending_approval"
             and not item.get("archive_identifier")
         )
-        if (status in {"generating", "drafting"} or upload_incomplete) and item.get("story_path"):
+        review_incomplete = status == "READY_FOR_APPROVAL" and not item.get("review_run_id")
+        if (status in {"generating", "drafting"} or upload_incomplete or review_incomplete) and item.get("story_path"):
             return PurePosixPath(str(item["story_path"]).replace("\\", "/")).as_posix()
     return None
 
@@ -90,6 +91,10 @@ def safe_story_members(archive: zipfile.ZipFile, story_path: str) -> list[zipfil
         "07_story_tts_api.md",
         "15_metadata.json",
         "17_status.md",
+        "01_title.txt", "02_description.txt", "03_sources.md", "04_research_notes.md",
+        "08_image_prompt_en.txt", "09_image_source.md", "10_background.png",
+        "11_thumbnail_base.jpg", "12_audio_narration.mp3", "12_audio_full.mp3",
+        "13_audio_review.opus", "14_video_final.mp4", "16_fact_check.md", "00_package.html",
     }
     allowed_directories = {"logs", "tts_chunks", "audio_chunks"}
     members: list[zipfile.ZipInfo] = []

@@ -7,8 +7,8 @@ import zipfile
 from pathlib import Path
 from unittest import mock
 
-from scripts import restore_failure_checkpoint
-from scripts.restore_failure_checkpoint import latest_unfinished_story, safe_story_members
+import restore_failure_checkpoint
+from restore_failure_checkpoint import latest_unfinished_story, safe_story_members
 
 
 class RestoreFailureCheckpointTests(unittest.TestCase):
@@ -64,6 +64,7 @@ class RestoreFailureCheckpointTests(unittest.TestCase):
             "stories/current/tts_chunks/001.txt",
             "stories/current/audio_chunks/001.mp3",
             "stories/current/06_story_tts_annotated.md",
+            "stories/current/14_video_final.mp4",
         ])
 
     def test_artifact_redirect_does_not_forward_github_token(self):

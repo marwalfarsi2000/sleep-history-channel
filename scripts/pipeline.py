@@ -7,7 +7,7 @@ import difflib
 from pathlib import Path
 from PIL import Image
 import edge_tts
-from generate_daily import gemini
+from generate_daily import gemini, parse_json
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -72,6 +72,14 @@ def ffprobe() -> str:
 def duration(path: Path) -> float:
     p = subprocess.run([ffprobe(), "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(path)], capture_output=True, text=True, check=True)
     return float(p.stdout.strip())
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
 
 def arabic_words(text: str) -> int:
     return len(re.findall(r"[\u0600-\u06FF]+", text))
@@ -299,7 +307,7 @@ def diacritize_and_annotate(clean_story: str, cache_dir: Path | None = None, lim
             candidate = normalize_arabic_diacritics(restore_source_lexemes(block, candidate))
         cached_ok, _ = lexical_fidelity(block, candidate) if candidate else (False, [])
         if cached_ok and not diacritization_quality_errors(candidate) and not DIRECTION_RE.findall(candidate):
-            outputs.append(f"{direction_tag(block, index)}\n{candidate}")
+            outputs.append(candidate)
             continue
         prompt = f"""أنت مدقق لغوي عربي متخصص في النصوص المهيأة للتحويل إلى صوت عربي فصيح.
 
@@ -379,7 +387,7 @@ def diacritize_and_annotate(clean_story: str, cache_dir: Path | None = None, lim
             candidate = reviewed
             if cache_path:
                 cache_path.write_text(candidate + "\n", encoding="utf-8")
-            outputs.append(f"{direction_tag(block, index)}\n{candidate}")
+            outputs.append(candidate)
             break
         else:
             smaller = split_diacritization_blocks(block, limit=max(320, len(block) // 2))
@@ -395,11 +403,8 @@ def diacritize_and_annotate(clean_story: str, cache_dir: Path | None = None, lim
     return annotated
 
 def api_text(text: str) -> str:
-    # Keep expressive cues in the human review copy, but never send unverified
-    # bracket tags to Fish: some voices pronounce them literally.
+    # Never send bracketed production cues to the speech provider.
     text = without_direction_tags(text)
-    # English glosses inside Arabic narration commonly get pronounced abruptly.
-    text = re.sub(r"\s*\([A-Za-z][^()]{0,120}\)", "", text)
     # Fish can pronounce a fully inflected final taa marbuta as /t/ at a stop
     # (for example عَمِيقَةً -> "عميقت").  In Arabic pausal reading the final
     # short case ending/tanween is dropped, so keep the internal diacritics but
@@ -416,12 +421,53 @@ def api_text(text: str) -> str:
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
+
+def pronunciation_validate(clean_story: str, annotated: str, story: Path) -> str:
+    prompt = f"""أنت بوابة نطق مستقلة لنص تاريخي عربي سيحوّل إلى صوت.
+راجع فقط أسماء الأشخاص والمدن والمواقع والسلالات والحضارات والكلمات الأجنبية المعربة.
+لا تغير الحقائق أو الكلمات. إذا كان التشكيل الحالي يسبب نطقًا خاطئًا، اقترح استبدالًا مشكولًا لنفس الحروف.
+أعد JSON فقط:
+{{"status":"PASS أو FAIL","replacements":[{{"current":"النص المشكول المطابق حرفيًا","replacement":"نفس الحروف بتشكيل أصح","reason":"..."}}],"unresolved":[]}}
+
+النص المشكول:
+{annotated[:100000]}
+"""
+    result_text, _ = gemini(prompt, json_mode=True, max_tokens=5000, temperature=0.0)
+    result = parse_json(result_text)
+    if result.get("status") not in {"PASS", "FAIL"}:
+        raise RuntimeError("PRONUNCIATION_VALIDATION_FAILED: invalid response status")
+    revised = annotated
+    applied = []
+    for item in result.get("replacements") or []:
+        current = str(item.get("current", ""))
+        replacement = str(item.get("replacement", ""))
+        if not current or not replacement or current not in revised:
+            raise RuntimeError("PRONUNCIATION_VALIDATION_FAILED: proposed source text was not found")
+        revised = revised.replace(current, replacement)
+        applied.append(item)
+    faithful, _ = lexical_fidelity(clean_story, revised)
+    if not faithful:
+        raise RuntimeError("PRONUNCIATION_VALIDATION_FAILED: pronunciation changes altered letters")
+    unresolved = result.get("unresolved") or []
+    if result.get("status") != "PASS" or unresolved:
+        raise RuntimeError("PRONUNCIATION_VALIDATION_FAILED: " + json.dumps(result, ensure_ascii=False))
+    result["applied"] = applied
+    result["status"] = "PASS"
+    (story / "logs" / "pronunciation_validation.json").write_text(
+        json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return revised
+
 def split_chunks(text: str, limit: int = 2600) -> list[str]:
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip() and not p.lstrip().startswith("#")]
     out, current = [], ""
     for paragraph in paragraphs:
         sentences = [s.strip() for s in re.split(r"(?<=[.!؟؛])\s+", paragraph) if s.strip()]
         for sentence in sentences:
+            if len(sentence) > limit:
+                raise RuntimeError(
+                    f"TTS_CHUNKING_FAILED: sentence exceeds {limit} characters; refusing to split it"
+                )
             separator = "\n\n" if current else ""
             if current and len(current) + len(sentence) + len(separator) > limit:
                 out.append(current.strip()); current = ""
@@ -630,7 +676,14 @@ def _gemini_tts_models() -> list[str]:
     if not isinstance(configured, list):
         raise RuntimeError("gemini_tts_fallback_models must be a JSON list")
     models = [primary, *(str(model).strip() for model in configured)]
-    return list(dict.fromkeys(model for model in models if model))
+    models = list(dict.fromkeys(model for model in models if model))
+    if SETTINGS.get("cost_policy") != "free_or_preapproved_only":
+        raise RuntimeError("BLOCKED_COST: unsupported TTS cost policy")
+    approved = set(SETTINGS.get("approved_tts_models") or [])
+    unapproved = [model for model in models if model not in approved]
+    if unapproved:
+        raise RuntimeError(f"BLOCKED_COST: unapproved TTS models: {unapproved}")
+    return models
 
 
 def gemini_tts_one(text: str, out: Path):
@@ -646,6 +699,7 @@ def gemini_tts_one(text: str, out: Path):
     wav_path = out.with_suffix(".gemini.wav")
     try:
         result = None
+        selected_model = ""
         exhausted_models = []
         models = _gemini_tts_models()
         for model_index, model in enumerate(models):
@@ -679,6 +733,7 @@ def gemini_tts_one(text: str, out: Path):
                 try:
                     with urllib.request.urlopen(request, timeout=240) as response:
                         result = json.loads(response.read().decode("utf-8"))
+                    selected_model = model
                     break
                 except urllib.error.HTTPError as exc:
                     body = exc.read().decode("utf-8", errors="replace")
@@ -737,6 +792,7 @@ def gemini_tts_one(text: str, out: Path):
             raise RuntimeError("Gemini TTS returned invalid or empty WAV audio")
         wav_path.write_bytes(audio)
         run([ffmpeg(), "-y", "-i", str(wav_path), "-c:a", "libmp3lame", "-b:a", "160k", str(out)])
+        return selected_model
     finally:
         wav_path.unlink(missing_ok=True)
 
@@ -751,8 +807,7 @@ async def tts_one(text: str, out: Path):
                     "munsit": munsit_tts_one,
                     "gemini": gemini_tts_one,
                 }[provider]
-                await asyncio.to_thread(worker, text, out)
-                return
+                return await asyncio.to_thread(worker, text, out)
             except RuntimeError as exc:
                 if "BLOCKED_COST" in str(exc):
                     raise
@@ -765,6 +820,7 @@ async def tts_one(text: str, out: Path):
                     await asyncio.sleep(2 ** attempt)
         raise RuntimeError(f"{provider} transient request failed after 3 attempts: {type(last_error).__name__}") from last_error
     await edge_tts_one(text, out)
+    return "edge"
 
 def voice_metadata() -> dict:
     provider = SETTINGS.get("tts_provider", "edge").lower()
@@ -836,6 +892,16 @@ def mix_background_audio(narration: Path, output: Path) -> None:
     ])
 
 def prepare(story: Path):
+    metadata_path = story / "15_metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    required_gates = (
+        "topic_gate_status", "grounded_research_status", "source_validation_status",
+        "language_gate_status", "religion_gate_status", "sleep_gate_status",
+        "fact_check_status", "second_fact_check_status",
+    )
+    failed = [name for name in required_gates if metadata.get(name) != "passed"]
+    if failed or metadata.get("fact_corrections_applied") is not True:
+        raise RuntimeError(f"TTS_HARD_GATE_FAILED: missing passes: {failed}")
     clean_path=story/"05_story_clean.md"
     clean_story=clean_path.read_text(encoding="utf-8").strip()
     extension=story/"draft_extension.md"
@@ -854,26 +920,43 @@ def prepare(story: Path):
     reusable = (
         prepare_manifest.get("source_sha256") == source_hash
         and prepare_manifest.get("version") == DIACRITIZATION_VERSION
+        and prepare_manifest.get("diacritization_status") == "passed"
+        and prepare_manifest.get("pronunciation_validation_status") == "passed"
+        and prepare_manifest.get("tts_preparation_status") == "passed"
+        and prepare_manifest.get("direction_tags_present") is False
         and annotated_path.exists()
         and diacritic_ratio(annotated_path.read_text(encoding="utf-8")) >= 0.27
+        and not DIRECTION_RE.findall(annotated_path.read_text(encoding="utf-8"))
     )
     if reusable:
         annotated = annotated_path.read_text(encoding="utf-8").strip()
     else:
         annotated = diacritize_and_annotate(clean_story, logs / "diacritics_cache")
+        annotated = pronunciation_validate(clean_story, annotated, story)
         annotated_path.write_text(annotated+"\n",encoding="utf-8")
         prepare_manifest_path.write_text(json.dumps({
             "source_sha256": source_hash,
             "version": DIACRITIZATION_VERSION,
             "diacritic_ratio": round(diacritic_ratio(annotated), 4),
-            "direction_tags_human_only": True,
-            "direction_tags_sent_to_fish": False,
+            "diacritization_status": "passed",
+            "pronunciation_validation_status": "passed",
+            "tts_preparation_status": "passed",
+            "direction_tags_present": False,
             "review_passes": int(SETTINGS.get("diacritization_review_passes", 2)),
             "tts_generation_speed": float(SETTINGS.get("tts_generation_speed", 1.0)),
             "post_processing_tempo": float(SETTINGS.get("post_tts_tempo", 1.0)),
         }, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
     clean = api_text(annotated)
+    api_faithful, _ = lexical_fidelity(clean_story, clean)
+    if not api_faithful:
+        raise RuntimeError("TTS API text differs lexically from the clean story")
     (story / "07_story_tts_api.md").write_text(clean + "\n", encoding="utf-8")
+    metadata.update(
+        diacritization_status="passed",
+        pronunciation_validation_status="passed",
+        tts_preparation_status="passed",
+    )
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
     provider = SETTINGS.get("tts_provider", "edge").lower()
     chunk_limit = int(
         SETTINGS.get("gemini_tts_chunk_char_limit", 4200)
@@ -881,6 +964,11 @@ def prepare(story: Path):
         else SETTINGS.get("tts_chunk_char_limit", 2600)
     )
     chunks = split_chunks(clean, limit=chunk_limit)
+    maximum_chunks = int(SETTINGS.get("max_tts_chunks_per_episode", 40))
+    if len(chunks) > maximum_chunks:
+        raise RuntimeError(
+            f"BLOCKED_COST: TTS requires {len(chunks)} chunks, limit is {maximum_chunks}"
+        )
     tdir = story / "tts_chunks"; tdir.mkdir(exist_ok=True)
     for old_chunk in tdir.glob("*.txt"):
         old_chunk.unlink()
@@ -903,8 +991,13 @@ async def synthesize(story: Path):
     adir.mkdir(exist_ok=True)
     hash_path = story / "logs" / "tts_chunk_hashes.json"
     old_hashes = json.loads(hash_path.read_text(encoding="utf-8")) if hash_path.exists() else {}
-    new_hashes = {}
-    for src in sorted(tdir.glob("*.txt")):
+    model_path = story / "logs" / "tts_chunk_models.json"
+    old_models = json.loads(model_path.read_text(encoding="utf-8")) if model_path.exists() else {}
+    text_sources = sorted(tdir.glob("*.txt"))
+    valid_names = {src.name for src in text_sources}
+    new_hashes = {name: value for name, value in old_hashes.items() if name in valid_names}
+    chunk_models = {name: value for name, value in old_models.items() if name in valid_names}
+    for src in text_sources:
         out = adir / (src.stem + ".mp3")
         text = src.read_text(encoding="utf-8")
         provider_voice_id = (
@@ -934,18 +1027,23 @@ async def synthesize(story: Path):
         ).hexdigest()
         new_hashes[src.name] = source_hash
         if out.exists() and out.stat().st_size > 1024 and old_hashes.get(src.name) == source_hash:
+            chunk_models[src.name] = old_models.get(src.name, provider_model)
             hash_path.write_text(json.dumps(new_hashes, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+            model_path.write_text(json.dumps(chunk_models, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
             continue
-        await tts_one(text, out)
+        actual_model = await tts_one(text, out)
+        chunk_models[src.name] = actual_model or provider_model
         if out.stat().st_size <= 1024: raise RuntimeError(f"empty audio chunk: {out}")
         # Persist progress after every successful chunk so an interrupted run
         # resumes from the next missing/stale chunk instead of starting over.
         hash_path.write_text(json.dumps(new_hashes, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+        model_path.write_text(json.dumps(chunk_models, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
     valid_stems = {path.stem for path in tdir.glob("*.txt")}
     for stale_audio in adir.glob("*.mp3"):
         if stale_audio.stem not in valid_stems:
             stale_audio.unlink()
     hash_path.write_text(json.dumps(new_hashes, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+    model_path.write_text(json.dumps(chunk_models, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
     concat = adir / "concat.txt"
     concat.write_text("".join(f"file '{p.as_posix()}'\n" for p in sorted(adir.glob("*.mp3"))), encoding="utf-8")
     tempo = float(SETTINGS.get("post_tts_tempo", 1.0))
@@ -957,12 +1055,139 @@ async def synthesize(story: Path):
     mix_background_audio(narration, full)
     review = story / "13_audio_review.opus"
     run([ffmpeg(), "-y", "-i", str(full), "-c:a", "libopus", "-b:a", "48k", str(review)])
+    validate_audio(story)
     print("Audio duration", duration(full))
+
+
+def validate_audio(story: Path) -> dict:
+    text_chunks = sorted((story / "tts_chunks").glob("*.txt"))
+    audio_chunks = sorted((story / "audio_chunks").glob("*.mp3"))
+    if [item.stem for item in text_chunks] != [item.stem for item in audio_chunks]:
+        raise RuntimeError("AUDIO_QC_FAILED: text/audio chunk sequence mismatch")
+    if not audio_chunks:
+        raise RuntimeError("AUDIO_QC_FAILED: no audio chunks")
+    hashes = []
+    chunk_durations = []
+    transcript_checks = []
+    audio_signatures = set()
+    transcript_qc = bool(SETTINGS.get("audio_transcript_qc", True))
+    audio_qc_model = str(SETTINGS.get("audio_qc_model", SETTINGS.get("llm_model", "")))
+    if transcript_qc and (
+        SETTINGS.get("cost_policy") != "free_or_preapproved_only"
+        or audio_qc_model not in set(SETTINGS.get("approved_llm_models") or [])
+    ):
+        raise RuntimeError(f"BLOCKED_COST: unapproved audio QC model {audio_qc_model}")
+    for chunk in audio_chunks:
+        if chunk.stat().st_size <= 1024:
+            raise RuntimeError(f"AUDIO_QC_FAILED: empty chunk {chunk.name}")
+        probe = run([ffmpeg(), "-v", "error", "-i", str(chunk), "-f", "null", "-"], check=False)
+        if probe.returncode:
+            raise RuntimeError(f"AUDIO_QC_FAILED: undecodable chunk {chunk.name}")
+        stream_probe = subprocess.run([
+            ffprobe(), "-v", "error", "-select_streams", "a:0",
+            "-show_entries", "stream=codec_name,sample_rate,channels", "-of", "json", str(chunk),
+        ], capture_output=True, text=True, check=True)
+        stream = (json.loads(stream_probe.stdout).get("streams") or [{}])[0]
+        audio_signatures.add((stream.get("codec_name"), stream.get("sample_rate"), stream.get("channels")))
+        chunk_durations.append(round(duration(chunk), 3))
+        hashes.append(hashlib.sha256(chunk.read_bytes()).hexdigest())
+        if transcript_qc:
+            source = next(item for item in text_chunks if item.stem == chunk.stem).read_text(encoding="utf-8")
+            transcript = transcribe_audio_for_qc(chunk, audio_qc_model)
+            source_tokens = re.findall(r"[\u0621-\u064A]+|\d+", DIACRITICS_RE.sub("", source))
+            transcript_tokens = re.findall(r"[\u0621-\u064A]+|\d+", DIACRITICS_RE.sub("", transcript))
+            similarity = difflib.SequenceMatcher(None, source_tokens, transcript_tokens).ratio()
+            length_ratio = len(transcript_tokens) / max(len(source_tokens), 1)
+            transcript_checks.append({
+                "chunk": chunk.name, "similarity": round(similarity, 4),
+                "length_ratio": round(length_ratio, 4),
+            })
+            if similarity < float(SETTINGS.get("audio_transcript_similarity_min", 0.82)) or not 0.8 <= length_ratio <= 1.2:
+                raise RuntimeError(
+                    f"AUDIO_QC_FAILED: transcript mismatch in {chunk.name} "
+                    f"(similarity={similarity:.3f}, length_ratio={length_ratio:.3f})"
+                )
+    duplicates = [index + 2 for index in range(len(hashes) - 1) if hashes[index] == hashes[index + 1]]
+    if duplicates:
+        raise RuntimeError(f"AUDIO_QC_FAILED: duplicate adjacent chunks {duplicates}")
+    if len(audio_signatures) != 1:
+        raise RuntimeError(f"AUDIO_QC_FAILED: inconsistent chunk audio format {audio_signatures}")
+    full = story / "12_audio_full.mp3"
+    full_duration = duration(full)
+    minimum = float(SETTINGS["target_min_seconds"])
+    maximum = float(SETTINGS["target_max_seconds"])
+    if not minimum <= full_duration <= maximum:
+        raise RuntimeError(
+            f"AUDIO_QC_FAILED: duration {full_duration:.1f}s outside {minimum:.0f}-{maximum:.0f}s"
+        )
+    silence = run([
+        ffmpeg(), "-hide_banner", "-i", str(full), "-af", "silencedetect=noise=-45dB:d=8",
+        "-f", "null", "-",
+    ], check=False)
+    long_silences = [float(value) for value in re.findall(r"silence_duration:\s*([0-9.]+)", silence.stderr)]
+    if long_silences:
+        raise RuntimeError("AUDIO_QC_FAILED: unnatural silence >= 8 seconds")
+    result = {
+        "status": "PASS",
+        "chunks": len(audio_chunks),
+        "chunk_durations": chunk_durations,
+        "full_duration_seconds": round(full_duration, 3),
+        "long_silences_seconds": [],
+        "transcript_checks": transcript_checks,
+    }
+    logs = story / "logs"
+    logs.mkdir(exist_ok=True)
+    (logs / "audio_qc.json").write_text(json.dumps(result, indent=2)+"\n", encoding="utf-8")
+    metadata_path = story / "15_metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.update(audio_generation_status="passed", audio_qc_status="passed")
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+    return result
+
+
+def transcribe_audio_for_qc(path: Path, model: str) -> str:
+    api_key = SECRETS.get("GEMINI_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("AUDIO_QC_FAILED: GEMINI_API_KEY is missing for transcript validation")
+    payload = {
+        "contents": [{"role": "user", "parts": [
+            {"text": "Transcribe this Arabic narration verbatim. Output only the spoken words, without commentary or timestamps."},
+            {"inline_data": {"mime_type": "audio/mpeg", "data": base64.b64encode(path.read_bytes()).decode("ascii")}},
+        ]}],
+        "generationConfig": {"temperature": 0, "maxOutputTokens": 8192},
+    }
+    request = urllib.request.Request(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=240) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
+        raise RuntimeError(f"AUDIO_QC_FAILED: transcript provider unavailable: {type(exc).__name__}") from exc
+    transcript = "".join(
+        part.get("text", "")
+        for part in (result.get("candidates") or [{}])[0].get("content", {}).get("parts", [])
+    ).strip()
+    if not transcript:
+        raise RuntimeError("AUDIO_QC_FAILED: empty transcript")
+    return transcript
 
 def background(story: Path, force: bool = True):
     output = story / "10_background.png"
     thumbnail = story / "11_thumbnail_base.jpg"
-    if not force and output.exists() and thumbnail.exists() and output.stat().st_size > 250_000:
+    prompt = (story / "08_image_prompt_en.txt").read_text(encoding="utf-8").strip()
+    prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    metadata_path = story / "15_metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if (
+        not force and output.exists() and thumbnail.exists() and output.stat().st_size > 250_000
+        and metadata.get("image_generation_status") == "passed"
+        and metadata.get("image_accuracy_status") == "passed"
+        and metadata.get("image_prompt_sha256") == prompt_hash
+    ):
         return
     generator = ROOT / "scripts" / "image_generate.py"
     run([sys.executable, str(generator), str(story)])
@@ -1003,11 +1228,12 @@ def validate(story: Path):
     if current_diacritic_ratio < 0.27:
         raise RuntimeError(f"Arabic TTS text is not fully diacritized: ratio={current_diacritic_ratio:.3f}")
     human_tags=DIRECTION_RE.findall(annotated_text)
-    fish_tags=DIRECTION_RE.findall(api_tts_text)
-    if not human_tags:
-        raise RuntimeError("Human review copy is missing restrained performance cues")
-    if fish_tags:
-        raise RuntimeError(f"Direction tags must not be sent to Fish: {fish_tags[:3]}")
+    api_tags=DIRECTION_RE.findall(api_tts_text)
+    if human_tags or api_tags:
+        raise RuntimeError(f"Performance tags are forbidden in TTS files: {(human_tags + api_tags)[:3]}")
+    api_faithful, _ = lexical_fidelity(clean_story_text, api_tts_text)
+    if not api_faithful:
+        raise RuntimeError("API TTS text differs lexically from the clean story")
     quality_errors=diacritization_quality_errors(annotated_text)
     if quality_errors:
         raise RuntimeError(f"Arabic diacritization quality guard failed: {quality_errors}")
@@ -1022,46 +1248,99 @@ def validate(story: Path):
         raise RuntimeError("TTS text does not contain enough sentence pause boundaries")
     ad,vd=duration(story/"12_audio_full.mp3"),duration(story/"14_video_final.mp4")
     if abs(ad-vd)>2.5: raise RuntimeError(f"duration mismatch {ad} {vd}")
+    video_path = story / "14_video_final.mp4"
+    if video_path.stat().st_size <= 1_000_000:
+        raise RuntimeError("VIDEO_QC_FAILED: final video is implausibly small")
+    probe = subprocess.run([
+        ffprobe(), "-v", "error", "-show_streams", "-show_format", "-of", "json", str(video_path)
+    ], capture_output=True, text=True, check=True)
+    probe_data = json.loads(probe.stdout)
+    streams = probe_data.get("streams") or []
+    video_stream = next((item for item in streams if item.get("codec_type") == "video"), None)
+    audio_stream = next((item for item in streams if item.get("codec_type") == "audio"), None)
+    if not video_stream or not audio_stream:
+        raise RuntimeError("VIDEO_QC_FAILED: missing audio or video stream")
+    if (video_stream.get("width"), video_stream.get("height")) != (1920, 1080):
+        raise RuntimeError("VIDEO_QC_FAILED: resolution is not 1920x1080")
+    if video_stream.get("codec_name") != "h264" or audio_stream.get("codec_name") != "aac":
+        raise RuntimeError("VIDEO_QC_FAILED: expected H.264 video and AAC audio")
+    decode = subprocess.run(
+        [ffmpeg(), "-v", "error", "-i", str(video_path), "-f", "null", "-"],
+        capture_output=True, text=True,
+    )
+    if decode.returncode:
+        raise RuntimeError("VIDEO_QC_FAILED: full decode reported corruption")
     logs=story/"logs"; logs.mkdir(exist_ok=True)
     silence=subprocess.run([ffmpeg(),"-hide_banner","-i",str(story/"12_audio_full.mp3"),"-af","silencedetect=noise=-45dB:d=8","-f","null","-"],capture_output=True,text=True)
     long_silences=re.findall(r"silence_duration:\s*([0-9.]+)",silence.stderr)
     stats=subprocess.run([ffmpeg(),"-hide_banner","-i",str(story/"12_audio_full.mp3"),"-af","astats=metadata=1:reset=1","-f","null","-"],capture_output=True,text=True)
-    duration_status="PASS" if SETTINGS["target_min_seconds"] <= ad <= SETTINGS["target_max_seconds"] else "REVIEW"
-    validation={"audio_duration_seconds":round(ad,2),"video_duration_seconds":round(vd,2),"duration_status":duration_status,"tts_diacritization_status":"PASS_DOUBLE_REVIEWED_PAUSAL","diacritic_ratio":round(current_diacritic_ratio,4),"diacritization_engine":DIACRITIZATION_VERSION,"tts_generation_speed":float(SETTINGS.get("tts_generation_speed",1.0)),"post_processing_tempo":float(SETTINGS.get("post_tts_tempo",1.0)),"effective_speed":float(SETTINGS.get("post_tts_tempo",1.0)),"sentence_pause_strategy":SETTINGS.get("sentence_pause_strategy"),"sentence_pause_boundaries":sentence_boundaries,"pausal_taa_marbuta_status":"PASS","lexical_corrections_count":len(lexical_corrections),"lexical_corrections_preview":lexical_corrections[:20],"human_direction_tags":len(human_tags),"fish_direction_tags_sent":len(fish_tags),"long_silences_seconds":[float(x) for x in long_silences],"audio_chunks":len(list((story/"audio_chunks").glob("*.mp3"))),"tts_chunks":len(list((story/"tts_chunks").glob("*.txt"))),"zero_byte_files":[str(p) for p in story.rglob("*") if p.is_file() and p.stat().st_size==0]}
+    duration_status="PASS" if SETTINGS["target_min_seconds"] <= ad <= SETTINGS["target_max_seconds"] else "FAIL"
+    validation={"audio_duration_seconds":round(ad,2),"video_duration_seconds":round(vd,2),"duration_status":duration_status,"tts_diacritization_status":"PASS_DOUBLE_REVIEWED_PAUSAL","pronunciation_validation_status":"PASS","tts_preparation_status":"PASS","diacritic_ratio":round(current_diacritic_ratio,4),"diacritization_engine":DIACRITIZATION_VERSION,"tts_generation_speed":float(SETTINGS.get("tts_generation_speed",1.0)),"post_processing_tempo":float(SETTINGS.get("post_tts_tempo",1.0)),"effective_speed":float(SETTINGS.get("post_tts_tempo",1.0)),"sentence_pause_strategy":SETTINGS.get("sentence_pause_strategy"),"sentence_pause_boundaries":sentence_boundaries,"pausal_taa_marbuta_status":"PASS","lexical_corrections_count":len(lexical_corrections),"lexical_corrections_preview":lexical_corrections[:20],"performance_tags":0,"long_silences_seconds":[float(x) for x in long_silences],"audio_chunks":len(list((story/"audio_chunks").glob("*.mp3"))),"tts_chunks":len(list((story/"tts_chunks").glob("*.txt"))),"zero_byte_files":[str(p) for p in story.rglob("*") if p.is_file() and p.stat().st_size==0]}
     (logs/"validation.json").write_text(json.dumps(validation,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     (logs/"ffmpeg_astats.txt").write_text(stats.stderr,encoding="utf-8")
     if validation["zero_byte_files"]: raise RuntimeError("zero-byte files found")
     if validation["long_silences_seconds"]: raise RuntimeError("unnatural silence >= 8 seconds detected")
-    image_source=(story/"09_image_source.md").read_text(encoding="utf-8") if (story/"09_image_source.md").exists() else f"{SETTINGS.get('image_provider')} {SETTINGS.get('image_model')}"; meta=json.loads((story/"15_metadata.json").read_text(encoding="utf-8")); meta.update(audio_duration_seconds=round(ad,2),video_duration_seconds=round(vd,2),word_count=arabic_words((story/"05_story_clean.md").read_text(encoding="utf-8")),**voice_metadata(),fact_check_status="completed",image_method=image_source,background_audio="pink noise",background_audio_volume_percent=15,narration_audio_path=str(story/"12_audio_narration.mp3"),audio_path=str(story/"12_audio_full.mp3"),video_path=str(story/"14_video_final.mp4"),thumbnail_path=str(story/"11_thumbnail_base.jpg"),approval_status="pending_approval",publish_status="not_published")
+    if duration_status != "PASS": raise RuntimeError("audio duration is outside the approved range")
+    chunk_models_path = logs / "tts_chunk_models.json"
+    chunk_models = json.loads(chunk_models_path.read_text(encoding="utf-8")) if chunk_models_path.exists() else {}
+    models_used = sorted(set(chunk_models.values()))
+    meta=json.loads((story/"15_metadata.json").read_text(encoding="utf-8")); meta.update(audio_duration_seconds=round(ad,2),video_duration_seconds=round(vd,2),word_count=arabic_words((story/"05_story_clean.md").read_text(encoding="utf-8")),**voice_metadata(),tts_models_used=models_used,audio_generation_status="passed",audio_qc_status="passed",video_assembly_status="passed",video_qc_status="passed",metadata_validation_status="passed",clean_story_sha256=file_sha256(story/"05_story_clean.md"),tts_api_sha256=file_sha256(story/"07_story_tts_api.md"),audio_sha256=file_sha256(story/"12_audio_full.mp3"),image_sha256=file_sha256(story/"10_background.png"),video_sha256=file_sha256(video_path),background_audio="pink noise",background_audio_volume_percent=15,narration_audio_path=str(story/"12_audio_narration.mp3"),audio_path=str(story/"12_audio_full.mp3"),video_path=str(story/"14_video_final.mp4"),thumbnail_path=str(story/"11_thumbnail_base.jpg"),approval_status="READY_FOR_APPROVAL",publish_status="not_published")
     (story/"15_metadata.json").write_text(json.dumps(meta,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     (story/"17_status.md").write_text(
-        "# الحالة\n\n- الحالة الحالية: `pending_approval`\n- النشر: `not_published`\n- بانتظار مراجعة Marwa واعتماد صريح قبل النشر.\n",
+        "# الحالة\n\n- الحالة الحالية: `READY_FOR_APPROVAL`\n- النشر: `not_published`\n- بانتظار مراجعة Marwa واعتماد صريح قبل النشر.\n",
         encoding="utf-8",
     )
     history_path=ROOT/"config"/"topics_history.json"
     history=json.loads(history_path.read_text(encoding="utf-8"))
     for topic in history:
         if topic.get("slug") == meta.get("slug"):
-            topic["status"]="pending_approval"
+            topic["status"]="READY_FOR_APPROVAL"
             topic["story_path"]=story.relative_to(ROOT).as_posix()
     history_path.write_text(json.dumps(history,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     print(json.dumps({"metadata":meta,"validation":validation},ensure_ascii=False,indent=2))
 
 def package(story: Path):
     meta=json.loads((story/"15_metadata.json").read_text(encoding="utf-8"))
-    image_source=(story/"09_image_source.md").read_text(encoding="utf-8") if (story/"09_image_source.md").exists() else f"{SETTINGS.get('image_provider')} {SETTINGS.get('image_model')}"; meta.update(audio_duration_seconds=round(duration(story/"12_audio_full.mp3"),2),video_duration_seconds=round(duration(story/"14_video_final.mp4"),2),word_count=arabic_words((story/"05_story_clean.md").read_text(encoding="utf-8")),**voice_metadata(),image_method=image_source,background_audio="pink noise",background_audio_volume_percent=15,narration_audio_path=str(story/"12_audio_narration.mp3"),audio_path=str(story/"12_audio_full.mp3"),video_path=str(story/"14_video_final.mp4"),thumbnail_path=str(story/"11_thumbnail_base.jpg"),approval_status="pending_approval",publish_status="not_published")
+    meta.update(audio_duration_seconds=round(duration(story/"12_audio_full.mp3"),2),video_duration_seconds=round(duration(story/"14_video_final.mp4"),2),word_count=arabic_words((story/"05_story_clean.md").read_text(encoding="utf-8")),**voice_metadata(),background_audio="pink noise",background_audio_volume_percent=15,narration_audio_path=str(story/"12_audio_narration.mp3"),audio_path=str(story/"12_audio_full.mp3"),video_path=str(story/"14_video_final.mp4"),thumbnail_path=str(story/"11_thumbnail_base.jpg"),approval_status="READY_FOR_APPROVAL",publish_status="not_published")
     (story/"15_metadata.json").write_text(json.dumps(meta,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     (story/"17_status.md").write_text(
-        "# الحالة\n\n- الحالة الحالية: `pending_approval`\n- النشر: `not_published`\n- بانتظار مراجعة Marwa واعتماد صريح قبل النشر.\n",
+        "# الحالة\n\n- الحالة الحالية: `READY_FOR_APPROVAL`\n- النشر: `not_published`\n- بانتظار مراجعة Marwa واعتماد صريح قبل النشر.\n",
         encoding="utf-8",
     )
     def md(name): return html.escape((story/name).read_text(encoding="utf-8"))
     page=f'''<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><title>{html.escape(meta['title'])}</title><style>body{{font-family:Segoe UI,Tahoma,sans-serif;background:#f4efe5;color:#4f4035;max-width:1050px;margin:auto;padding:32px;line-height:1.9}}img{{width:100%;border-radius:18px}}.card{{background:#fffaf0;padding:24px;margin:18px 0;border:1px solid #cec7b6;border-radius:16px}}pre{{white-space:pre-wrap;font:inherit}}a{{color:#826d5c}}</style><h1>{html.escape(meta['title'])}</h1><img src="10_background.png"><div class="card"><b>الموضوع:</b> {html.escape(meta['topic'])}<br><b>الكلمات:</b> {meta.get('word_count',0)}<br><b>مدة الصوت:</b> {meta.get('audio_duration_seconds',0)} ثانية<br><b>الخلفية الصوتية:</b> Pink Noise بنسبة 15%<br><b>الحالة:</b> pending_approval<br><a href="12_audio_narration.mp3">صوت الراوي فقط</a> · <a href="12_audio_full.mp3">الصوت المخلوط</a> · <a href="13_audio_review.opus">نسخة المراجعة</a> · <a href="14_video_final.mp4">الفيديو</a> · <a href="11_thumbnail_base.jpg">Thumbnail</a></div><h2>النص</h2><div class="card"><pre>{md('05_story_clean.md')}</pre></div><h2>وصف YouTube</h2><div class="card"><pre>{md('02_description.txt')}</pre></div><h2>المصادر</h2><div class="card"><pre>{md('03_sources.md')}</pre></div></html>'''
     (story/"00_package.html").write_text(page,encoding="utf-8")
 
+
+def completed_artifacts_are_current(story: Path) -> bool:
+    metadata_path = story / "15_metadata.json"
+    if not metadata_path.exists():
+        return False
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    required_statuses = (
+        "fact_check_status", "second_fact_check_status", "diacritization_status",
+        "pronunciation_validation_status", "tts_preparation_status", "audio_qc_status",
+        "image_generation_status", "image_accuracy_status", "video_qc_status",
+        "metadata_validation_status",
+    )
+    if any(metadata.get(name) != "passed" for name in required_statuses):
+        return False
+    expected = {
+        "clean_story_sha256": story / "05_story_clean.md",
+        "tts_api_sha256": story / "07_story_tts_api.md",
+        "audio_sha256": story / "12_audio_full.mp3",
+        "image_sha256": story / "10_background.png",
+        "video_sha256": story / "14_video_final.mp4",
+    }
+    return all(path.exists() and metadata.get(key) == file_sha256(path) for key, path in expected.items())
+
 def main():
     p=argparse.ArgumentParser(); p.add_argument("command",choices=["prepare","tts","image","render","validate","package","all"]); p.add_argument("story")
     a=p.parse_args(); story=Path(a.story).resolve()
+    if a.command == "all" and completed_artifacts_are_current(story):
+        validate(story)
+        package(story)
+        return
     if a.command in ("prepare","all"): prepare(story)
     if a.command in ("tts","all"): asyncio.run(synthesize(story))
     if a.command in ("image","all"): background(story)

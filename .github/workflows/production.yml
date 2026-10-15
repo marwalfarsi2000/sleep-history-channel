@@ -45,7 +45,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python scripts/restore_failure_checkpoint.py
-      - name: Produce, archive, and request review
+      - name: Produce private review package
         id: produce
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -59,12 +59,28 @@ jobs:
           PINK_NOISE_URL: ${{ secrets.PINK_NOISE_URL }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [[ "${{ inputs.resume_archive_only }}" == "true" ]]; then
             python scripts/cloud_pipeline.py resume-review
           else
             python scripts/cloud_pipeline.py produce
           fi
+      - name: Save private review package
+        if: success() && inputs.resume_archive_only != true
+        uses: actions/upload-artifact@v4
+        with:
+          name: sleep-history-review-${{ github.run_id }}
+          path: |
+            stories/**
+          if-no-files-found: error
+          retention-days: 30
+      - name: Request owner review
+        if: success() && inputs.resume_archive_only != true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/cloud_pipeline.py notify-review
       - name: Notify Telegram about failure
         if: failure()
         env:
@@ -82,14 +98,7 @@ jobs:
           name: sleep-history-failure-${{ github.run_id }}
           path: |
             logs/*.log
-            stories/*/05_story_clean.md
-            stories/*/06_story_tts_annotated.md
-            stories/*/07_story_tts_api.md
-            stories/*/logs/**
-            stories/*/tts_chunks/**
-            stories/*/audio_chunks/**
-            stories/*/15_metadata.json
-            stories/*/17_status.md
+            stories/**
           if-no-files-found: warn
           retention-days: 7
       - name: Persist topic and archive catalogues

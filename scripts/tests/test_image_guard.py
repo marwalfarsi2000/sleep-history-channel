@@ -138,6 +138,7 @@ class ImageCostGuardTests(unittest.TestCase):
                 (story / "08_image_prompt_en.txt").write_text(
                     "ORIGINAL DYNAMIC PROMPT", encoding="utf-8"
                 )
+                (story / "15_metadata.json").write_text("{}", encoding="utf-8")
                 with mock.patch.object(
                     image_generate,
                     "load_secrets",
@@ -149,7 +150,9 @@ class ImageCostGuardTests(unittest.TestCase):
                     image_generate,
                     "generate_cloudflare",
                     return_value=(buffer.getvalue(), {"success": True}),
-                ) as cloudflare:
+                ) as cloudflare, mock.patch.object(
+                    image_generate, "historical_accuracy_gate", return_value={"status": "PASS"}
+                ):
                     image_generate.generate(story, seed=123)
                 cloudflare.assert_called_once_with(
                     "ORIGINAL DYNAMIC PROMPT", "account-id", "token"
@@ -190,6 +193,7 @@ class ImageCostGuardTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as directory:
                 story = Path(directory)
                 (story / "08_image_prompt_en.txt").write_text("ORIGINAL DYNAMIC PROMPT", encoding="utf-8")
+                (story / "15_metadata.json").write_text("{}", encoding="utf-8")
                 with mock.patch.object(
                     image_generate,
                     "load_secrets",
@@ -206,7 +210,9 @@ class ImageCostGuardTests(unittest.TestCase):
                     image_generate,
                     "generate_pollinations",
                     return_value=(good_buffer.getvalue(), {"name": "microsoft/mai-image-2.6"}),
-                ) as pollinations:
+                ) as pollinations, mock.patch.object(
+                    image_generate, "historical_accuracy_gate", return_value={"status": "PASS"}
+                ):
                     image_generate.generate(story, seed=123)
 
                 cloudflare.assert_called_once()

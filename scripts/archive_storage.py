@@ -20,6 +20,12 @@ SETTINGS = json.loads((ROOT / "config" / "settings.json").read_text(encoding="ut
 ARCHIVE_INDEX = ROOT / "config" / "archive_index.json"
 
 
+def atomic_json(path: Path, value: object) -> None:
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
 def credentials() -> tuple[str, str]:
     access = os.environ.get("IAS3_ACCESS_KEY", "").strip()
     secret = os.environ.get("IAS3_SECRET_KEY", "").strip()
@@ -62,7 +68,7 @@ def metadata_for_story(story: Path, identifier: str) -> dict[str, str | list[str
         "language": "ara",
         "subject": ["Arabic", "sleep story", "history", "documentary"],
         "licenseurl": SETTINGS.get("archive_license_url", "https://creativecommons.org/licenses/by-nc-nd/4.0/"),
-        "approval_status": "pending_approval",
+        "approval_status": "APPROVED_FOR_PUBLISH",
         "slug": data["slug"],
     }
 
@@ -155,6 +161,21 @@ def verify_upload(identifier: str, video: Path) -> dict:
     return {"size": video.stat().st_size, "sha256": expected}
 
 
+def verify_uploaded_files(identifier: str, files: dict[str, str]) -> dict[str, dict]:
+    verified = {}
+    for filename, local_name in files.items():
+        local = Path(local_name)
+        remote = wait_for_remote_file(identifier, filename)
+        if int(remote.get("size") or 0) != local.stat().st_size:
+            raise RuntimeError(f"Internet Archive size differs for {filename}")
+        expected = sha256(local)
+        remote_sha = str(remote.get("sha256") or "").lower()
+        if remote_sha and remote_sha != expected:
+            raise RuntimeError(f"Internet Archive checksum differs for {filename}")
+        verified[filename] = {"size": local.stat().st_size, "sha256": expected}
+    return verified
+
+
 def verify_existing_upload(identifier: str, filename: str) -> dict:
     remote = wait_for_remote_file(identifier, filename)
     return {
@@ -170,7 +191,7 @@ def update_index(record: dict) -> None:
     records = [item for item in records if item.get("identifier") != record["identifier"]]
     records.append(record)
     records.sort(key=lambda item: item.get("created_at", ""))
-    ARCHIVE_INDEX.write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_json(ARCHIVE_INDEX, records)
 
 
 def finalize_story(story: Path, identifier: str, verified: dict) -> dict:
@@ -180,7 +201,7 @@ def finalize_story(story: Path, identifier: str, verified: dict) -> dict:
         "slug": metadata["slug"],
         "title": metadata["title"],
         "created_at": metadata.get("created_at"),
-        "status": "pending_approval",
+        "status": "APPROVED_FOR_PUBLISH",
         "video_filename": "14_video_final.mp4",
         "item_url": f"https://archive.org/details/{identifier}",
         "video_url": public_file_url(identifier, "14_video_final.mp4"),
@@ -195,11 +216,11 @@ def finalize_story(story: Path, identifier: str, verified: dict) -> dict:
     history = json.loads(history_path.read_text(encoding="utf-8"))
     for item in history:
         if item.get("slug") == metadata["slug"]:
-            item["status"] = "pending_approval"
+            item["status"] = "APPROVED_FOR_PUBLISH"
             item["archive_identifier"] = identifier
             item["archive_url"] = record["item_url"]
             item.pop("story_path", None)
-    history_path.write_text(json.dumps(history, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_json(history_path, history)
     return record
 
 
@@ -231,8 +252,8 @@ def upload_story(story: Path) -> dict:
         status = getattr(response, "status_code", 200)
         if status >= 400:
             raise RuntimeError(f"Internet Archive upload failed with HTTP {status}")
-    verified = verify_upload(identifier, story / "14_video_final.mp4")
-    return finalize_story(story, identifier, verified)
+    all_verified = verify_uploaded_files(identifier, files)
+    return finalize_story(story, identifier, all_verified["14_video_final.mp4"])
 
 
 def delete_rejected(identifier: str) -> None:
@@ -265,14 +286,14 @@ def set_index_status(identifier: str, status: str, **updates: object) -> None:
             found = True
     if not found:
         raise RuntimeError(f"Archive identifier is not present in the catalogue: {identifier}")
-    ARCHIVE_INDEX.write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_json(ARCHIVE_INDEX, records)
     history_path = ROOT / "config" / "topics_history.json"
     history = json.loads(history_path.read_text(encoding="utf-8"))
     for item in history:
         if item.get("archive_identifier") == identifier:
             item["status"] = status
             item.update({key: value for key, value in updates.items() if key in {"youtube_video_id"}})
-    history_path.write_text(json.dumps(history, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_json(history_path, history)
 
 
 def main() -> None:

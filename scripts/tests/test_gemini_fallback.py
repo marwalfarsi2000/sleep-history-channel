@@ -42,6 +42,8 @@ class GeminiFallbackTests(unittest.TestCase):
         ]
         with mock.patch.object(generate_daily, "SETTINGS", {
             "llm_fallback_models": ["gemini-3.5-flash-lite"],
+            "cost_policy": "free_or_preapproved_only",
+            "approved_llm_models": ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"],
         }), mock.patch.object(generate_daily, "load_secrets", return_value={"GEMINI_API_KEY": "test"}), \
              mock.patch.object(generate_daily, "GEMINI_RETRY_DELAYS", ()), \
              mock.patch.object(generate_daily.urllib.request, "urlopen", side_effect=responses) as urlopen:
@@ -58,22 +60,19 @@ class GeminiFallbackTests(unittest.TestCase):
             {"thinkingLevel": "minimal"},
         )
 
-    def test_search_quota_falls_back_immediately_and_retries_transient_503(self):
-        success = {"candidates": [{"content": {"parts": [{"text": "بحث موثوق"}]}}]}
-        responses = [
-            _http_error(429, '{"error":{"status":"RESOURCE_EXHAUSTED"}}'),
-            _http_error(503, '{"error":{"status":"UNAVAILABLE"}}'),
-            _Response(success),
-        ]
+    def test_search_quota_fails_closed_without_model_memory_fallback(self):
+        responses = [_http_error(429, '{"error":{"status":"RESOURCE_EXHAUSTED"}}') for _ in range(4)]
         with mock.patch.object(generate_daily, "load_secrets", return_value={"GEMINI_API_KEY": "test"}), \
-             mock.patch.object(generate_daily, "GEMINI_RETRY_DELAYS", (0,)), \
+             mock.patch.object(generate_daily, "GEMINI_RETRY_DELAYS", (0, 0, 0)), \
              mock.patch.object(generate_daily.urllib.request, "urlopen", side_effect=responses) as urlopen, \
-             mock.patch.object(generate_daily.time, "sleep") as sleep:
-            text, _sources = generate_daily.gemini("prompt", search=True)
+             mock.patch.object(generate_daily.time, "sleep"):
+            with self.assertRaisesRegex(RuntimeError, "GROUNDED_RESEARCH_UNAVAILABLE"):
+                generate_daily._gemini_one("model", "prompt", search=True)
 
-        self.assertEqual(text, "بحث موثوق")
-        self.assertEqual(urlopen.call_count, 3)
-        sleep.assert_called_once_with(0)
+        self.assertEqual(urlopen.call_count, 4)
+        for call in urlopen.call_args_list:
+            payload = json.loads(call.args[0].data.decode("utf-8"))
+            self.assertIn("tools", payload)
 
     def test_daily_quota_stops_without_sleeping(self):
         errors = [
