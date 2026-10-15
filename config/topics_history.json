@@ -40,7 +40,7 @@
     "slug": "daily-life-in-caliphate-cordoba",
     "topic": "الحياة اليومية في مدينة قرطبة خلال العصر الأموي",
     "angle": "رحلة في أزقة قرطبة المزدهرة، من هندسة المياه والحدائق إلى روتين طلبة العلم في مكتبة الحكم المستنصر، مع التركيز على التعايش الثقافي والابتكارات العلمية في القرن العاشر الميلادي.",
-    "status": "REVIEW_PENDING",
+    "status": "READY_FOR_APPROVAL",
     "created_at": "2026-10-12T00:51:49.531998+04:00",
     "topic_ar": "الحياة اليومية في مدينة قرطبة خلال العصر الأموي",
     "angle_ar": "رحلة في أزقة قرطبة المزدهرة، من هندسة المياه والحدائق إلى روتين طلبة العلم في مكتبة الحكم المستنصر، مع التركيز على التعايش الثقافي والابتكارات العلمية في القرن العاشر الميلادي.",
@@ -48,7 +48,8 @@
     "period_ar": "الفترة التاريخية المذكورة في الموضوع",
     "location_ar": "المكان المذكور في الموضوع",
     "archive_identifier": "lan-tukmil-alqissa-20261015-daily-life-in-caliphate-c",
-    "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261015-daily-life-in-caliphate-c"
+    "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261015-daily-life-in-caliphate-c",
+    "story_path": "stories/daily-life-in-caliphate-cordoba"
   },
   {
     "slug": "daily-life-in-venice-spice-trade-era",
