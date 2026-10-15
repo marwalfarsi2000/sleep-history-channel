@@ -59,11 +59,14 @@ def _daily_quota_exhausted(body: str) -> bool:
     return any(marker in normalized for marker in markers)
 
 
-def _llm_models() -> list[str]:
+def _llm_models(*, search: bool = False) -> list[str]:
     configured = SETTINGS.get("llm_fallback_models", [])
-    if not isinstance(configured, list):
-        raise RuntimeError("llm_fallback_models must be a JSON list")
-    models = list(dict.fromkeys([MODEL, *(str(model).strip() for model in configured)]))
+    research = SETTINGS.get("research_fallback_models", []) if search else []
+    if not isinstance(configured, list) or not isinstance(research, list):
+        raise RuntimeError("llm_fallback_models and research_fallback_models must be JSON lists")
+    # Research-only fallbacks are appended last: grounding quota is shared across
+    # the Gemini 3 family, so older search-capable models extend coverage.
+    models = list(dict.fromkeys([MODEL, *(str(model).strip() for model in [*configured, *research])]))
     if SETTINGS.get("cost_policy") != "free_or_preapproved_only":
         raise RuntimeError("BLOCKED_COST: unsupported LLM cost policy")
     approved = set(SETTINGS.get("approved_llm_models") or [])
@@ -87,7 +90,7 @@ def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: boo
         "maxOutputTokens": max_tokens,
         "thinkingConfig": (
             {"thinkingLevel": "minimal"}
-            if model.startswith("gemini-3.5-")
+            if model.startswith("gemini-3") and model != "gemini-3.1-flash-lite"
             else {"thinkingBudget": 0}
         ),
     }
@@ -164,7 +167,7 @@ def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: boo
 def gemini(prompt: str, *, json_mode: bool = False, search: bool = False,
            max_tokens: int = 8192, temperature: float = 0.4) -> tuple[str, list[dict]]:
     last_error: RuntimeError | None = None
-    models = _llm_models()
+    models = _llm_models(search=search)
     for index, model in enumerate(models):
         try:
             return _gemini_one(
@@ -178,7 +181,12 @@ def gemini(prompt: str, *, json_mode: bool = False, search: bool = False,
         except RuntimeError as error:
             last_error = error
             message = str(error).lower()
-            recoverable = any(marker in message for marker in ("http 429", "http 503", "daily quota", "unavailable"))
+            # 404/403 mean the model was retired or is not enabled for this
+            # project; skip to the next approved model instead of failing.
+            recoverable = any(
+                marker in message
+                for marker in ("http 429", "http 503", "http 404", "http 403", "daily quota", "unavailable")
+            )
             if not recoverable or index + 1 >= len(models):
                 raise
             print(
@@ -693,7 +701,7 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
                 )
                 or (
                     item.get("status") == "READY_FOR_APPROVAL"
-                    and not item.get("review_run_id")
+                    and not item.get("archive_identifier")
                 )
             )
             and checkpoint_path(item)

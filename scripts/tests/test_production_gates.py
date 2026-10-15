@@ -56,7 +56,7 @@ class ProductionGateTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "TTS_CHUNKING_FAILED"):
             pipeline.split_chunks("ا" * 101 + ".", limit=100)
 
-    def test_production_stops_at_private_review_without_public_archive_upload(self):
+    def test_production_uploads_review_copy_to_archive_as_review_pending(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             story = root / "stories" / "episode"
@@ -74,12 +74,27 @@ class ProductionGateTests(unittest.TestCase):
             with mock.patch.object(cloud_pipeline, "ROOT", root), \
                  mock.patch.object(cloud_pipeline, "ensure_background_audio"), \
                  mock.patch.object(cloud_pipeline, "run", side_effect=[generated, ""]), \
-                 mock.patch.object(cloud_pipeline, "upload_story") as upload, \
-                 mock.patch.dict(cloud_pipeline.os.environ, {"GITHUB_RUN_ID": "123", "RUN_URL": "https://example.invalid/run"}):
+                 mock.patch.object(cloud_pipeline, "upload_story", return_value={
+                     "identifier": "lan-tukmil-alqissa-episode",
+                     "item_url": "https://archive.org/details/lan-tukmil-alqissa-episode",
+                 }) as upload:
                 result = cloud_pipeline.produce()
-            upload.assert_not_called()
-            self.assertEqual(result["status"], "READY_FOR_APPROVAL")
-            self.assertEqual(result["identifier"], "123")
+            upload.assert_called_once()
+            self.assertEqual(result["status"], "REVIEW_PENDING")
+            self.assertEqual(result["identifier"], "lan-tukmil-alqissa-episode")
+            self.assertEqual(result["review_url"], "https://archive.org/details/lan-tukmil-alqissa-episode")
+
+    def test_reject_deletes_only_review_pending_items(self):
+        with mock.patch.object(cloud_pipeline, "remote_status", return_value="COMPLETED"), \
+             mock.patch.object(cloud_pipeline, "delete_rejected") as delete:
+            with self.assertRaises(RuntimeError):
+                cloud_pipeline.reject("published-item")
+        delete.assert_not_called()
+
+    def test_publish_requires_review_pending(self):
+        with mock.patch.object(cloud_pipeline, "remote_status", return_value="REJECTED_DELETED"):
+            with self.assertRaisesRegex(RuntimeError, "HUMAN_APPROVAL_GATE_FAILED"):
+                cloud_pipeline.publish("item")
 
 
 if __name__ == "__main__":

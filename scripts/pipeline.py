@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse, asyncio, base64, hashlib, html, json, os, re, shutil, subprocess, sys, time
+import datetime as dt
 import urllib.error
 import urllib.request
 import difflib
@@ -686,7 +687,15 @@ def _gemini_tts_models() -> list[str]:
     return models
 
 
-def gemini_tts_one(text: str, out: Path):
+class TtsEngineExhausted(RuntimeError):
+    """The locked voice engine cannot continue this episode (quota or retired)."""
+
+    def __init__(self, engine: str, reason: str):
+        super().__init__(f"BLOCKED_COST_OR_FREE_LIMIT: TTS engine {engine} exhausted: {reason}")
+        self.engine = engine
+
+
+def gemini_tts_one(text: str, out: Path, model: str):
     api_key = SECRETS.get("GEMINI_API_KEY", "")
     voice_id = SECRETS.get("GEMINI_TTS_VOICE_ID", "")
     if not api_key or not voice_id:
@@ -699,92 +708,64 @@ def gemini_tts_one(text: str, out: Path):
     wav_path = out.with_suffix(".gemini.wav")
     try:
         result = None
-        selected_model = ""
-        exhausted_models = []
-        models = _gemini_tts_models()
-        for model_index, model in enumerate(models):
-            payload = json.dumps({
-                "model": model,
-                "input": [{
-                    "type": "user_input",
-                    "content": [{
-                        "type": "text",
-                        "text": text,
-                        "annotations": [{
-                            "type": "speech_metadata",
-                            "style": SETTINGS.get("gemini_tts_style", "Calm Arabic historical sleep narration."),
-                        }],
+        payload = json.dumps({
+            "model": model,
+            "input": [{
+                "type": "user_input",
+                "content": [{
+                    "type": "text",
+                    "text": text,
+                    "annotations": [{
+                        "type": "speech_metadata",
+                        "style": SETTINGS.get("gemini_tts_style", "Calm Arabic historical sleep narration."),
                     }],
                 }],
-                "response_format": {"type": "audio"},
-                "generation_config": {"speech_config": [{"voice": voice_id}]},
-            }, ensure_ascii=False).encode("utf-8")
-            request = urllib.request.Request(
-                "https://generativelanguage.googleapis.com/v1beta/interactions",
-                data=payload,
-                method="POST",
-                headers={
-                    "x-goog-api-key": api_key,
-                    "Content-Type": "application/json; charset=utf-8",
-                    "Accept": "application/json",
-                },
-            )
-            for attempt in range(len(GEMINI_TTS_RETRY_DELAYS) + 1):
-                try:
-                    with urllib.request.urlopen(request, timeout=240) as response:
-                        result = json.loads(response.read().decode("utf-8"))
-                    selected_model = model
-                    break
-                except urllib.error.HTTPError as exc:
-                    body = exc.read().decode("utf-8", errors="replace")
-                    if exc.code == 402:
-                        raise RuntimeError("BLOCKED_COST_OR_FREE_LIMIT: Gemini TTS payment required") from exc
-                    if exc.code == 429:
-                        quota_kind = _gemini_tts_quota_kind(body)
-                        if quota_kind == "daily":
-                            exhausted_models.append(model)
-                            if model_index + 1 < len(models):
-                                print(
-                                    f"Gemini TTS daily free quota exhausted for {model}; "
-                                    f"switching to free fallback {models[model_index + 1]}",
-                                    flush=True,
-                                )
-                                break
-                            raise RuntimeError(
-                                "BLOCKED_COST_OR_FREE_LIMIT: Gemini TTS daily free quota exhausted "
-                                f"for all configured models ({', '.join(exhausted_models)}); "
-                                "saved chunks will resume after the Pacific-time reset"
-                            ) from exc
-                        if attempt < len(GEMINI_TTS_RETRY_DELAYS):
-                            retry_after = exc.headers.get("Retry-After") if exc.headers else None
-                            try:
-                                delay = max(GEMINI_TTS_RETRY_DELAYS[attempt], int(retry_after or 0))
-                            except ValueError:
-                                delay = GEMINI_TTS_RETRY_DELAYS[attempt]
-                            print(
-                                f"Gemini TTS {quota_kind} quota HTTP 429 for {model}; retrying in {delay}s "
-                                f"({attempt + 1}/{len(GEMINI_TTS_RETRY_DELAYS)})",
-                                flush=True,
-                            )
-                            time.sleep(delay)
-                            continue
-                        exhausted_models.append(model)
-                        if model_index + 1 < len(models):
-                            print(
-                                f"Gemini TTS rate limit persisted for {model}; "
-                                f"switching to free fallback {models[model_index + 1]}",
-                                flush=True,
-                            )
-                            break
-                        raise RuntimeError(
-                            "BLOCKED_COST_OR_FREE_LIMIT: Gemini TTS rate limit persisted for all "
-                            f"configured models ({', '.join(exhausted_models)}); saved chunks will resume later"
-                        ) from exc
-                    if exc.code in (401, 403):
-                        raise RuntimeError(f"Gemini TTS authentication failed with HTTP {exc.code}") from exc
-                    raise RuntimeError(f"Gemini TTS model {model} failed with HTTP {exc.code}") from exc
-            if result is not None:
+            }],
+            "response_format": {"type": "audio"},
+            "generation_config": {"speech_config": [{"voice": voice_id}]},
+        }, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            "https://generativelanguage.googleapis.com/v1beta/interactions",
+            data=payload,
+            method="POST",
+            headers={
+                "x-goog-api-key": api_key,
+                "Content-Type": "application/json; charset=utf-8",
+                "Accept": "application/json",
+            },
+        )
+        for attempt in range(len(GEMINI_TTS_RETRY_DELAYS) + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=240) as response:
+                    result = json.loads(response.read().decode("utf-8"))
                 break
+            except urllib.error.HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")
+                if exc.code == 402:
+                    raise RuntimeError("BLOCKED_COST_OR_FREE_LIMIT: Gemini TTS payment required") from exc
+                if exc.code == 404:
+                    raise TtsEngineExhausted(model, "model is not available (HTTP 404)") from exc
+                if exc.code == 429:
+                    quota_kind = _gemini_tts_quota_kind(body)
+                    if quota_kind == "daily":
+                        raise TtsEngineExhausted(model, "daily free quota exhausted") from exc
+                    if attempt < len(GEMINI_TTS_RETRY_DELAYS):
+                        retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                        try:
+                            delay = max(GEMINI_TTS_RETRY_DELAYS[attempt], int(retry_after or 0))
+                        except ValueError:
+                            delay = GEMINI_TTS_RETRY_DELAYS[attempt]
+                        print(
+                            f"Gemini TTS {quota_kind} quota HTTP 429 for {model}; retrying in {delay}s "
+                            f"({attempt + 1}/{len(GEMINI_TTS_RETRY_DELAYS)})",
+                            flush=True,
+                        )
+                        time.sleep(delay)
+                        continue
+                    raise TtsEngineExhausted(model, "rate limit persisted") from exc
+                if exc.code in (401, 403):
+                    raise RuntimeError(f"Gemini TTS authentication failed with HTTP {exc.code}") from exc
+                raise RuntimeError(f"Gemini TTS model {model} failed with HTTP {exc.code}") from exc
         if result is None:
             raise RuntimeError("Gemini TTS returned no result")
         audio = base64.b64decode(_gemini_audio_data(result), validate=True)
@@ -792,21 +773,135 @@ def gemini_tts_one(text: str, out: Path):
             raise RuntimeError("Gemini TTS returned invalid or empty WAV audio")
         wav_path.write_bytes(audio)
         run([ffmpeg(), "-y", "-i", str(wav_path), "-c:a", "libmp3lame", "-b:a", "160k", str(out)])
-        return selected_model
+        return model
     finally:
         wav_path.unlink(missing_ok=True)
 
-async def tts_one(text: str, out: Path):
+
+TTS_USAGE_PATH = ROOT / "config" / "tts_usage.json"
+GOOGLE_CLOUD_PREFIX = "google-cloud:"
+
+
+def _google_cloud_config() -> dict:
+    config = SETTINGS.get("google_cloud_tts") or {}
+    return config if isinstance(config, dict) else {}
+
+
+def _google_cloud_voices() -> list[dict]:
+    config = _google_cloud_config()
+    if not config.get("enabled") or not SECRETS.get("GOOGLE_CLOUD_TTS_API_KEY"):
+        return []
+    return [voice for voice in config.get("voices") or [] if voice.get("name") and voice.get("tier")]
+
+
+def _usage_month() -> str:
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m")
+
+
+def google_cloud_usage(tier: str) -> int:
+    usage = json.loads(TTS_USAGE_PATH.read_text(encoding="utf-8")) if TTS_USAGE_PATH.exists() else {}
+    return int(usage.get(_usage_month(), {}).get(tier, 0))
+
+
+def google_cloud_remaining(tier: str) -> int:
+    cap = int((_google_cloud_config().get("monthly_char_caps") or {}).get(tier, 0))
+    return max(0, cap - google_cloud_usage(tier))
+
+
+def _record_google_cloud_usage(tier: str, characters: int) -> None:
+    usage = json.loads(TTS_USAGE_PATH.read_text(encoding="utf-8")) if TTS_USAGE_PATH.exists() else {}
+    month = usage.setdefault(_usage_month(), {})
+    month[tier] = int(month.get(tier, 0)) + characters
+    TTS_USAGE_PATH.write_text(json.dumps(usage, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _split_utf8(text: str, limit: int) -> list[str]:
+    """Split text on sentence boundaries into pieces of at most `limit` UTF-8 bytes."""
+    pieces, current = [], ""
+    for sentence in re.split(r"(?<=[.!؟?،\n])\s+", text):
+        candidate = f"{current} {sentence}" if current else sentence
+        if len(candidate.encode("utf-8")) <= limit:
+            current = candidate
+            continue
+        if current:
+            pieces.append(current)
+        current = ""
+        words = sentence.split(" ")
+        for word in words:
+            candidate = f"{current} {word}" if current else word
+            if len(candidate.encode("utf-8")) <= limit:
+                current = candidate
+            else:
+                if current:
+                    pieces.append(current)
+                current = word
+    if current:
+        pieces.append(current)
+    return [piece.strip() for piece in pieces if piece.strip()]
+
+
+def google_cloud_tts_one(text: str, out: Path, voice: dict):
+    api_key = SECRETS.get("GOOGLE_CLOUD_TTS_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("GOOGLE_CLOUD_TTS_API_KEY is missing")
+    tier, name = voice["tier"], voice["name"]
+    engine = GOOGLE_CLOUD_PREFIX + name
+    # Hard free-tier guard: never send a request that would cross the monthly cap.
+    if len(text) > google_cloud_remaining(tier):
+        raise TtsEngineExhausted(engine, f"monthly {tier} character cap reached")
+    config = _google_cloud_config()
+    parts = []
+    try:
+        for index, piece in enumerate(_split_utf8(text, int(config.get("max_request_bytes", 4500)))):
+            body = json.dumps({
+                "input": {"text": piece},
+                "voice": {"languageCode": config.get("language_code", "ar-XA"), "name": name},
+                "audioConfig": {"audioEncoding": "MP3", "speakingRate": float(config.get("speaking_rate", 1.0))},
+            }, ensure_ascii=False).encode("utf-8")
+            request = urllib.request.Request(
+                "https://texttospeech.googleapis.com/v1/text:synthesize",
+                data=body,
+                method="POST",
+                headers={"x-goog-api-key": api_key, "Content-Type": "application/json; charset=utf-8"},
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=240) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                if exc.code in (402, 429):
+                    raise TtsEngineExhausted(engine, f"HTTP {exc.code}") from exc
+                raise RuntimeError(f"Google Cloud TTS {name} failed with HTTP {exc.code}") from exc
+            _record_google_cloud_usage(tier, len(piece))
+            part = out.with_suffix(f".part{index:03d}.mp3")
+            part.write_bytes(base64.b64decode(result["audioContent"], validate=True))
+            parts.append(part)
+        listing = out.with_suffix(".parts.txt")
+        listing.write_text("".join(f"file '{p.as_posix()}'\n" for p in parts), encoding="utf-8")
+        run([ffmpeg(), "-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-c:a", "libmp3lame", "-b:a", "160k", str(out)])
+        listing.unlink(missing_ok=True)
+        return engine
+    finally:
+        for part in parts:
+            part.unlink(missing_ok=True)
+
+
+def tts_engines() -> list[str]:
+    """Ordered voice engines for one episode; an episode never mixes engines."""
+    return [*_gemini_tts_models(), *(GOOGLE_CLOUD_PREFIX + v["name"] for v in _google_cloud_voices())]
+
+
+async def tts_one(text: str, out: Path, engine: str = ""):
     provider = SETTINGS.get("tts_provider", "edge").lower()
     if provider in ("fish", "munsit", "gemini"):
         last_error = None
         for attempt in range(3):
             try:
-                worker = {
-                    "fish": fish_tts_one,
-                    "munsit": munsit_tts_one,
-                    "gemini": gemini_tts_one,
-                }[provider]
+                if provider == "gemini" and engine.startswith(GOOGLE_CLOUD_PREFIX):
+                    voice = next(v for v in _google_cloud_voices() if GOOGLE_CLOUD_PREFIX + v["name"] == engine)
+                    return await asyncio.to_thread(google_cloud_tts_one, text, out, voice)
+                if provider == "gemini":
+                    return await asyncio.to_thread(gemini_tts_one, text, out, engine or _gemini_tts_models()[0])
+                worker = {"fish": fish_tts_one, "munsit": munsit_tts_one}[provider]
                 return await asyncio.to_thread(worker, text, out)
             except RuntimeError as exc:
                 if "BLOCKED_COST" in str(exc):
@@ -821,6 +916,7 @@ async def tts_one(text: str, out: Path):
         raise RuntimeError(f"{provider} transient request failed after 3 attempts: {type(last_error).__name__}") from last_error
     await edge_tts_one(text, out)
     return "edge"
+
 
 def voice_metadata() -> dict:
     provider = SETTINGS.get("tts_provider", "edge").lower()
@@ -997,47 +1093,78 @@ async def synthesize(story: Path):
     valid_names = {src.name for src in text_sources}
     new_hashes = {name: value for name, value in old_hashes.items() if name in valid_names}
     chunk_models = {name: value for name, value in old_models.items() if name in valid_names}
-    for src in text_sources:
-        out = adir / (src.stem + ".mp3")
-        text = src.read_text(encoding="utf-8")
-        provider_voice_id = (
-            SECRETS.get("FISH_VOICE_ID", "") if provider == "fish"
-            else SECRETS.get("MUNSIT_VOICE_ID", "") if provider == "munsit"
-            else SECRETS.get("GEMINI_TTS_VOICE_ID", "") if provider == "gemini"
-            else SETTINGS.get("tts_voice", "")
-        )
-        provider_model = (
-            SETTINGS.get("fish_model", "s2.1-pro-free") if provider == "fish"
-            else SETTINGS.get("munsit_model", "faseeh-v1-preview") if provider == "munsit"
-            else SETTINGS.get("gemini_tts_model", "gemini-3.8-flash-tts") if provider == "gemini"
-            else "edge"
-        )
-        source_hash = hashlib.sha256(
-            (
-                TTS_AUDIO_CACHE_VERSION
-                + "\n"
-                + provider
-                + "\n"
-                + provider_model
-                + "\n"
-                + provider_voice_id
-                + "\n"
-                + text
-            ).encode("utf-8")
-        ).hexdigest()
-        new_hashes[src.name] = source_hash
-        if out.exists() and out.stat().st_size > 1024 and old_hashes.get(src.name) == source_hash:
-            chunk_models[src.name] = old_models.get(src.name, provider_model)
-            hash_path.write_text(json.dumps(new_hashes, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
-            model_path.write_text(json.dumps(chunk_models, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
-            continue
-        actual_model = await tts_one(text, out)
-        chunk_models[src.name] = actual_model or provider_model
-        if out.stat().st_size <= 1024: raise RuntimeError(f"empty audio chunk: {out}")
-        # Persist progress after every successful chunk so an interrupted run
-        # resumes from the next missing/stale chunk instead of starting over.
-        hash_path.write_text(json.dumps(new_hashes, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
-        model_path.write_text(json.dumps(chunk_models, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+    # One voice engine per episode. If the locked engine runs out mid-episode,
+    # all chunks are discarded and the whole narration is regenerated with the
+    # next engine, so two voices are never mixed in one episode.
+    lock_path = story / "logs" / "tts_voice_lock.json"
+    engines = tts_engines() if provider == "gemini" else [""]
+    locked = json.loads(lock_path.read_text(encoding="utf-8")).get("engine", "") if lock_path.exists() else ""
+    engine_index = engines.index(locked) if locked in engines else 0
+    while True:
+        engine = engines[engine_index]
+        if provider == "gemini":
+            lock_path.write_text(json.dumps({"engine": engine}, ensure_ascii=False) + "\n", encoding="utf-8")
+        try:
+            if engine.startswith(GOOGLE_CLOUD_PREFIX):
+                voice = next(v for v in _google_cloud_voices() if GOOGLE_CLOUD_PREFIX + v["name"] == engine)
+                needed = sum(len(src.read_text(encoding="utf-8")) for src in text_sources)
+                if needed > google_cloud_remaining(voice["tier"]):
+                    raise TtsEngineExhausted(engine, f"episode needs {needed} characters; monthly cap would be exceeded")
+            for src in text_sources:
+                out = adir / (src.stem + ".mp3")
+                text = src.read_text(encoding="utf-8")
+                provider_voice_id = (
+                    SECRETS.get("FISH_VOICE_ID", "") if provider == "fish"
+                    else SECRETS.get("MUNSIT_VOICE_ID", "") if provider == "munsit"
+                    else SECRETS.get("GEMINI_TTS_VOICE_ID", "") if provider == "gemini"
+                    else SETTINGS.get("tts_voice", "")
+                )
+                provider_model = (
+                    SETTINGS.get("fish_model", "s2.1-pro-free") if provider == "fish"
+                    else SETTINGS.get("munsit_model", "faseeh-v1-preview") if provider == "munsit"
+                    else engine if provider == "gemini"
+                    else "edge"
+                )
+                source_hash = hashlib.sha256(
+                    (
+                        TTS_AUDIO_CACHE_VERSION
+                        + "\n"
+                        + provider
+                        + "\n"
+                        + provider_model
+                        + "\n"
+                        + provider_voice_id
+                        + "\n"
+                        + text
+                    ).encode("utf-8")
+                ).hexdigest()
+                new_hashes[src.name] = source_hash
+                if (
+                    out.exists() and out.stat().st_size > 1024 and old_hashes.get(src.name) == source_hash
+                    and old_models.get(src.name, provider_model) == provider_model
+                ):
+                    chunk_models[src.name] = old_models.get(src.name, provider_model)
+                    hash_path.write_text(json.dumps(new_hashes, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+                    model_path.write_text(json.dumps(chunk_models, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+                    continue
+                actual_model = await tts_one(text, out, engine)
+                chunk_models[src.name] = actual_model or provider_model
+                if out.stat().st_size <= 1024: raise RuntimeError(f"empty audio chunk: {out}")
+                # Persist progress after every successful chunk so an interrupted run
+                # resumes from the next missing/stale chunk instead of starting over.
+                hash_path.write_text(json.dumps(new_hashes, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+                model_path.write_text(json.dumps(chunk_models, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+            break
+        except TtsEngineExhausted as exc:
+            if engine_index + 1 >= len(engines):
+                raise
+            print(f"{exc}; regenerating the whole narration with {engines[engine_index + 1]}", flush=True)
+            for stale in adir.glob("*.mp3"):
+                stale.unlink()
+            old_hashes, old_models, new_hashes, chunk_models = {}, {}, {}, {}
+            hash_path.unlink(missing_ok=True)
+            model_path.unlink(missing_ok=True)
+            engine_index += 1
     valid_stems = {path.stem for path in tdir.glob("*.txt")}
     for stale_audio in adir.glob("*.mp3"):
         if stale_audio.stem not in valid_stems:

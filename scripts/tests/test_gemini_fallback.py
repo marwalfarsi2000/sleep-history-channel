@@ -44,7 +44,8 @@ class GeminiFallbackTests(unittest.TestCase):
             "llm_fallback_models": ["gemini-3.5-flash-lite"],
             "cost_policy": "free_or_preapproved_only",
             "approved_llm_models": ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"],
-        }), mock.patch.object(generate_daily, "load_secrets", return_value={"GEMINI_API_KEY": "test"}), \
+        }), mock.patch.object(generate_daily, "MODEL", "gemini-3.1-flash-lite"), \
+             mock.patch.object(generate_daily, "load_secrets", return_value={"GEMINI_API_KEY": "test"}), \
              mock.patch.object(generate_daily, "GEMINI_RETRY_DELAYS", ()), \
              mock.patch.object(generate_daily.urllib.request, "urlopen", side_effect=responses) as urlopen:
             text, _sources = generate_daily.gemini("prompt")
@@ -81,7 +82,7 @@ class GeminiFallbackTests(unittest.TestCase):
                 '{"error":{"status":"RESOURCE_EXHAUSTED",'
                 '"message":"GenerateRequestsPerDayPerProjectPerModel-FreeTier"}}',
             )
-            for _ in range(2)
+            for _ in range(len(generate_daily._llm_models()))
         ]
         with mock.patch.object(generate_daily, "load_secrets", return_value={"GEMINI_API_KEY": "test"}), \
              mock.patch.object(generate_daily.urllib.request, "urlopen", side_effect=errors), \
@@ -90,6 +91,25 @@ class GeminiFallbackTests(unittest.TestCase):
                 generate_daily.gemini("prompt")
 
         sleep.assert_not_called()
+
+    def test_retired_model_is_skipped_and_research_fallbacks_only_for_search(self):
+        success = {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}
+        responses = [_http_error(404, '{"error":{"status":"NOT_FOUND"}}'), _Response(success)]
+        settings = {
+            "llm_fallback_models": ["gemini-3.1-flash-lite"],
+            "research_fallback_models": ["gemini-2.5-flash"],
+            "cost_policy": "free_or_preapproved_only",
+            "approved_llm_models": ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash"],
+        }
+        with mock.patch.object(generate_daily, "SETTINGS", settings), \
+             mock.patch.object(generate_daily, "MODEL", "gemini-3.5-flash-lite"):
+            self.assertEqual(generate_daily._llm_models(), ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"])
+            self.assertEqual(generate_daily._llm_models(search=True)[-1], "gemini-2.5-flash")
+            with mock.patch.object(generate_daily, "load_secrets", return_value={"GEMINI_API_KEY": "test"}), \
+                 mock.patch.object(generate_daily.urllib.request, "urlopen", side_effect=responses) as urlopen:
+                text, _ = generate_daily.gemini("prompt")
+        self.assertEqual(text, "ok")
+        self.assertIn("gemini-3.1-flash-lite", urlopen.call_args_list[1].args[0].full_url)
 
 
 if __name__ == "__main__":

@@ -27,7 +27,7 @@ def latest_unfinished_story(root: Path = ROOT) -> str | None:
             status == "pending_approval"
             and not item.get("archive_identifier")
         )
-        review_incomplete = status == "READY_FOR_APPROVAL" and not item.get("review_run_id")
+        review_incomplete = status == "READY_FOR_APPROVAL" and not item.get("archive_identifier")
         if (status in {"generating", "drafting"} or upload_incomplete or review_incomplete) and item.get("story_path"):
             return PurePosixPath(str(item["story_path"]).replace("\\", "/")).as_posix()
     return None

@@ -6,10 +6,27 @@
   "tts_voice": "ar-AE-FatimaNeural",
   "tts_rate": "+0%",
   "llm_provider": "gemini",
-  "llm_model": "gemini-3.1-flash-lite",
-  "llm_fallback_models": ["gemini-3.5-flash-lite"],
+  "llm_model": "gemini-3.5-flash-lite",
+  "llm_fallback_models": [
+    "gemini-3.1-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-3-flash-preview"
+  ],
+  "research_fallback_models": [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite"
+  ],
   "cost_policy": "free_or_preapproved_only",
-  "approved_llm_models": ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"],
+  "approved_llm_models": [
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite"
+  ],
   "image_provider": "cloudflare_workers_ai",
   "image_model": "@cf/black-forest-labs/flux-1-schnell",
   "image_steps": 4,
@@ -28,8 +45,35 @@
   "munsit_sample_rate": 48000,
   "munsit_dialect": "fusha",
   "gemini_tts_model": "gemini-3.8-flash-tts",
-  "gemini_tts_fallback_models": ["gemini-3.8-flash-lite-tts"],
-  "approved_tts_models": ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"],
+  "gemini_tts_fallback_models": [
+    "gemini-3.8-flash-lite-tts"
+  ],
+  "google_cloud_tts": {
+    "enabled": true,
+    "language_code": "ar-XA",
+    "speaking_rate": 1.0,
+    "voices": [
+      {
+        "name": "ar-XA-Wavenet-B",
+        "tier": "wavenet"
+      },
+      {
+        "name": "ar-XA-Standard-B",
+        "tier": "standard"
+      }
+    ],
+    "monthly_char_caps": {
+      "wavenet": 900000,
+      "standard": 3600000
+    },
+    "max_request_bytes": 4500
+  },
+  "approved_tts_models": [
+    "gemini-3.8-flash-tts",
+    "gemini-3.8-flash-lite-tts",
+    "google-cloud:ar-XA-Wavenet-B",
+    "google-cloud:ar-XA-Standard-B"
+  ],
   "max_tts_chunks_per_episode": 40,
   "audio_transcript_qc": true,
   "audio_qc_model": "gemini-3.1-flash-lite",
@@ -55,4 +99,3 @@
   "target_max_seconds": 3900,
   "publish_requires": "APPROVE_AND_PUBLISH"
 }
-

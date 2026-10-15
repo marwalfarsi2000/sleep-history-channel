@@ -68,7 +68,7 @@ def metadata_for_story(story: Path, identifier: str) -> dict[str, str | list[str
         "language": "ara",
         "subject": ["Arabic", "sleep story", "history", "documentary"],
         "licenseurl": SETTINGS.get("archive_license_url", "https://creativecommons.org/licenses/by-nc-nd/4.0/"),
-        "approval_status": "APPROVED_FOR_PUBLISH",
+        "approval_status": "REVIEW_PENDING",
         "slug": data["slug"],
     }
 
@@ -201,7 +201,7 @@ def finalize_story(story: Path, identifier: str, verified: dict) -> dict:
         "slug": metadata["slug"],
         "title": metadata["title"],
         "created_at": metadata.get("created_at"),
-        "status": "APPROVED_FOR_PUBLISH",
+        "status": "REVIEW_PENDING",
         "video_filename": "14_video_final.mp4",
         "item_url": f"https://archive.org/details/{identifier}",
         "video_url": public_file_url(identifier, "14_video_final.mp4"),
@@ -216,7 +216,7 @@ def finalize_story(story: Path, identifier: str, verified: dict) -> dict:
     history = json.loads(history_path.read_text(encoding="utf-8"))
     for item in history:
         if item.get("slug") == metadata["slug"]:
-            item["status"] = "APPROVED_FOR_PUBLISH"
+            item["status"] = "REVIEW_PENDING"
             item["archive_identifier"] = identifier
             item["archive_url"] = record["item_url"]
             item.pop("story_path", None)

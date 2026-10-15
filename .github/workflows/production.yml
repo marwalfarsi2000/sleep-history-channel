@@ -45,7 +45,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python scripts/restore_failure_checkpoint.py
-      - name: Produce private review package
+      - name: Produce and upload review copy to Internet Archive
         id: produce
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -56,6 +56,7 @@ jobs:
           POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
           IAS3_ACCESS_KEY: ${{ secrets.IAS3_ACCESS_KEY }}
           IAS3_SECRET_KEY: ${{ secrets.IAS3_SECRET_KEY }}
+          GOOGLE_CLOUD_TTS_API_KEY: ${{ secrets.GOOGLE_CLOUD_TTS_API_KEY }}
           PINK_NOISE_URL: ${{ secrets.PINK_NOISE_URL }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -66,15 +67,6 @@ jobs:
           else
             python scripts/cloud_pipeline.py produce
           fi
-      - name: Save private review package
-        if: success() && inputs.resume_archive_only != true
-        uses: actions/upload-artifact@v4
-        with:
-          name: sleep-history-review-${{ github.run_id }}
-          path: |
-            stories/**
-          if-no-files-found: error
-          retention-days: 30
       - name: Request owner review
         if: success() && inputs.resume_archive_only != true
         env:
@@ -96,9 +88,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sleep-history-failure-${{ github.run_id }}
+          # Small state and logs only: video and audio never go to GitHub.
           path: |
             logs/*.log
             stories/**
+            !stories/**/*.mp4
+            !stories/**/*.mp3
+            !stories/**/*.wav
+            !stories/**/*.m4a
+            !stories/**/*.opus
           if-no-files-found: warn
           retention-days: 7
       - name: Persist topic and archive catalogues
@@ -106,7 +104,7 @@ jobs:
         run: |
           git config user.name "sleep-history-bot"
           git config user.email "marwalfarsi2000@gmail.com"
-          git add config/topics_history.json config/archive_index.json
+          git add config/topics_history.json config/archive_index.json config/tts_usage.json
           if ! git diff --cached --quiet; then
             git commit -m "Update sleep history catalogue"
             git push

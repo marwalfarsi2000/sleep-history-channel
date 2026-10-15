@@ -150,7 +150,7 @@ class TtsGuardTests(unittest.TestCase):
             ), mock.patch.object(pipeline.urllib.request, "urlopen", fake_urlopen), mock.patch.object(
                 pipeline, "run", fake_run
             ):
-                pipeline.gemini_tts_one("نَصٌّ هادِئٌ.", output)
+                pipeline.gemini_tts_one("نَصٌّ هادِئٌ.", output, "gemini-3.8-flash-tts")
             self.assertTrue(output.exists())
 
         payload = captured["payload"]
@@ -189,7 +189,7 @@ class TtsGuardTests(unittest.TestCase):
             ), mock.patch.object(pipeline.urllib.request, "urlopen", fake_urlopen), mock.patch.object(
                 pipeline.time, "sleep"
             ) as sleep, mock.patch.object(pipeline, "run", fake_run):
-                pipeline.gemini_tts_one("نَصٌّ هادِئٌ.", output)
+                pipeline.gemini_tts_one("نَصٌّ هادِئٌ.", output, "gemini-3.8-flash-tts")
             self.assertTrue(output.exists())
             sleep.assert_called_once_with(60)
 
@@ -209,14 +209,10 @@ class TtsGuardTests(unittest.TestCase):
                 pipeline.urllib.request, "urlopen", side_effect=[daily_error(), daily_error()]
             ), mock.patch.object(pipeline.time, "sleep") as sleep:
                 with self.assertRaisesRegex(RuntimeError, "daily free quota exhausted"):
-                    pipeline.gemini_tts_one("نَصٌّ هادِئٌ.", output)
+                    pipeline.gemini_tts_one("نَصٌّ هادِئٌ.", output, "gemini-3.8-flash-tts")
             sleep.assert_not_called()
 
-    def test_gemini_daily_quota_uses_free_fallback_model(self):
-        wav = b"RIFF" + b"0" * 2048
-        response = _FakeResponse(json.dumps({
-            "output_audio": {"data": base64.b64encode(wav).decode("ascii")}
-        }).encode("utf-8"))
+    def test_gemini_daily_quota_never_switches_model_inside_a_chunk(self):
         daily_error = urllib.error.HTTPError(
             "https://example.invalid", 429, "Too Many Requests", {},
             io.BytesIO(b'{"quotaId":"GenerateRequestsPerDayPerProjectPerModel"}')
@@ -225,12 +221,7 @@ class TtsGuardTests(unittest.TestCase):
 
         def fake_urlopen(request, timeout):
             requested_models.append(json.loads(request.data.decode("utf-8"))["model"])
-            if len(requested_models) == 1:
-                raise daily_error
-            return response
-
-        def fake_run(command, check=True):
-            Path(command[-1]).write_bytes(b"ID3" + b"0" * 2048)
+            raise daily_error
 
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder) / "sample.mp3"
@@ -238,16 +229,40 @@ class TtsGuardTests(unittest.TestCase):
                 pipeline.SECRETS,
                 {"GEMINI_API_KEY": "test-key", "GEMINI_TTS_VOICE_ID": "voice-test"},
                 clear=False,
-            ), mock.patch.object(pipeline.urllib.request, "urlopen", fake_urlopen), mock.patch.object(
-                pipeline, "run", fake_run
-            ):
-                pipeline.gemini_tts_one("نَصٌّ هادِئٌ.", output)
-            self.assertTrue(output.exists())
+            ), mock.patch.object(pipeline.urllib.request, "urlopen", fake_urlopen):
+                with self.assertRaises(pipeline.TtsEngineExhausted):
+                    pipeline.gemini_tts_one("text", output, "gemini-3.8-flash-tts")
 
-        self.assertEqual(requested_models, [
-            "gemini-3.8-flash-tts",
-            "gemini-3.8-flash-lite-tts",
-        ])
+        # No in-chunk switch: the episode-level lock in synthesize() picks the next engine.
+        self.assertEqual(requested_models, ["gemini-3.8-flash-tts"])
+
+    def test_google_cloud_cap_blocks_before_any_request(self):
+        with tempfile.TemporaryDirectory() as folder:
+            usage = Path(folder) / "tts_usage.json"
+            usage.write_text(json.dumps({pipeline._usage_month(): {"wavenet": 899_990}}), encoding="utf-8")
+            with mock.patch.object(pipeline, "TTS_USAGE_PATH", usage), \
+                 mock.patch.dict(pipeline.SECRETS, {"GOOGLE_CLOUD_TTS_API_KEY": "test"}, clear=False), \
+                 mock.patch.object(pipeline.urllib.request, "urlopen") as urlopen:
+                with self.assertRaisesRegex(pipeline.TtsEngineExhausted, "cap"):
+                    pipeline.google_cloud_tts_one(
+                        "longer than the remaining allowance",
+                        Path(folder) / "x.mp3",
+                        {"name": "ar-XA-Wavenet-B", "tier": "wavenet"},
+                    )
+            urlopen.assert_not_called()
+
+    def test_google_cloud_request_pieces_respect_byte_limit(self):
+        text = ("جُمْلَةٌ هادِئَةٌ. " * 400).strip()
+        pieces = pipeline._split_utf8(text, 4500)
+        self.assertGreater(len(pieces), 1)
+        self.assertTrue(all(len(piece.encode("utf-8")) <= 4500 for piece in pieces))
+        self.assertEqual(" ".join(pieces).split(), text.split())
+
+    def test_engine_order_puts_cloud_voices_after_gemini(self):
+        with mock.patch.dict(pipeline.SECRETS, {"GOOGLE_CLOUD_TTS_API_KEY": "test"}, clear=False):
+            engines = pipeline.tts_engines()
+        self.assertEqual(engines[:2], ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"])
+        self.assertEqual(engines[2:], ["google-cloud:ar-XA-Wavenet-B", "google-cloud:ar-XA-Standard-B"])
 
     def test_gemini_uses_larger_free_quota_chunks(self):
         sentence = "هٰذِهِ جُمْلَةٌ تاريخيةٌ هادئةٌ ومُشَكَّلَةٌ بعناية."
