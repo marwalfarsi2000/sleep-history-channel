@@ -27,15 +27,21 @@ class _FakeResponse:
 
 
 class TtsGuardTests(unittest.TestCase):
-    def test_pausal_taa_marbuta_drops_only_final_marks(self):
-        source = "في مَدِينَةٍ عَمِيقَةٍ، كانَتِ الرِّحْلَةُ عَمِيقَةً؟"
+    def test_pausal_form_removes_all_marks_from_every_sentence_final_word(self):
+        source = "في مَدِينَةٍ عَمِيقَةٍ، كانَتِ الرِّحْلَةُ عَمِيقَةً؟ ثُمَّ عادَ المُسَافِرُ!"
         result = pipeline.api_text(source)
         self.assertIn("مَدِينَةٍ عَمِيقَةٍ،", result)
-        self.assertTrue(result.endswith("عَمِيقَة؟"))
-        self.assertNotRegex(
-            result,
-            r"ة[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]+(?=\s*[.!؟…؛]|\s*$)",
+        self.assertIn("الرِّحْلَةُ عميقة؟", result)
+        self.assertTrue(result.endswith("المسافر!"))
+        self.assertEqual(pipeline.vocalized_sentence_final_words(result), [])
+
+    def test_pausal_guard_finds_any_vocalized_sentence_final_word(self):
+        self.assertEqual(
+            pipeline.vocalized_sentence_final_words("هذا طَرِيقٌ هادِئٌ."),
+            ["هادِئٌ"],
         )
+        with self.assertRaisesRegex(RuntimeError, "TTS_PAUSAL_ENDINGS_FAILED"):
+            pipeline.require_pausal_sentence_endings("هذا طَرِيقٌ هادِئٌ.")
 
     def test_fish_request_uses_native_speed(self):
         captured = {}

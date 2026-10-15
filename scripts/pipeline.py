@@ -97,7 +97,7 @@ ARABIC_DIRECTION_TAGS = {
 }
 DIACRITICS_RE = re.compile(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]")
 DIRECTION_RE = re.compile(r"\[[^\]\n]{1,100}\]")
-DIACRITIZATION_VERSION = "full-v6-double-reviewed-pausal-taa-marbuta"
+DIACRITIZATION_VERSION = "full-v7-double-reviewed-pausal-final-words"
 TTS_AUDIO_CACHE_VERSION = "native-speed-1.0-v2"
 _DIACRITIZATION_LAST_REQUEST_AT = 0.0
 MALFORMED_DIACRITIC_PATTERNS = (
@@ -233,6 +233,37 @@ def normalize_arabic_diacritics(text: str) -> str:
     text = re.sub(r"([َُِّْ])\1+", r"\1", text)
     return text
 
+
+SENTENCE_FINAL_WORD_RE = re.compile(
+    r"((?:[\u0621-\u064A][\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]*)+)"
+    r"(?=\s*(?:[.!؟…]+|$))"
+)
+
+
+def apply_pausal_sentence_endings(text: str) -> str:
+    """Leave every sentence-final Arabic word unvocalized for natural waqf."""
+    return SENTENCE_FINAL_WORD_RE.sub(
+        lambda match: DIACRITICS_RE.sub("", match.group(1)),
+        text,
+    )
+
+
+def vocalized_sentence_final_words(text: str) -> list[str]:
+    return [
+        match.group(1)
+        for match in SENTENCE_FINAL_WORD_RE.finditer(text)
+        if DIACRITICS_RE.search(match.group(1))
+    ]
+
+
+def require_pausal_sentence_endings(text: str) -> None:
+    vocalized_endings = vocalized_sentence_final_words(text)
+    if vocalized_endings:
+        raise RuntimeError(
+            "TTS_PAUSAL_ENDINGS_FAILED: vocalized sentence-final words: "
+            + json.dumps(vocalized_endings[:5], ensure_ascii=False)
+        )
+
 def merge_reviewed_diacritics(primary: str, reviewed: str) -> str:
     """Keep second-pass corrections without allowing it to drop first-pass marks."""
     def graphemes(value: str) -> list[str]:
@@ -346,9 +377,9 @@ def diacritize_and_annotate(clean_story: str, cache_dir: Path | None = None, lim
 
 المطلوب:
 1. أعد النص نفسه حرفيًا دون حذف أو إضافة أو استبدال أي كلمة أو رقم أو علامة ترقيم.
-2. ضع التشكيل العربي الكامل الصحيح: الفتحة والضمة والكسرة والسكون والشدة والتنوين حيث يلزم.
+2. ضع التشكيل العربي الكامل الصحيح في نسخة المراجعة، بما في ذلك الكلمات الأخيرة: الفتحة والضمة والكسرة والسكون والشدة والتنوين حيث يلزم. ستُحذف علامات تشكيل آخر كلمة في كل جملة آليًا لاحقًا من نسخة TTS فقط لتطبيق الوقف.
 3. راعِ السياق النحوي والدلالي، وثبّت نطق أسماء الأشخاص والمدن والمصطلحات التاريخية بصورة متسقة.
-4. استخدم الوقف العربي الطبيعي في نهاية الجمل؛ لا تخمّن حركة إعرابية أخيرة عند موضع الوقف.
+4. راجع النطق الداخلي للكلمة الأخيرة بدقة، ولا تحذف حروفًا أو تغيّر هجاءها؛ تطبيق الوقف وحذف تشكيلها من نسخة TTS يتمان آليًا بعد المراجعة.
 5. في كلمات مثل «الازدهار» و«الاستقرار»، ضع الكسرة على ألف الوصل هكذا «الاِزْدِهَار» و«الاِسْتِقْرَار»، ولا تكتب «الِازدهار».
 6. لا تضف أي وسم أداء أو عنوان أو شرح أو Markdown أو أقواس جديدة.
 7. لا تصحح الإملاء ولا الأسلوب؛ أضف الحركات فقط إلى الحروف العربية الموجودة.
@@ -390,7 +421,7 @@ def diacritize_and_annotate(clean_story: str, cache_dir: Path | None = None, lim
 راجع التشكيل في النسخة المرشحة مقابل النص الأصلي، وصحح الحركات الخاطئة فقط.
 - لا تحذف أو تضف أو تستبدل أي حرف أو كلمة أو رقم أو علامة ترقيم.
 - راجع الأسماء التاريخية والجغرافية، الشدات، همزات الوصل والقطع، وبنية الكلمات في سياق الجملة.
-- اجعل أواخر الجمل ملائمة للوقف الصوتي الطبيعي، ولا تفرض حركة إعراب غير مؤكدة عند الوقف.
+- راجع الكلمات الأخيرة مشكولة بالكامل هنا لتثبيت نطقها، ولا تغيّر حروفها؛ ستزال جميع علامات تشكيل آخر كلمة في كل جملة آليًا من نسخة TTS لتطبيق الوقف الطبيعي.
 - لا تضف أقواسًا أو وسوم أداء أو شروحًا أو Markdown.
 - أخرج النص المصحح فقط.
 
@@ -442,15 +473,10 @@ def diacritize_and_annotate(clean_story: str, cache_dir: Path | None = None, lim
 def api_text(text: str) -> str:
     # Never send bracketed production cues to the speech provider.
     text = without_direction_tags(text)
-    # Fish can pronounce a fully inflected final taa marbuta as /t/ at a stop
-    # (for example عَمِيقَةً -> "عميقت").  In Arabic pausal reading the final
-    # short case ending/tanween is dropped, so keep the internal diacritics but
-    # remove only the marks attached to a sentence-final taa marbuta.
-    text = re.sub(
-        r"ة[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]*(?=\s*[.!؟…؛]|\s*$)",
-        "ة",
-        text,
-    )
+    # The TTS-facing copy uses Arabic pausal reading: keep the reviewed spelling
+    # but remove every mark from the last word of each complete sentence.  This
+    # prevents engines from vocalizing case endings/tanween as connected speech.
+    text = apply_pausal_sentence_endings(text)
     # Fish respects punctuation and paragraph boundaries. A blank line after a
     # completed sentence creates a short natural pause without unsupported SSML.
     text = re.sub(r"\s*([.!؟])\s*", r"\1\n\n", text)
@@ -513,6 +539,7 @@ def pronunciation_validate(clean_story: str, annotated: str, story: Path) -> str
     prompt = f"""أنت بوابة نطق مستقلة لنص تاريخي عربي سيحوّل إلى صوت.
 راجع فقط أسماء الأشخاص والمدن والمواقع والسلالات والحضارات والكلمات الأجنبية المعربة.
 لا تغير الحقائق أو الكلمات. إذا كان التشكيل الحالي يسبب نطقًا خاطئًا، اقترح استبدالًا مشكولًا لنفس الحروف.
+هذه نسخة المراجعة المشكولة بالكامل. ستُحذف آليًا جميع علامات تشكيل آخر كلمة في كل جملة من نسخة TTS النهائية لتطبيق الوقف، فلا تقترح تغيير الحروف لهذا السبب.
 أعد JSON فقط:
 {{"status":"PASS أو FAIL","replacements":[{{"current":"النص المشكول المطابق حرفيًا","replacement":"نفس الحروف بتشكيل أصح","reason":"..."}}],"unresolved":[]}}
 
@@ -1189,6 +1216,7 @@ def prepare(story: Path):
             "post_processing_tempo": float(SETTINGS.get("post_tts_tempo", 1.0)),
         }, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
     clean = api_text(annotated)
+    require_pausal_sentence_endings(clean)
     api_faithful, _ = lexical_fidelity(clean_story, clean)
     if not api_faithful:
         raise RuntimeError("TTS API text differs lexically from the clean story")
@@ -1620,8 +1648,7 @@ def validate(story: Path):
         raise RuntimeError("TTS must generate at its normal speed 1.0")
     if float(SETTINGS.get("post_tts_tempo", 0)) != 1.0:
         raise RuntimeError("Post-processing tempo must remain at native speed 1.0")
-    if re.search(r"ة[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]+(?=\s*[.!؟…؛]|\s*$)", api_tts_text):
-        raise RuntimeError("API TTS text contains a vocalized taa marbuta at a pausal boundary")
+    require_pausal_sentence_endings(api_tts_text)
     sentence_boundaries=len(re.findall(r"[.!؟]\n\n", api_tts_text))
     if sentence_boundaries < 5:
         raise RuntimeError("TTS text does not contain enough sentence pause boundaries")
@@ -1654,7 +1681,7 @@ def validate(story: Path):
     long_silences=re.findall(r"silence_duration:\s*([0-9.]+)",silence.stderr)
     stats=subprocess.run([ffmpeg(),"-hide_banner","-i",str(story/"12_audio_full.mp3"),"-af","astats=metadata=1:reset=1","-f","null","-"],capture_output=True,text=True)
     duration_status="PASS" if SETTINGS["target_min_seconds"] <= ad <= SETTINGS["target_max_seconds"] else "FAIL"
-    validation={"audio_duration_seconds":round(ad,2),"video_duration_seconds":round(vd,2),"duration_status":duration_status,"tts_diacritization_status":"PASS_DOUBLE_REVIEWED_PAUSAL","pronunciation_validation_status":"PASS","tts_preparation_status":"PASS","diacritic_ratio":round(current_diacritic_ratio,4),"diacritization_engine":DIACRITIZATION_VERSION,"tts_generation_speed":float(SETTINGS.get("tts_generation_speed",1.0)),"post_processing_tempo":float(SETTINGS.get("post_tts_tempo",1.0)),"effective_speed":float(SETTINGS.get("post_tts_tempo",1.0)),"sentence_pause_strategy":SETTINGS.get("sentence_pause_strategy"),"sentence_pause_boundaries":sentence_boundaries,"pausal_taa_marbuta_status":"PASS","lexical_corrections_count":len(lexical_corrections),"lexical_corrections_preview":lexical_corrections[:20],"performance_tags":0,"long_silences_seconds":[float(x) for x in long_silences],"audio_chunks":len(list((story/"audio_chunks").glob("*.mp3"))),"tts_chunks":len(list((story/"tts_chunks").glob("*.txt"))),"zero_byte_files":[str(p) for p in story.rglob("*") if p.is_file() and p.stat().st_size==0]}
+    validation={"audio_duration_seconds":round(ad,2),"video_duration_seconds":round(vd,2),"duration_status":duration_status,"tts_diacritization_status":"PASS_DOUBLE_REVIEWED_PAUSAL","pronunciation_validation_status":"PASS","tts_preparation_status":"PASS","diacritic_ratio":round(current_diacritic_ratio,4),"diacritization_engine":DIACRITIZATION_VERSION,"tts_generation_speed":float(SETTINGS.get("tts_generation_speed",1.0)),"post_processing_tempo":float(SETTINGS.get("post_tts_tempo",1.0)),"effective_speed":float(SETTINGS.get("post_tts_tempo",1.0)),"sentence_pause_strategy":SETTINGS.get("sentence_pause_strategy"),"sentence_pause_boundaries":sentence_boundaries,"pausal_sentence_endings_status":"PASS","lexical_corrections_count":len(lexical_corrections),"lexical_corrections_preview":lexical_corrections[:20],"performance_tags":0,"long_silences_seconds":[float(x) for x in long_silences],"audio_chunks":len(list((story/"audio_chunks").glob("*.mp3"))),"tts_chunks":len(list((story/"tts_chunks").glob("*.txt"))),"zero_byte_files":[str(p) for p in story.rglob("*") if p.is_file() and p.stat().st_size==0]}
     (logs/"validation.json").write_text(json.dumps(validation,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     (logs/"ffmpeg_astats.txt").write_text(stats.stderr,encoding="utf-8")
     if validation["zero_byte_files"]: raise RuntimeError("zero-byte files found")

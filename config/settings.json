@@ -81,7 +81,7 @@
   "audio_transcript_similarity_min": 0.82,
   "gemini_tts_chunk_char_limit": 5600,
   "gemini_tts_voice_name": "راوي القصص 1",
-  "gemini_tts_style": "Warm, deep adult male Arabic historical narration in clear Modern Standard Arabic. Calm, intimate, gentle, low-energy, and strictly non-theatrical. Use soft rounded articulation, steady volume, natural pronunciation, and short comfortable pauses between sentences. No whispering, excitement, music, ambience, or sound effects.",
+  "gemini_tts_style": "Warm, deep adult male Arabic historical narration in clear Modern Standard Arabic. Calm, intimate, gentle, low-energy, and strictly non-theatrical. Use soft rounded articulation, steady volume, natural pronunciation, and short comfortable pauses between sentences. Read every sentence-final word in natural Arabic pausal form and never vocalize a grammatical case ending or tanween at the stop. No whispering, excitement, music, ambience, or sound effects.",
   "tts_generation_speed": 1.0,
   "post_tts_tempo": 1.0,
   "arabic_diacritization": "full",
