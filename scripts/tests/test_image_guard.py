@@ -18,13 +18,27 @@ class ImageCostGuardTests(unittest.TestCase):
         rejected = RuntimeError(
             'IMAGE_ACCURACY_GATE_FAILED: {"status": "FAIL", "issues": ["modern wires"]}'
         )
-        with mock.patch.object(
-            image_generate, "generate", side_effect=[rejected, None]
-        ) as generate, mock.patch.dict(
-            image_generate.SETTINGS, {"image_accuracy_retry_attempts": 3}
-        ):
-            image_generate.generate_with_accuracy_retries(Path("story"), seed=100)
-        self.assertEqual(generate.call_count, 2)
+        providers = []
+
+        def attempt(*_args):
+            providers.append(image_generate.SETTINGS["image_provider"])
+            if len(providers) == 1:
+                raise rejected
+
+        with tempfile.TemporaryDirectory() as directory:
+            story = Path(directory)
+            prompt = story / "08_image_prompt_en.txt"
+            prompt.write_text("A historical market", encoding="utf-8")
+            with mock.patch.object(image_generate, "generate", side_effect=attempt) as generate, \
+                 mock.patch.dict(image_generate.SETTINGS, {
+                     "image_accuracy_retry_attempts": 4,
+                     "image_provider": "cloudflare_workers_ai",
+                     "image_fallback_provider": "pollinations",
+                 }):
+                image_generate.generate_with_accuracy_retries(story, seed=100)
+                self.assertEqual(image_generate.SETTINGS["image_provider"], "cloudflare_workers_ai")
+            self.assertIn("no electricity", prompt.read_text(encoding="utf-8"))
+        self.assertEqual(providers, ["cloudflare_workers_ai", "pollinations"])
         self.assertEqual(generate.call_args_list[0].args[1], 100)
         self.assertEqual(generate.call_args_list[1].args[1], 101)
 

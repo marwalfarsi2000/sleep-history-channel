@@ -508,23 +508,41 @@ def generate(story: Path, seed: int | None = None) -> None:
 
 def generate_with_accuracy_retries(story: Path, seed: int | None = None) -> None:
     attempts = max(1, int(SETTINGS.get("image_accuracy_retry_attempts", 3)))
-    for attempt in range(attempts):
-        attempt_seed = seed + attempt if seed is not None else None
-        try:
-            generate(story, attempt_seed)
-            return
-        except RuntimeError as exc:
-            quality_rejection = (
-                str(exc).startswith("IMAGE_ACCURACY_GATE_FAILED: {")
-                and '"status": "FAIL"' in str(exc)
-            )
-            if not quality_rejection or attempt + 1 >= attempts:
-                raise
-            print(
-                f"Historical image rejected; generating a new candidate "
-                f"({attempt + 2}/{attempts})",
-                flush=True,
-            )
+    original_provider = SETTINGS.get("image_provider", "pollinations")
+    fallback = SETTINGS.get("image_fallback_provider")
+    prompt_path = story / "08_image_prompt_en.txt"
+    exclusion = (
+        "STRICT HISTORICAL EXCLUSION: no electricity, utility poles, power lines, "
+        "overhead wires, insulators, streetlights, vehicles, antennas, asphalt, "
+        "or any other modern infrastructure."
+    )
+    try:
+        for attempt in range(attempts):
+            if attempt and original_provider == "cloudflare_workers_ai" and fallback == "pollinations":
+                # A provider may reproduce the same rejected composition for an
+                # unchanged prompt. Switch model/provider as well as the seed.
+                SETTINGS["image_provider"] = "pollinations"
+            attempt_seed = seed + attempt if seed is not None else None
+            try:
+                generate(story, attempt_seed)
+                return
+            except RuntimeError as exc:
+                quality_rejection = (
+                    str(exc).startswith("IMAGE_ACCURACY_GATE_FAILED: {")
+                    and '"status": "FAIL"' in str(exc)
+                )
+                if not quality_rejection or attempt + 1 >= attempts:
+                    raise
+                prompt = prompt_path.read_text(encoding="utf-8").rstrip()
+                if exclusion not in prompt:
+                    prompt_path.write_text(f"{prompt}\n\n{exclusion}\n", encoding="utf-8")
+                print(
+                    f"Historical image rejected; generating a new candidate "
+                    f"({attempt + 2}/{attempts})",
+                    flush=True,
+                )
+    finally:
+        SETTINGS["image_provider"] = original_provider
 
 
 def main() -> None:
