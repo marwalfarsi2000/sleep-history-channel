@@ -93,15 +93,18 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sleep-history-failure-${{ github.run_id }}
-          # Small state and logs only: video and audio never go to GitHub.
+          # Resume checkpoint: in-progress work including generated voice chunks
+          # (audio_chunks/*.mp3) is kept so no quota is wasted on a retry. Only
+          # final outputs (video, full narration, review audio) are excluded.
           path: |
             logs/*.log
             stories/**
             !stories/**/*.mp4
-            !stories/**/*.mp3
+            !stories/**/12_audio_full.mp3
+            !stories/**/12_audio_narration.mp3
+            !stories/**/13_audio_review.opus
             !stories/**/*.wav
             !stories/**/*.m4a
-            !stories/**/*.opus
           if-no-files-found: warn
           retention-days: 7
       - name: Persist topic and archive catalogues
