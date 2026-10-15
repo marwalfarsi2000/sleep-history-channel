@@ -76,6 +76,20 @@ def _llm_models(*, search: bool = False) -> list[str]:
     return models
 
 
+def _error_summary(body: str) -> str:
+    """Short quota/error reason for logs, without request data."""
+    try:
+        error = json.loads(body).get("error", {})
+    except (json.JSONDecodeError, AttributeError):
+        return " ".join(body[:200].split())
+    quota = [
+        violation.get("quotaId") or violation.get("quotaMetric", "")
+        for detail in error.get("details", []) or []
+        for violation in detail.get("violations", []) or []
+    ]
+    return f"{error.get('status', '')} {', '.join(filter(None, quota))} {str(error.get('message', ''))[:160]}".strip()
+
+
 def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: bool = False,
                 max_tokens: int = 8192, temperature: float = 0.4) -> tuple[str, list[dict]]:
     key = load_secrets().get("GEMINI_API_KEY", "")
@@ -133,7 +147,7 @@ def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: boo
                 delay = retry_delays[attempt]
             print(
                 f"Gemini temporary HTTP {error.code}; retrying in {delay}s "
-                f"({attempt + 1}/{len(retry_delays)})",
+                f"({attempt + 1}/{len(retry_delays)}): {_error_summary(body)}",
                 file=sys.stderr,
                 flush=True,
             )
