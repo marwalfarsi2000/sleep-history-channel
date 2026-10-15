@@ -21,7 +21,7 @@
     "slug": "daily-life-in-venice-spice-trade-era",
     "title": "ستنام قبل النهاية 😴 | رحلة هادئة في أزقة البندقية خلال عصر التوابل والحرير",
     "created_at": "2026-10-15T11:29:22.607807+04:00",
-    "status": "pending_approval",
+    "status": "published",
     "video_filename": "14_video_final.mp4",
     "item_url": "https://archive.org/details/lan-tukmil-alqissa-20261015-daily-life-in-venice-spic",
     "video_url": "https://archive.org/download/lan-tukmil-alqissa-20261015-daily-life-in-venice-spic/14_video_final.mp4",
@@ -29,6 +29,8 @@
     "video_size": 81994323,
     "video_sha256": "",
     "audio_duration_seconds": 5064.05,
-    "video_duration_seconds": 5064.0
+    "video_duration_seconds": 5064.0,
+    "youtube_video_id": "Cg7H1Z1tXTM",
+    "youtube_url": "https://www.youtube.com/watch?v=Cg7H1Z1tXTM"
   }
 ]
