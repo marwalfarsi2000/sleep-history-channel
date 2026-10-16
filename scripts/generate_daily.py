@@ -96,6 +96,14 @@ def _error_summary(body: str) -> str:
     return f"{error.get('status', '')} {', '.join(filter(None, quota))} {str(error.get('message', ''))[:160]}".strip()
 
 
+def thinking_config_for_model(model: str) -> dict | None:
+    if model == "gemini-3.1-flash-lite":
+        return {"thinkingBudget": 0}
+    if model.startswith("gemini-3"):
+        return {"thinkingLevel": "low"}
+    return None
+
+
 def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: bool = False,
                 max_tokens: int = 8192, temperature: float = 0.4) -> tuple[str, list[dict]]:
     key = load_secrets().get("GEMINI_API_KEY", "")
@@ -105,15 +113,13 @@ def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: boo
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         f"?key={key}"
     )
+    thinking = thinking_config_for_model(model)
     config: dict = {
         "temperature": temperature,
         "maxOutputTokens": max_tokens,
-        "thinkingConfig": (
-            {"thinkingLevel": "minimal"}
-            if model.startswith("gemini-3") and model != "gemini-3.1-flash-lite"
-            else {"thinkingBudget": 0}
-        ),
     }
+    if thinking is not None:
+        config["thinkingConfig"] = thinking
     if json_mode:
         config["responseMimeType"] = "application/json"
     payload: dict = {
@@ -140,6 +146,29 @@ def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: boo
         except urllib.error.HTTPError as error:
             body = error.read().decode("utf-8", errors="replace")
             last_error = f"Gemini HTTP {error.code}: {body[:600]}"
+            if error.code == 400 and "thinking level" in body.lower() and "not supported" in body.lower():
+                print(f"Gemini HTTP 400 thinking level mismatch for {model}; retrying with fallback thinking config", file=sys.stderr, flush=True)
+                # Fallback: if currently sending thinkingConfig, downgrade to low or remove it
+                if "thinkingConfig" in payload.get("generationConfig", {}):
+                    curr_level = payload["generationConfig"]["thinkingConfig"].get("thinkingLevel")
+                    if curr_level != "low":
+                        payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "low"}
+                    else:
+                        payload["generationConfig"].pop("thinkingConfig", None)
+                    request = urllib.request.Request(
+                        url,
+                        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    try:
+                        with urllib.request.urlopen(request, timeout=180) as response:
+                            result = json.loads(response.read().decode("utf-8"))
+                        break
+                    except urllib.error.HTTPError as err2:
+                        body = err2.read().decode("utf-8", errors="replace")
+                        last_error = f"Gemini HTTP {err2.code}: {body[:600]}"
+
             if error.code == 429 and _daily_quota_exhausted(body):
                 raise RuntimeError(
                     "Gemini daily quota is exhausted; checkpoint preserved for the next run"

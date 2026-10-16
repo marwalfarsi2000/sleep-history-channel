@@ -25,11 +25,27 @@ def diagnostic_summary() -> str:
     candidates = sorted((ROOT / "logs").glob("*.log"), key=lambda path: path.stat().st_mtime, reverse=True)
     if not candidates:
         return "لا يوجد سجل تشخيصي محفوظ."
-    lines = candidates[0].read_text(encoding="utf-8", errors="replace").splitlines()
+    content = candidates[0].read_text(encoding="utf-8", errors="replace")
+
+    # Try parsing embedded Gemini error JSON messages first
+    for match in re.finditer(r'\{\s*"error"\s*:\s*\{[\s\S]*?\}\s*\}', content):
+        try:
+            err_data = json.loads(match.group(0))
+            msg = err_data.get("error", {}).get("message")
+            if msg:
+                summary = str(msg).strip()
+                summary = re.sub(r"(?i)(api[_-]?key|token|secret|authorization)\s*[:=]\s*\S+", r"\1=[REDACTED]", summary)
+                return summary[:500].strip()
+        except Exception:
+            pass
+
+    lines = content.splitlines()
     useful = [
         line.strip()
         for line in lines
         if line.strip() and re.search(r"error|runtimeerror|httperror|failed|quota|unavailable|missing", line, re.I)
+        and not line.strip().startswith('"error"')
+        and line.strip() != "{"
     ]
     summary = (useful[-1] if useful else lines[-1] if lines else "سجل فارغ")[:500]
     summary = re.sub(r"(?i)(api[_-]?key|token|secret|authorization)\s*[:=]\s*\S+", r"\1=[REDACTED]", summary)

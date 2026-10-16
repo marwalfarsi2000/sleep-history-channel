@@ -58,7 +58,7 @@ class GeminiFallbackTests(unittest.TestCase):
         fallback_payload = json.loads(urlopen.call_args_list[1].args[0].data.decode("utf-8"))
         self.assertEqual(
             fallback_payload["generationConfig"]["thinkingConfig"],
-            {"thinkingLevel": "minimal"},
+            {"thinkingLevel": "low"},
         )
 
     def test_search_quota_fails_closed_without_model_memory_fallback(self):
