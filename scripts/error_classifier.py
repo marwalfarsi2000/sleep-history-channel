@@ -18,6 +18,10 @@ class ErrorCategory:
 
 def classify_error(exc: Exception) -> str:
     msg = str(exc).lower()
+
+    if isinstance(exc, FileNotFoundError):
+        return ErrorCategory.PERMANENT
+
     if isinstance(exc, urllib.error.HTTPError):
         if exc.code in (429, 500, 502, 503, 504):
             return ErrorCategory.TRANSIENT_RETRYABLE
@@ -25,17 +29,22 @@ def classify_error(exc: Exception) -> str:
             return ErrorCategory.CONFIGURATION
         return ErrorCategory.PERMANENT
 
-    if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, OSError)):
+    if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError)):
         return ErrorCategory.TRANSIENT_RETRYABLE
 
-    if any(k in msg for k in ("transient", "http 429", "http 500", "http 502", "http 503", "http 504", "rate limit")):
+    if isinstance(exc, OSError):
+        if any(term in msg for term in ("network", "connection", "timed out", "reset", "refused", "temporary")):
+            return ErrorCategory.TRANSIENT_RETRYABLE
+        return ErrorCategory.PERMANENT
+
+    if any(k in msg for k in ("rate limit", "http 429", "http 500", "http 502", "http 503", "http 504", "temporary failure", "transient")):
         return ErrorCategory.TRANSIENT_RETRYABLE
 
-    if any(k in msg for k in ("validation", "mismatch", "failed", "qc_failed", "diacritization", "speech_safe")):
-        return ErrorCategory.VALIDATION
-
-    if any(k in msg for k in ("missing", "credential", "configuration", "not configured")):
+    if any(k in msg for k in ("missing", "credential", "not configured", "invalid api key", "unapproved llm", "unapproved tts")):
         return ErrorCategory.CONFIGURATION
+
+    if any(k in msg for k in ("validation_failed", "qc_failed", "speech_safe_validation_failed", "diacritization_failed", "transcript mismatch", "fidelity")):
+        return ErrorCategory.VALIDATION
 
     return ErrorCategory.PERMANENT
 

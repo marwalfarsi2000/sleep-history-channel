@@ -11,12 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 
-fake_module = types.ModuleType("internetarchive")
-fake_module.get_item = mock.Mock()
-fake_module.upload = mock.Mock()
-fake_module.delete = mock.Mock()
-sys.modules.setdefault("internetarchive", fake_module)
-archive_storage = importlib.import_module("archive_storage")
+import archive_storage
 
 
 class ArchiveStorageTests(unittest.TestCase):

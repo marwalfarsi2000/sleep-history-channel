@@ -29,7 +29,8 @@ class GeneratorResumeTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "temporary"):
                     generate_daily.create_daily_story()
             history = json.loads((root / "config" / "topics_history.json").read_text(encoding="utf-8"))
-            self.assertEqual(history[0]["status"], "generating")
+            from state_machine import normalize_state, State
+            self.assertEqual(normalize_state(history[0]["status"]), State.GENERATING)
             self.assertTrue((root / history[0]["story_path"]).exists())
 
     def test_existing_generating_checkpoint_is_resumed(self):

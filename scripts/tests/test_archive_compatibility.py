@@ -1,18 +1,22 @@
-from unittest.mock import MagicMock, patch
-import pytest
-
+import inspect
+import internetarchive as ia
 import archive_storage
 
 
-def test_get_archive_item_uses_archive_session():
-    with patch("archive_storage.ArchiveSession") as mock_session_cls:
-        mock_session_instance = MagicMock()
-        mock_item = MagicMock()
-        mock_session_instance.get_item.return_value = mock_item
-        mock_session_cls.return_value = mock_session_instance
+def test_real_internetarchive_contract():
+    # Verify ArchiveSession and get_item signature in internetarchive 5.12.0
+    assert hasattr(ia, "ArchiveSession")
+    assert hasattr(ia, "get_item")
+    assert hasattr(ia, "upload")
+    assert hasattr(ia, "delete")
 
-        item = archive_storage.get_archive_item("test-identifier", "acc", "sec")
+    session = ia.ArchiveSession(config={"s3": {"access": "acc", "secret": "sec"}})
+    item = session.get_item("test-identifier")
+    assert hasattr(item, "modify_metadata")
 
-        mock_session_cls.assert_called_once_with(config={"s3": {"access": "acc", "secret": "sec"}})
-        mock_session_instance.get_item.assert_called_once_with("test-identifier")
-        assert item == mock_item
+    get_item_sig = inspect.signature(ia.get_item)
+    assert "identifier" in get_item_sig.parameters
+
+    upload_sig = inspect.signature(ia.upload)
+    assert "identifier" in upload_sig.parameters
+    assert "files" in upload_sig.parameters

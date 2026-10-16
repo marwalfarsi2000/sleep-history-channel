@@ -1252,6 +1252,7 @@ def clear_expired_gemini_quota_state() -> None:
 
 
 async def tts_one(text: str, out: Path, engine: str = ""):
+    from error_classifier import classify_error, ErrorCategory
     provider = SETTINGS.get("tts_provider", "edge").lower()
     if provider in ("fish", "munsit", "gemini"):
         last_error = None
@@ -1264,13 +1265,10 @@ async def tts_one(text: str, out: Path, engine: str = ""):
                     return await asyncio.to_thread(gemini_tts_one, text, out, engine or _gemini_tts_models()[0])
                 worker = {"fish": fish_tts_one, "munsit": munsit_tts_one}[provider]
                 return await asyncio.to_thread(worker, text, out)
-            except RuntimeError as exc:
-                if "BLOCKED_COST" in str(exc):
-                    raise
-                last_error = exc
-                if attempt < 2:
-                    await asyncio.sleep(2 ** attempt)
-            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            except Exception as exc:
+                cat = classify_error(exc)
+                if cat != ErrorCategory.TRANSIENT_RETRYABLE or "BLOCKED_COST" in str(exc):
+                    raise exc
                 last_error = exc
                 if attempt < 2:
                     await asyncio.sleep(2 ** attempt)
@@ -1832,9 +1830,13 @@ def video_codec() -> list[str]:
 
 def render(story: Path):
     background(story, force=False)
-    audio=story/"12_audio_full.mp3"; out=story/"14_video_final.mp4"
-    exact_duration=duration(audio)
-    codec=video_codec()
+    audio = story / "12_audio_full.mp3"
+    out = story / "14_video_final.mp4"
+    if out.exists() and out.stat().st_size > 1_000_000 and abs(duration(audio) - duration(out)) <= 2.5:
+        print(f"Reusing existing valid video render for {story.name}")
+        return
+    exact_duration = duration(audio)
+    codec = video_codec()
     run([ffmpeg(),"-y","-loop","1","-framerate","1","-i",str(story/"10_background.png"),"-i",str(audio),"-vf","format=yuv420p","-r","2",*codec,"-c:a","aac","-b:a","128k","-t",f"{exact_duration:.3f}","-movflags","+faststart",str(out)])
 
 def validate(story: Path):
@@ -1909,27 +1911,30 @@ def validate(story: Path):
     chunk_models_path = logs / "tts_chunk_models.json"
     chunk_models = json.loads(chunk_models_path.read_text(encoding="utf-8")) if chunk_models_path.exists() else {}
     models_used = sorted(set(chunk_models.values()))
-    meta=json.loads((story/"15_metadata.json").read_text(encoding="utf-8")); meta.update(audio_duration_seconds=round(ad,2),video_duration_seconds=round(vd,2),word_count=arabic_words((story/"05_story_clean.md").read_text(encoding="utf-8")),**voice_metadata(),tts_models_used=models_used,tts_normalization_status="passed",speech_safe_validation_status="passed",audio_generation_status="passed",audio_qc_status="passed",video_assembly_status="passed",video_qc_status="passed",metadata_validation_status="passed",clean_story_sha256=file_sha256(story/"05_story_clean.md"),tts_normalized_sha256=file_sha256(story/"05b_story_tts_normalized.md"),tts_api_sha256=file_sha256(story/"07_story_tts_api.md"),audio_sha256=file_sha256(story/"12_audio_full.mp3"),image_sha256=file_sha256(story/"10_background.png"),video_sha256=file_sha256(video_path),background_audio="pink noise",background_audio_volume_percent=15,narration_audio_path=str(story/"12_audio_narration.mp3"),audio_path=str(story/"12_audio_full.mp3"),video_path=str(story/"14_video_final.mp4"),thumbnail_path=str(story/"11_thumbnail_base.jpg"),approval_status="READY_FOR_APPROVAL",publish_status="not_published")
+    from state_machine import State, transition_state
+    meta=json.loads((story/"15_metadata.json").read_text(encoding="utf-8")); meta.update(audio_duration_seconds=round(ad,2),video_duration_seconds=round(vd,2),word_count=arabic_words((story/"05_story_clean.md").read_text(encoding="utf-8")),**voice_metadata(),tts_models_used=models_used,tts_normalization_status="passed",speech_safe_validation_status="passed",audio_generation_status="passed",audio_qc_status="passed",video_assembly_status="passed",video_qc_status="passed",metadata_validation_status="passed",clean_story_sha256=file_sha256(story/"05_story_clean.md"),tts_normalized_sha256=file_sha256(story/"05b_story_tts_normalized.md"),tts_api_sha256=file_sha256(story/"07_story_tts_api.md"),audio_sha256=file_sha256(story/"12_audio_full.mp3"),image_sha256=file_sha256(story/"10_background.png"),video_sha256=file_sha256(video_path),background_audio="pink noise",background_audio_volume_percent=15,narration_audio_path=str(story/"12_audio_narration.mp3"),audio_path=str(story/"12_audio_full.mp3"),video_path=str(story/"14_video_final.mp4"),thumbnail_path=str(story/"11_thumbnail_base.jpg"),approval_status=State.MEDIA_READY,publish_status="not_published")
     (story/"15_metadata.json").write_text(json.dumps(meta,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     (story/"17_status.md").write_text(
-        "# الحالة\n\n- الحالة الحالية: `READY_FOR_APPROVAL`\n- النشر: `not_published`\n- بانتظار مراجعة Marwa واعتماد صريح قبل النشر.\n",
+        f"# الحالة\n\n- الحالة الحالية: `{State.MEDIA_READY}`\n- النشر: `not_published`\n- بانتظار مراجعة Marwa واعتماد صريح قبل النشر.\n",
         encoding="utf-8",
     )
     history_path=ROOT/"config"/"topics_history.json"
     history=json.loads(history_path.read_text(encoding="utf-8"))
     for topic in history:
         if topic.get("slug") == meta.get("slug"):
-            topic["status"]="READY_FOR_APPROVAL"
+            current = topic.get("status", "")
+            topic["status"] = transition_state(current, State.MEDIA_READY) if current else State.MEDIA_READY
             topic["story_path"]=story.relative_to(ROOT).as_posix()
     history_path.write_text(json.dumps(history,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     print(json.dumps({"metadata":meta,"validation":validation},ensure_ascii=False,indent=2))
 
 def package(story: Path):
+    from state_machine import State
     meta=json.loads((story/"15_metadata.json").read_text(encoding="utf-8"))
-    meta.update(audio_duration_seconds=round(duration(story/"12_audio_full.mp3"),2),video_duration_seconds=round(duration(story/"14_video_final.mp4"),2),word_count=arabic_words((story/"05_story_clean.md").read_text(encoding="utf-8")),**voice_metadata(),background_audio="pink noise",background_audio_volume_percent=15,narration_audio_path=str(story/"12_audio_narration.mp3"),audio_path=str(story/"12_audio_full.mp3"),video_path=str(story/"14_video_final.mp4"),thumbnail_path=str(story/"11_thumbnail_base.jpg"),approval_status="READY_FOR_APPROVAL",publish_status="not_published")
+    meta.update(audio_duration_seconds=round(duration(story/"12_audio_full.mp3"),2),video_duration_seconds=round(duration(story/"14_video_final.mp4"),2),word_count=arabic_words((story/"05_story_clean.md").read_text(encoding="utf-8")),**voice_metadata(),background_audio="pink noise",background_audio_volume_percent=15,narration_audio_path=str(story/"12_audio_narration.mp3"),audio_path=str(story/"12_audio_full.mp3"),video_path=str(story/"14_video_final.mp4"),thumbnail_path=str(story/"11_thumbnail_base.jpg"),approval_status=State.MEDIA_READY,publish_status="not_published")
     (story/"15_metadata.json").write_text(json.dumps(meta,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     (story/"17_status.md").write_text(
-        "# الحالة\n\n- الحالة الحالية: `READY_FOR_APPROVAL`\n- النشر: `not_published`\n- بانتظار مراجعة Marwa واعتماد صريح قبل النشر.\n",
+        f"# الحالة\n\n- الحالة الحالية: `{State.MEDIA_READY}`\n- النشر: `not_published`\n- بانتظار مراجعة Marwa واعتماد صريح قبل النشر.\n",
         encoding="utf-8",
     )
     def md(name): return html.escape((story/name).read_text(encoding="utf-8"))

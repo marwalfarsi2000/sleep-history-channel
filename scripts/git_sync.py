@@ -22,8 +22,12 @@ def sync_git_catalogue() -> bool:
             subprocess.run(["git", "commit", "-m", "Update sleep history catalogue"], check=False)
             for attempt in range(1, 4):
                 rebase = subprocess.run(["git", "pull", "--rebase", "origin", "HEAD"])
+                if rebase.returncode != 0:
+                    subprocess.run(["git", "rebase", "--abort"], check=False)
+                    print(f"WARNING: Git rebase failed on attempt {attempt}, aborted rebase.", file=sys.stderr)
+                    continue
                 push = subprocess.run(["git", "push", "origin", "HEAD"])
-                if rebase.returncode == 0 and push.returncode == 0:
+                if push.returncode == 0:
                     return True
             print("WARNING: Git state persistence push failed after retries, but production result is preserved.", file=sys.stderr)
             return False
