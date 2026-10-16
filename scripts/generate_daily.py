@@ -267,7 +267,13 @@ def upsert_history_checkpoint(history_path: Path, story: Path, topic: dict, stat
     record["story_path"] = story.relative_to(ROOT).as_posix()
     # Keep enough provider input to rebuild the same episode when a hosted
     # runner disappears after persisting only the catalogue checkpoint.
-    for key in ("topic_ar", "angle_ar", "search_query_en", "period_ar", "location_ar", "key_elements", "reason_ar"):
+    for key in (
+        "topic_ar", "angle_ar", "search_query_en", "period_ar", "location_ar",
+        "family", "key_elements", "reason_ar", "narrative_follow",
+        "soft_narrative_spine", "gentle_curiosity", "attentional_anchor",
+        "sensory_potential_notes", "tension_risks", "reentry_plan",
+        "long_form_capacity", "difference_from_recent", "scores", "selection_gate",
+    ):
         if topic.get(key):
             record[key] = topic[key]
     write(history_path, json.dumps(history, ensure_ascii=False, indent=2))
@@ -291,52 +297,95 @@ def choose_topic(history: list[dict]) -> dict:
         f"{item.get('period_ar', '')} | {item.get('location_ar', '')} | {item.get('key_elements', [])}"
         for item in history
     ) or "لا يوجد سجل سابق"
-    rules = production_rules(*range(2, 17))
+    rules = production_rules(*range(2, 17), 62)
     prompt = f"""أنت محرر قناة عربية اسمها «لن تُكمل هذه القصة» تقدم سردًا تاريخيًا حقيقيًا هادئًا للنوم.
 التزم بالقواعد التالية التزامًا إلزاميًا:
 {rules}
 
-اختر موضوع الحلقة اليومية التالية. يجب أن تتوفر له مصادر متحفية أو جامعية أو أثرية كثيرة، وأن يسمح بوصف الحياة اليومية والمكان لمدة ساعة، وألا يكرر موضوعًا أو زاوية في السجل.
+قبل البحث التاريخي العميق، أنشئ من ستة إلى ثمانية مرشحين متنوعين من أربع عائلات سردية مختلفة على الأقل. قيّمهم ثم اختر الأفضل وفق INTEREST × CALM × FLOW × SLEEPABILITY. يجب أن تتوفر للفائز مصادر متحفية أو جامعية أو أثرية كثيرة، وأن يحمل قصة طويلة بلا حشو، وألا يكرر موضوعًا أو زاوية في السجل.
 
 السجل السابق:
 {prior}
 
-أعد JSON فقط بهذه المفاتيح الإنجليزية:
-topic_ar: اسم موضوع واضح بالعربية
-angle_ar: زاوية الحلقة
-slug: حروف إنجليزية صغيرة وشرطات فقط
-search_query_en: استعلام بحث إنجليزي دقيق
-period_ar: الفترة التاريخية
-location_ar: المكان أو النطاق الجغرافي
-key_elements: قائمة بالأحداث والنقاط والحياة اليومية الرئيسية التي ستغطيها الحلقة
-reason_ar: سبب الاختيار في جملة
+أعد JSON فقط:
+{{"candidates":[{{
+"topic_ar":"...","angle_ar":"...","slug":"lowercase-hyphenated","search_query_en":"...","period_ar":"...","location_ar":"...","family":"...","key_elements":["..."],"reason_ar":"...",
+"narrative_follow":"ما الذي سيتبعه المستمع","soft_narrative_spine":"...","gentle_curiosity":"...","attentional_anchor":"...","sensory_potential_notes":"...","tension_risks":["..."],"reentry_plan":"...","long_form_capacity":"...","difference_from_recent":"...",
+"scores":{{"gentle_engagement":0,"low_cognitive_arousal":0,"narrative_flow":0,"sensory_potential":0,"reentry_tolerance":0,"low_stakes":0,"gradual_unwind_potential":0,"novelty_variety":0}}
+}}]}}
+كل درجة عدد صحيح من صفر إلى خمسة. لا تُرجع مرشحًا واحدًا فقط.
 """
-    text, _ = gemini(prompt, json_mode=True, max_tokens=1200, temperature=0.7)
-    topic = parse_json(text)
+    text, _ = gemini(prompt, json_mode=True, max_tokens=7000, temperature=0.7)
+    discovery = parse_json(text)
+    candidates = discovery.get("candidates") or []
+    if len(candidates) < 6:
+        raise RuntimeError("TOPIC_DISCOVERY_FAILED: fewer than 6 candidates")
+    families = {str(item.get("family", "")).strip().casefold() for item in candidates if item.get("family")}
+    if len(families) < 4:
+        raise RuntimeError("TOPIC_DISCOVERY_FAILED: fewer than 4 narrative families")
+    score_names = (
+        "gentle_engagement", "low_cognitive_arousal", "narrative_flow",
+        "sensory_potential", "reentry_tolerance", "low_stakes",
+        "gradual_unwind_potential", "novelty_variety",
+    )
+    for candidate in candidates:
+        scores = candidate.get("scores") or {}
+        if not all(isinstance(scores.get(name), int) and 0 <= scores[name] <= 5 for name in score_names):
+            raise RuntimeError("TOPIC_DISCOVERY_FAILED: invalid sleep-suitability scores")
+    topic = max(candidates, key=lambda item: sum(item["scores"][name] for name in score_names))
     topic["slug"] = safe_slug(str(topic.get("slug", "")))
-    required = ("topic_ar", "angle_ar", "slug", "search_query_en", "period_ar", "location_ar", "reason_ar")
+    required = (
+        "topic_ar", "angle_ar", "slug", "search_query_en", "period_ar",
+        "location_ar", "family", "reason_ar", "narrative_follow",
+        "soft_narrative_spine", "gentle_curiosity", "attentional_anchor",
+        "sensory_potential_notes", "reentry_plan", "long_form_capacity",
+        "difference_from_recent",
+    )
     missing = [key for key in required if not str(topic.get(key, "")).strip()]
     if missing:
         raise RuntimeError(f"Topic selection is missing required fields: {missing}")
-    validation_prompt = f"""{production_rules(*range(2, 17))}
+    validation_prompt = f"""{production_rules(*range(2, 17), 62)}
 
 أنت بوابة مستقلة لاختيار الموضوع. قيّم المرشح مقارنة بالسجل السابق، ولا تحاول إصلاحه.
 المرشح: {json.dumps(topic, ensure_ascii=False)}
 السجل: {prior}
 
 أعد JSON فقط بالشكل:
-{{"status":"PASS أو REJECT","language":true,"religion":true,"sleep":true,"quality":true,"universality":true,"non_duplicate":true,"reasons":["..."]}}
+{{"status":"PASS أو REJECT","language":true,"religion":true,"sleep":true,"quality":true,"universality":true,"non_duplicate":true,"soft_narrative_spine":true,"gentle_curiosity":true,"attentional_anchoring":true,"reentry_tolerance":true,"gradual_unwind":true,"long_form_without_filler":true,"scores":{{"gentle_engagement":0,"low_cognitive_arousal":0,"narrative_flow":0,"sensory_potential":0,"reentry_tolerance":0,"low_stakes":0,"gradual_unwind_potential":0,"novelty_variety":0}},"reasons":["..."]}}
 كل قيمة true تعني أن البوابة نجحت. ارفض عند الشك الجوهري أو نقص المادة والمصادر.
 """
     validation_text, _ = gemini(
         validation_prompt, json_mode=True, max_tokens=1200, temperature=0.0
     )
     validation = parse_json(validation_text)
-    gate_names = ("language", "religion", "sleep", "quality", "universality", "non_duplicate")
-    if validation.get("status") != "PASS" or not all(validation.get(name) is True for name in gate_names):
+    gate_names = (
+        "language", "religion", "sleep", "quality", "universality", "non_duplicate",
+        "soft_narrative_spine", "gentle_curiosity", "attentional_anchoring",
+        "reentry_tolerance", "gradual_unwind", "long_form_without_filler",
+    )
+    verified_scores = validation.get("scores") or {}
+    valid_scores = all(
+        isinstance(verified_scores.get(name), int) and 0 <= verified_scores[name] <= 5
+        for name in score_names
+    )
+    score_average = (
+        sum(verified_scores[name] for name in score_names) / len(score_names)
+        if valid_scores else 0
+    )
+    if (
+        validation.get("status") != "PASS"
+        or not all(validation.get(name) is True for name in gate_names)
+        or not valid_scores
+        or min((verified_scores[name] for name in score_names), default=0) < 3
+        or verified_scores.get("low_cognitive_arousal", 0) < 4
+        or verified_scores.get("low_stakes", 0) < 4
+        or score_average < 4.0
+    ):
         raise RuntimeError(
             "TOPIC_GATE_REJECTED: " + json.dumps(validation, ensure_ascii=False)
         )
+    topic["discovery_candidate_count"] = len(candidates)
+    topic["discovery_family_count"] = len(families)
     topic["selection_gate"] = validation
     return topic
 
@@ -347,7 +396,7 @@ def choose_valid_topic(history: list[dict], attempts: int = 3) -> dict:
         try:
             return choose_topic(history)
         except RuntimeError as exc:
-            if "TOPIC_GATE_REJECTED" not in str(exc):
+            if not any(code in str(exc) for code in ("TOPIC_GATE_REJECTED", "TOPIC_DISCOVERY_FAILED")):
                 raise
             last_error = exc
     raise last_error or RuntimeError("TOPIC_GATE_REJECTED: no acceptable topic was found")
@@ -514,13 +563,13 @@ def research_topic(topic: dict) -> tuple[str, list[dict]]:
 
 
 def validate_story_quality(topic: dict, story_text: str) -> dict:
-    prompt = f"""{production_rules(2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 23)}
+    prompt = f"""{production_rules(2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 23, 62)}
 
 أنت بوابة جودة مستقلة. افحص النص النهائي دون إعادة كتابته.
 الموضوع: {topic['topic_ar']} — {topic['angle_ar']}
 
 أعد JSON فقط:
-{{"status":"PASS أو REJECT","language":true,"adult_audience":true,"religion":true,"sleep":true,"historical_style":true,"no_dangerous_drift":true,"issues":["..."]}}
+{{"status":"PASS أو REJECT","language":true,"adult_audience":true,"religion":true,"sleep":true,"historical_style":true,"no_dangerous_drift":true,"soft_narrative_spine":true,"gentle_curiosity":true,"attentional_anchoring":true,"sensory_imagery":true,"low_stakes":true,"gradual_unwind":true,"reentry_tolerance":true,"not_boring_or_overstimulating":true,"flexible_composition":true,"issues":["..."]}}
 كل قيمة true تعني نجاح البوابة. ارفض إذا كانت اللغة ثقيلة أو طفولية، أو أصبح المحتوى دينيًا بحتًا، أو صادمًا وغير مناسب للنوم.
 
 النص:
@@ -528,7 +577,12 @@ def validate_story_quality(topic: dict, story_text: str) -> dict:
 """
     text, _ = gemini(prompt, json_mode=True, max_tokens=2200, temperature=0.0)
     result = parse_json(text)
-    gates = ("language", "adult_audience", "religion", "sleep", "historical_style", "no_dangerous_drift")
+    gates = (
+        "language", "adult_audience", "religion", "sleep", "historical_style",
+        "no_dangerous_drift", "soft_narrative_spine", "gentle_curiosity",
+        "attentional_anchoring", "sensory_imagery", "low_stakes", "gradual_unwind",
+        "reentry_tolerance", "not_boring_or_overstimulating", "flexible_composition",
+    )
     if result.get("status") != "PASS" or not all(result.get(name) is True for name in gates):
         raise RuntimeError("STORY_QUALITY_GATE_REJECTED: " + json.dumps(result, ensure_ascii=False))
     return result
@@ -625,7 +679,7 @@ def finalize_story_text(story: Path, topic: dict, research: str, draft: str) -> 
 
 
 def make_outline(topic: dict, research: str) -> list[dict]:
-    rules = production_rules(17, 22)
+    rules = production_rules(17, 22, 62)
     prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
 {rules}
 
@@ -635,7 +689,7 @@ def make_outline(topic: dict, research: str) -> list[dict]:
 ملاحظات البحث:
 {research[:45000]}
 
-التوزيع: 60% حياة يومية ومكان وبيئة، 30% تاريخ وتجارة وتغيرات، 10% اكتشافات أثرية هادئة. البداية تدخل مباشرة في المكان والزمن بلا ترحيب أو تعليمات استرخاء. لا clickbait ولا خيال.
+اختر بنية مرنة تناسب هذا الموضوع؛ لا تستخدم نسبًا ثابتة للمكونات. ابنِ عمودًا سرديًا ناعمًا ومراسي انتباه واضحة، ثم خفّض التنبيه تدريجيًا حتى نهاية بلا ذروة أو كشف. البداية تدخل مباشرة في المكان والزمن بلا ترحيب أو تعليمات استرخاء. لا clickbait ولا خيال.
 أعد JSON فقط: {{"sections":[{{"title":"...","brief":"...","target_words":700}}]}}.
 اجعل الأقسام غير متكررة ومجموع target_words قرابة 6300 كلمة عربية.
 """
@@ -648,7 +702,7 @@ def make_outline(topic: dict, research: str) -> list[dict]:
 
 
 def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path) -> str:
-    rules = production_rules(2, 3, 4, 5, 6, 7, 17, 23, 61)
+    rules = production_rules(2, 3, 4, 5, 6, 7, 17, 23, 61, 62)
     chapters: list[str] = []
     for index, section in enumerate(sections, 1):
         previous = chapters[-1][-2500:] if chapters else "هذه بداية السرد."
