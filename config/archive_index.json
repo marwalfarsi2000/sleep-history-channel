@@ -47,5 +47,20 @@
     "video_sha256": "6fd55e144dc0d1b0e199ce780fd49dda1161a21c82552f34dae7c8ae2be1b962",
     "audio_duration_seconds": 3802.56,
     "video_duration_seconds": 3803.0
+  },
+  {
+    "identifier": "lan-tukmil-alqissa-20261016-daily-life-in-kairouan-ag",
+    "slug": "daily-life-in-kairouan-aghlabid-era",
+    "title": "لن تُكمل هذه القصة 😴 | تفاصيل الحياة اليومية في مدينة القيروان خلال العصر الأغلبي",
+    "created_at": "2026-10-16T03:52:44.288366+04:00",
+    "status": "REVIEW_PENDING",
+    "video_filename": "14_video_final.mp4",
+    "item_url": "https://archive.org/details/lan-tukmil-alqissa-20261016-daily-life-in-kairouan-ag",
+    "video_url": "https://archive.org/download/lan-tukmil-alqissa-20261016-daily-life-in-kairouan-ag/14_video_final.mp4",
+    "thumbnail_url": "https://archive.org/download/lan-tukmil-alqissa-20261016-daily-life-in-kairouan-ag/11_thumbnail_base.jpg",
+    "video_size": 73383060,
+    "video_sha256": "43527a1a45fa89296162b0b2740886b146aa54f50bea0c24f4fe9a75add75ed2",
+    "audio_duration_seconds": 4299.58,
+    "video_duration_seconds": 4300.0
   }
 ]
