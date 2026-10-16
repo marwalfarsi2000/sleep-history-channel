@@ -20,12 +20,21 @@ def record_remote_upload(identifier: str, video_id: str, status: str) -> None:
     secret = os.environ.get("IAS3_SECRET_KEY", "")
     if not access or not secret:
         raise RuntimeError("Internet Archive credentials are required for atomic YouTube publishing")
-    from archive_storage import get_archive_item
-    get_archive_item(identifier, access_key=access, secret_key=secret).modify_metadata({
-        "youtube_video_id": video_id,
-        "youtube_url": f"https://www.youtube.com/watch?v={video_id}",
-        "youtube_upload_status": status,
-    })
+    from archive_storage import get_archive_item, set_index_status
+    from error_classifier import retry_transient
+
+    try:
+        set_index_status(identifier, status, youtube_video_id=video_id)
+    except Exception as exc:
+        print(f"Warning: local catalogue update for {identifier} failed: {exc}")
+
+    def _update():
+        get_archive_item(identifier, access_key=access, secret_key=secret).modify_metadata({
+            "youtube_video_id": video_id,
+            "youtube_url": f"https://www.youtube.com/watch?v={video_id}",
+            "youtube_upload_status": status,
+        })
+    retry_transient(_update)
 
 
 def wait_until_processed(youtube, video_id: str) -> dict:
@@ -111,7 +120,25 @@ def save_pending_youtube_id(identifier: str, video_id: str) -> None:
 def publish_archive_item(identifier: str) -> dict:
     payload = archive_metadata(identifier)
     metadata = payload.get("metadata") or {}
+
+    # Check remote IA metadata, pending file, and catalogue files
     existing = metadata.get("youtube_video_id") or get_pending_youtube_id(identifier)
+    if not existing:
+        root = Path(__file__).resolve().parents[1]
+        for cfg_name in ("topics_history.json", "archive_index.json"):
+            cfg_file = root / "config" / cfg_name
+            if cfg_file.exists():
+                try:
+                    data = json.loads(cfg_file.read_text(encoding="utf-8"))
+                    for rec in data if isinstance(data, list) else []:
+                        if (rec.get("identifier") == identifier or rec.get("archive_identifier") == identifier) and rec.get("youtube_video_id"):
+                            existing = rec.get("youtube_video_id")
+                            break
+                except Exception:
+                    pass
+            if existing:
+                break
+
     youtube = build("youtube", "v3", credentials=credentials(), cache_discovery=False)
 
     if existing:

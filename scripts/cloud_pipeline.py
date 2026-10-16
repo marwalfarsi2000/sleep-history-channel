@@ -287,8 +287,9 @@ REVIEW_SOURCE_FILES = (
 
 
 def regenerate(identifier: str) -> dict:
+    from state_machine import State, normalize_state
     ensure_background_audio()
-    if remote_status(identifier) != "REVIEW_PENDING":
+    if normalize_state(remote_status(identifier)) != State.REVIEW_PENDING:
         raise RuntimeError("Only REVIEW_PENDING archive items can be regenerated")
     slug = str((archive_metadata(identifier).get("metadata") or {}).get("slug") or identifier)
     story = ROOT / "stories" / slug
@@ -296,14 +297,14 @@ def regenerate(identifier: str) -> dict:
     for name in REVIEW_SOURCE_FILES:
         download_file(identifier, name, story / name)
     metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
-    metadata["approval_status"] = "regenerating"
+    metadata["approval_status"] = State.GENERATING
     atomic_json(story / "15_metadata.json", metadata)
     (story / "09_image_source.md").write_text("# مصدر الصورة\n\nستُعاد توليد الصورة آليًا.\n", encoding="utf-8")
-    (story / "17_status.md").write_text("# الحالة\n\n- الحالة الحالية: `regenerating`\n", encoding="utf-8")
+    (story / "17_status.md").write_text(f"# الحالة\n\n- الحالة الحالية: `{State.GENERATING}`\n", encoding="utf-8")
     run([sys.executable, str(ROOT / "scripts" / "pipeline.py"), "all", str(story)], "cloud-regenerate.log")
     metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
-    if metadata.get("approval_status") != "READY_FOR_APPROVAL":
-        raise RuntimeError("Regeneration did not reach READY_FOR_APPROVAL")
+    if normalize_state(metadata.get("approval_status", "")) != State.MEDIA_READY:
+        raise RuntimeError(f"Regeneration did not reach {State.MEDIA_READY}")
     return review_record(story, upload_story(story))
 
 

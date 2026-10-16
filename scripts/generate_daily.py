@@ -998,15 +998,17 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
             resolved = path.resolve()
             if not resolved.exists():
                 created_at = item.get("created_at")
-                if created_at is not None:
-                    try:
-                        dt_created = dt.datetime.fromisoformat(str(created_at))
-                        if (dt.datetime.now(dt.timezone.utc) - dt_created.astimezone(dt.timezone.utc)).days > 7:
-                            print(f"Skipping stale/zombie checkpoint without local folder: {item.get('slug')}", file=sys.stderr)
-                            return False
-                    except Exception:
-                        print(f"Skipping zombie checkpoint with malformed created_at without local folder: {item.get('slug')}", file=sys.stderr)
+                if not created_at:
+                    print(f"Skipping zombie checkpoint missing created_at without local folder: {item.get('slug')}", file=sys.stderr)
+                    return False
+                try:
+                    dt_created = dt.datetime.fromisoformat(str(created_at))
+                    if (dt.datetime.now(dt.timezone.utc) - dt_created.astimezone(dt.timezone.utc)).days > 7:
+                        print(f"Skipping stale/zombie checkpoint without local folder: {item.get('slug')}", file=sys.stderr)
                         return False
+                except Exception:
+                    print(f"Skipping zombie checkpoint with malformed created_at without local folder: {item.get('slug')}", file=sys.stderr)
+                    return False
                 return True
             has_topic = (resolved / "logs" / "topic.json").exists()
             has_meta = (resolved / "15_metadata.json").exists()
