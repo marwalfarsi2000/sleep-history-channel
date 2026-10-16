@@ -24,9 +24,14 @@
     "slug": "daily-life-in-palmyra-roman-era",
     "topic": "الحياة اليومية في مدينة تدمر خلال العصر الروماني",
     "angle": "تتبع يوم في حياة تاجر تدمرِي بين الأسواق المزدحمة، طقوس المعابد، وتجهيز القوافل المتجهة نحو طريق الحرير",
-    "status": "pending_approval",
+    "status": "drafting",
     "story_path": "stories/2026-10-08_daily-life-in-palmyra-roman-era",
-    "created_at": "2026-10-08T22:10:57.869140+04:00"
+    "created_at": "2026-10-08T22:10:57.869140+04:00",
+    "topic_ar": "الحياة اليومية في مدينة تدمر خلال العصر الروماني",
+    "angle_ar": "تتبع يوم في حياة تاجر تدمرِي بين الأسواق المزدحمة، طقوس المعابد، وتجهيز القوافل المتجهة نحو طريق الحرير",
+    "search_query_en": "daily life in palmyra roman era",
+    "period_ar": "الفترة التاريخية المذكورة في الموضوع",
+    "location_ar": "المكان المذكور في الموضوع"
   },
   {
     "slug": "daily-life-in-kairouan-aghlabid-era",
