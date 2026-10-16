@@ -1,0 +1,27 @@
+name: PR Test Validation
+
+on:
+  pull_request:
+    branches: [ main, fix/reliability-hardening ]
+  push:
+    branches: [ fix/reliability-hardening ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+      - name: Run deterministic test suite
+        run: |
+          PYTHONPATH=scripts python -m pytest scripts/tests/

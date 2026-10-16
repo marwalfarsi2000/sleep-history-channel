@@ -133,24 +133,27 @@ def notify_review(record: dict) -> None:
 
 
 def notify_existing_review(identifier: str) -> dict:
+    from state_machine import State, normalize_state
     payload = archive_metadata(identifier)
     metadata = payload.get("metadata") or {}
-    if str(metadata.get("approval_status") or "") != "REVIEW_PENDING":
+    status = normalize_state(str(metadata.get("approval_status") or ""))
+    if status != State.REVIEW_PENDING:
         raise RuntimeError("HUMAN_APPROVAL_GATE_FAILED: archive item is not REVIEW_PENDING")
     record = {
         "identifier": identifier,
         "title": str(metadata.get("title") or identifier),
         "video_duration_seconds": float(metadata.get("video_duration_seconds") or 0),
         "review_url": f"https://archive.org/details/{identifier}",
-        "status": "REVIEW_PENDING",
+        "status": State.REVIEW_PENDING,
     }
     notify_review(record)
     return record
 
 
 def resume_review() -> dict:
+    from state_machine import State, normalize_state
     history = json.loads((ROOT / "config" / "topics_history.json").read_text(encoding="utf-8"))
-    candidate = next((item for item in reversed(history) if item.get("status") in ("pending_approval", "READY_FOR_APPROVAL") and not item.get("archive_identifier") and item.get("story_path")), None)
+    candidate = next((item for item in reversed(history) if normalize_state(item.get("status", "")) in (State.REVIEW_PENDING, State.MEDIA_READY) and not item.get("archive_identifier") and item.get("story_path")), None)
     if not candidate:
         raise RuntimeError("No uploaded pending-review checkpoint is available")
     story = (ROOT / candidate["story_path"]).resolve()
@@ -160,6 +163,7 @@ def resume_review() -> dict:
 
 
 def review_record(story: Path, archive_record: dict) -> dict:
+    from state_machine import State
     metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
     record = {
         "identifier": archive_record["identifier"],
@@ -167,7 +171,7 @@ def review_record(story: Path, archive_record: dict) -> dict:
         "title": metadata["title"],
         "video_duration_seconds": metadata.get("video_duration_seconds", 0),
         "review_url": archive_record["item_url"],
-        "status": "REVIEW_PENDING",
+        "status": State.REVIEW_PENDING,
     }
     runtime = ROOT / ".runtime"
     runtime.mkdir(exist_ok=True)
@@ -176,6 +180,7 @@ def review_record(story: Path, archive_record: dict) -> dict:
 
 
 def produce() -> dict:
+    from state_machine import State, normalize_state
     ensure_background_audio()
     output = run([sys.executable, str(ROOT / "scripts" / "generate_daily.py")], "cloud-generate.log")
     generated = None
@@ -192,8 +197,8 @@ def produce() -> dict:
     story = Path(generated["story_path"]).resolve()
     run([sys.executable, str(ROOT / "scripts" / "pipeline.py"), "all", str(story)], "cloud-pipeline.log")
     metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
-    if metadata.get("approval_status") != "READY_FOR_APPROVAL":
-        raise RuntimeError("Production did not reach READY_FOR_APPROVAL")
+    if normalize_state(metadata.get("approval_status", "")) != State.MEDIA_READY:
+        raise RuntimeError(f"Production did not reach {State.MEDIA_READY}")
     # The verified video goes to Internet Archive as the durable review copy;
     # GitHub keeps only small state files and logs.
     return review_record(story, upload_story(story))
@@ -213,11 +218,15 @@ def remote_status(identifier: str) -> str:
 
 
 def modify_remote(identifier: str, fields: dict) -> None:
-    from internetarchive import get_item
-    item = get_item(identifier, access_key=os.environ["IAS3_ACCESS_KEY"], secret_key=os.environ["IAS3_SECRET_KEY"])
-    response = item.modify_metadata(fields)
-    if getattr(response, "status_code", 200) >= 400:
-        raise RuntimeError(f"Internet Archive metadata update failed with HTTP {response.status_code}")
+    from archive_storage import get_archive_item
+    from error_classifier import retry_transient
+    def _update():
+        item = get_archive_item(identifier, access_key=os.environ["IAS3_ACCESS_KEY"], secret_key=os.environ["IAS3_SECRET_KEY"])
+        response = item.modify_metadata(fields)
+        if getattr(response, "status_code", 200) >= 400:
+            raise RuntimeError(f"Internet Archive metadata update failed with HTTP {response.status_code}")
+        return response
+    retry_transient(_update)
 
 
 def download_file(identifier: str, filename: str, destination: Path) -> None:
@@ -230,18 +239,24 @@ def download_file(identifier: str, filename: str, destination: Path) -> None:
 
 
 def publish(identifier: str) -> dict:
-    if remote_status(identifier) != "REVIEW_PENDING":
-        raise RuntimeError("HUMAN_APPROVAL_GATE_FAILED: archive item is not REVIEW_PENDING")
+    from state_machine import State, normalize_state
+    current_remote = normalize_state(remote_status(identifier))
+    allowed_states = {State.REVIEW_PENDING, State.APPROVED_FOR_PUBLISH, State.PUBLISHING, State.PUBLISHED}
+    if current_remote not in allowed_states:
+        raise RuntimeError(f"HUMAN_APPROVAL_GATE_FAILED: archive item status {current_remote!r} is not publishable")
+
     from youtube_publish import publish_archive_item
-    modify_remote(identifier, {
-        "approval_status": "APPROVED_FOR_PUBLISH",
-        "approved_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-    })
-    set_index_status(identifier, "APPROVED_FOR_PUBLISH")
+    if current_remote == State.REVIEW_PENDING:
+        modify_remote(identifier, {
+            "approval_status": State.APPROVED_FOR_PUBLISH,
+            "approved_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        })
+        set_index_status(identifier, State.APPROVED_FOR_PUBLISH)
+
     result = publish_archive_item(identifier)
-    set_index_status(identifier, "COMPLETED", youtube_video_id=result["video_id"], youtube_url=result["url"])
+    set_index_status(identifier, State.PUBLISHED, youtube_video_id=result["video_id"], youtube_url=result["url"])
     modify_remote(identifier, {
-        "approval_status": "COMPLETED",
+        "approval_status": State.PUBLISHED,
         "output_verification_status": "passed",
         "youtube_video_id": result["video_id"],
         "youtube_url": result["url"],
@@ -255,12 +270,13 @@ def publish(identifier: str) -> dict:
 
 
 def reject(identifier: str) -> dict:
-    if remote_status(identifier) != "REVIEW_PENDING":
+    from state_machine import State, normalize_state
+    if normalize_state(remote_status(identifier)) != State.REVIEW_PENDING:
         raise RuntimeError("Only REVIEW_PENDING archive items can be rejected and deleted")
     delete_rejected(identifier)
-    set_index_status(identifier, "REJECTED_DELETED")
+    set_index_status(identifier, State.REJECTED)
     send_message(f"تم رفض الحلقة وحذف عنصرها من Internet Archive. لم تُنشر على YouTube.\n<code>{identifier}</code>")
-    return {"identifier": identifier, "status": "REJECTED_DELETED"}
+    return {"identifier": identifier, "status": State.REJECTED}
 
 
 REVIEW_SOURCE_FILES = (
@@ -271,8 +287,9 @@ REVIEW_SOURCE_FILES = (
 
 
 def regenerate(identifier: str) -> dict:
+    from state_machine import State, normalize_state
     ensure_background_audio()
-    if remote_status(identifier) != "REVIEW_PENDING":
+    if normalize_state(remote_status(identifier)) != State.REVIEW_PENDING:
         raise RuntimeError("Only REVIEW_PENDING archive items can be regenerated")
     slug = str((archive_metadata(identifier).get("metadata") or {}).get("slug") or identifier)
     story = ROOT / "stories" / slug
@@ -280,14 +297,14 @@ def regenerate(identifier: str) -> dict:
     for name in REVIEW_SOURCE_FILES:
         download_file(identifier, name, story / name)
     metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
-    metadata["approval_status"] = "regenerating"
+    metadata["approval_status"] = State.GENERATING
     atomic_json(story / "15_metadata.json", metadata)
     (story / "09_image_source.md").write_text("# مصدر الصورة\n\nستُعاد توليد الصورة آليًا.\n", encoding="utf-8")
-    (story / "17_status.md").write_text("# الحالة\n\n- الحالة الحالية: `regenerating`\n", encoding="utf-8")
+    (story / "17_status.md").write_text(f"# الحالة\n\n- الحالة الحالية: `{State.GENERATING}`\n", encoding="utf-8")
     run([sys.executable, str(ROOT / "scripts" / "pipeline.py"), "all", str(story)], "cloud-regenerate.log")
     metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
-    if metadata.get("approval_status") != "READY_FOR_APPROVAL":
-        raise RuntimeError("Regeneration did not reach READY_FOR_APPROVAL")
+    if normalize_state(metadata.get("approval_status", "")) != State.MEDIA_READY:
+        raise RuntimeError(f"Regeneration did not reach {State.MEDIA_READY}")
     return review_record(story, upload_story(story))
 
 

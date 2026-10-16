@@ -20,26 +20,42 @@ def record_remote_upload(identifier: str, video_id: str, status: str) -> None:
     secret = os.environ.get("IAS3_SECRET_KEY", "")
     if not access or not secret:
         raise RuntimeError("Internet Archive credentials are required for atomic YouTube publishing")
-    from internetarchive import get_item
-    get_item(identifier, access_key=access, secret_key=secret).modify_metadata({
-        "youtube_video_id": video_id,
-        "youtube_url": f"https://www.youtube.com/watch?v={video_id}",
-        "youtube_upload_status": status,
-    })
+    from archive_storage import get_archive_item, set_index_status
+    from error_classifier import retry_transient
+    from state_machine import State
+
+    canonical_state = State.PUBLISHED if status == "verified" else State.PUBLISHING
+    try:
+        set_index_status(identifier, canonical_state, youtube_video_id=video_id)
+    except Exception as exc:
+        print(f"Warning: local catalogue update for {identifier} failed: {exc}")
+
+    def _update():
+        get_archive_item(identifier, access_key=access, secret_key=secret).modify_metadata({
+            "youtube_video_id": video_id,
+            "youtube_url": f"https://www.youtube.com/watch?v={video_id}",
+            "youtube_upload_status": status,
+        })
+    retry_transient(_update)
 
 
 def wait_until_processed(youtube, video_id: str) -> dict:
+    from error_classifier import classify_error, ErrorCategory
     last = {}
     for attempt in range(20):
-        response = youtube.videos().list(part="status,contentDetails,snippet", id=video_id).execute()
-        items = response.get("items") or []
-        if items:
-            last = items[0]
-            upload_status = last.get("status", {}).get("uploadStatus")
-            if upload_status == "processed":
-                return last
-            if upload_status in {"failed", "rejected", "deleted"}:
-                raise RuntimeError(f"YouTube processing failed: {upload_status}")
+        try:
+            response = youtube.videos().list(part="status,contentDetails,snippet", id=video_id).execute()
+            items = response.get("items") or []
+            if items:
+                last = items[0]
+                upload_status = last.get("status", {}).get("uploadStatus")
+                if upload_status == "processed":
+                    return last
+                if upload_status in {"failed", "rejected", "deleted"}:
+                    raise RuntimeError(f"YouTube processing failed: {upload_status}")
+        except Exception as exc:
+            if classify_error(exc) != ErrorCategory.TRANSIENT_RETRYABLE:
+                raise exc
         if attempt < 19:
             time.sleep(15)
     raise RuntimeError(f"YouTube processing was not verified: {last}")
@@ -77,12 +93,102 @@ def credentials() -> Credentials:
     )
 
 
+def pending_youtube_record_path(identifier: str) -> Path:
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    runtime = root / ".runtime"
+    runtime.mkdir(exist_ok=True)
+    return runtime / f"pending_youtube_{identifier}.json"
+
+
+def get_pending_youtube_id(identifier: str) -> str:
+    path = pending_youtube_record_path(identifier)
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return str(data.get("youtube_video_id", "")).strip()
+        except Exception:
+            pass
+    return ""
+
+
+def save_pending_youtube_id(identifier: str, video_id: str) -> None:
+    path = pending_youtube_record_path(identifier)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps({"youtube_video_id": video_id}, ensure_ascii=False) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
 def publish_archive_item(identifier: str) -> dict:
     payload = archive_metadata(identifier)
     metadata = payload.get("metadata") or {}
-    existing = metadata.get("youtube_video_id")
+
+    # Check remote IA metadata, pending file, and catalogue files
+    existing = metadata.get("youtube_video_id") or get_pending_youtube_id(identifier)
+    if not existing:
+        root = Path(__file__).resolve().parents[1]
+        for cfg_name in ("topics_history.json", "archive_index.json"):
+            cfg_file = root / "config" / cfg_name
+            if cfg_file.exists():
+                try:
+                    data = json.loads(cfg_file.read_text(encoding="utf-8"))
+                    for rec in data if isinstance(data, list) else []:
+                        if (rec.get("identifier") == identifier or rec.get("archive_identifier") == identifier or rec.get("slug") in identifier) and rec.get("youtube_video_id"):
+                            existing = rec.get("youtube_video_id")
+                            break
+                except Exception:
+                    pass
+            if existing:
+                break
+
+    youtube = build("youtube", "v3", credentials=credentials(), cache_discovery=False)
+
+    if existing:
+        try:
+            verified = wait_until_processed(youtube, existing)
+            if verified.get("status", {}).get("privacyStatus") == "public":
+                record_remote_upload(identifier, existing, "verified")
+                return {
+                    "video_id": existing,
+                    "url": f"https://www.youtube.com/watch?v={existing}",
+                    "already_published": True,
+                    "verified": verified,
+                }
+        except Exception as exc:
+            print(f"Warning: verification of existing YouTube ID {existing} failed: {exc}")
+
     title = read_text(identifier, "01_title.txt")
     description = read_text(identifier, "02_description.txt")
+
+    # Hard-crash recovery: search YouTube directly for an existing video uploaded with this exact title
+    if not existing:
+        try:
+            search_response = youtube.search().list(
+                part="id,snippet",
+                forMine=True,
+                type="video",
+                q=title,
+                maxResults=5,
+            ).execute()
+            for item in search_response.get("items") or []:
+                item_title = item.get("snippet", {}).get("title", "").strip()
+                item_id = item.get("id", {}).get("videoId", "")
+                if item_id and item_title == title.strip():
+                    try:
+                        verified = wait_until_processed(youtube, item_id)
+                        if verified.get("status", {}).get("privacyStatus") == "public":
+                            record_remote_upload(identifier, item_id, "verified")
+                            return {
+                                "video_id": item_id,
+                                "url": f"https://www.youtube.com/watch?v={item_id}",
+                                "already_published": True,
+                                "verified": verified,
+                            }
+                    except Exception as verify_exc:
+                        print(f"Warning: verification of discovered YouTube video {item_id} failed: {verify_exc}")
+        except Exception as search_exc:
+            print(f"Warning: YouTube search discovery failed: {search_exc}")
+
     with tempfile.TemporaryDirectory(prefix="sleep-history-youtube-") as folder:
         directory = Path(folder)
         video = directory / "video.mp4"
@@ -91,12 +197,7 @@ def publish_archive_item(identifier: str) -> dict:
         download(identifier, "11_thumbnail_base.jpg", thumbnail)
         if video.stat().st_size <= 1024:
             raise RuntimeError("Downloaded archive video is empty")
-        youtube = build("youtube", "v3", credentials=credentials(), cache_discovery=False)
-        if existing:
-            verified = wait_until_processed(youtube, existing)
-            if verified.get("status", {}).get("privacyStatus") != "public":
-                raise RuntimeError("YouTube output verification failed: existing video is not public")
-            return {"video_id": existing, "url": f"https://www.youtube.com/watch?v={existing}", "already_published": True, "verified": verified}
+
         request = youtube.videos().insert(
             part="snippet,status",
             body={
@@ -111,6 +212,7 @@ def publish_archive_item(identifier: str) -> dict:
         video_id = response.get("id")
         if not video_id:
             raise RuntimeError("YouTube upload finished without a video ID")
+        save_pending_youtube_id(identifier, video_id)
         record_remote_upload(identifier, video_id, "processing")
         youtube.thumbnails().set(
             videoId=video_id,

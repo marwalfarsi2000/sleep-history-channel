@@ -128,6 +128,7 @@ def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: boo
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+    from error_classifier import classify_error, ErrorCategory
     result = None
     last_error = ""
     retry_delays = GEMINI_RETRY_DELAYS
@@ -143,7 +144,8 @@ def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: boo
                 raise RuntimeError(
                     "Gemini daily quota is exhausted; checkpoint preserved for the next run"
                 ) from error
-            if error.code not in (429, 500, 502, 503, 504) or attempt == len(retry_delays):
+            cat = classify_error(error)
+            if cat != ErrorCategory.TRANSIENT_RETRYABLE or attempt == len(retry_delays):
                 prefix = "GROUNDED_RESEARCH_UNAVAILABLE: " if search else ""
                 raise RuntimeError(prefix + last_error) from error
             retry_after = error.headers.get("Retry-After") if error.headers else None
@@ -258,8 +260,12 @@ def production_rules(*section_numbers: int) -> str:
 
 
 def upsert_history_checkpoint(history_path: Path, story: Path, topic: dict, status: str) -> None:
+    from state_machine import transition_state, normalize_state
     history = json.loads(history_path.read_text(encoding="utf-8"))
     record = next((item for item in history if item.get("slug") == topic["slug"]), None)
+    current_status = record.get("status") if record else ""
+    canonical_target = transition_state(current_status, status) if current_status else normalize_state(status)
+
     if record is None:
         record = {
             "slug": topic["slug"],
@@ -269,7 +275,7 @@ def upsert_history_checkpoint(history_path: Path, story: Path, topic: dict, stat
             "created_at": dt.datetime.now(dt.timezone(dt.timedelta(hours=4))).isoformat(),
         }
         history.append(record)
-    record["status"] = status
+    record["status"] = canonical_target
     record["story_path"] = story.relative_to(ROOT).as_posix()
     # Keep enough provider input to rebuild the same episode when a hosted
     # runner disappears after persisting only the catalogue checkpoint.
@@ -885,7 +891,8 @@ def resume_partial_story(story: Path) -> Path:
     story_text, quality_gate, fact_check = finalize_story_text(story, topic, research, draft)
     build_metadata_files(story, topic, research, sources, story_text, quality_gate, fact_check)
     history_path = ROOT / "config/topics_history.json"
-    upsert_history_checkpoint(history_path, story, topic, "drafting")
+    from state_machine import State
+    upsert_history_checkpoint(history_path, story, topic, State.GENERATING)
     print(json.dumps({"ok": True, "story_path": str(story), "slug": topic["slug"]}, ensure_ascii=False))
     return story
 
@@ -933,7 +940,8 @@ def build_metadata_files(story: Path, topic: dict, research: str, sources: list[
     write(story / "08_image_prompt_en.txt", image_prompt)
     write(story / "09_image_source.md", "# مصدر الصورة\n\nImage generation pending")
     write(story / "16_fact_check.md", "# Fact Check\n\n```json\n" + json.dumps(fact_check, ensure_ascii=False, indent=2) + "\n```")
-    write(story / "17_status.md", "# الحالة\n\n- الحالة الحالية: `drafting`\n- النشر: `not_published`.\n- سيحدّث خط الإنتاج هذه الحالة بعد اكتمال الصوت والفيديو والتحقق.")
+    from state_machine import State
+    write(story / "17_status.md", f"# الحالة\n\n- الحالة الحالية: `{State.GENERATING}`\n- النشر: `not_published`.\n- سيحدّث خط الإنتاج هذه الحالة بعد اكتمال الصوت والفيديو والتحقق.")
     metadata = {
         "title": title,
         "topic": topic["topic_ar"],
@@ -966,7 +974,7 @@ def build_metadata_files(story: Path, topic: dict, research: str, sources: list[
         "audio_path": "",
         "video_path": "",
         "thumbnail_path": "",
-        "approval_status": "drafting",
+        "approval_status": State.GENERATING,
         "publish_status": "not_published",
         "youtube_video_id": None,
     }
@@ -984,29 +992,53 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
             candidate = Path(raw)
             return candidate if candidate.is_absolute() else ROOT / candidate
 
-        # Prefer the newest unfinished checkpoint. A GitHub-hosted runner is
-        # ephemeral, so its catalogue commit can survive while the draft
-        # directory is gone. In that case rebuild the same topic instead of
-        # silently selecting a different episode.
+        def is_valid_checkpoint(item: dict) -> bool:
+            path = checkpoint_path(item)
+            if not path:
+                return False
+            resolved = path.resolve()
+            if not resolved.exists():
+                created_at = item.get("created_at")
+                if not created_at:
+                    print(f"Skipping zombie checkpoint missing created_at without local folder: {item.get('slug')}", file=sys.stderr)
+                    return False
+                try:
+                    dt_created = dt.datetime.fromisoformat(str(created_at))
+                    if (dt.datetime.now(dt.timezone.utc) - dt_created.astimezone(dt.timezone.utc)).days > 7:
+                        print(f"Skipping stale/zombie checkpoint without local folder: {item.get('slug')}", file=sys.stderr)
+                        return False
+                except Exception:
+                    print(f"Skipping zombie checkpoint with malformed created_at without local folder: {item.get('slug')}", file=sys.stderr)
+                    return False
+                return True
+            has_topic = (resolved / "logs" / "topic.json").exists()
+            has_meta = (resolved / "15_metadata.json").exists()
+            if not (has_topic or has_meta):
+                if item.get("topic") or item.get("topic_ar") or item.get("slug"):
+                    return True
+                print(f"Skipping corrupt checkpoint lacking topic/metadata: {item.get('slug')}", file=sys.stderr)
+                return False
+            return True
+
         unfinished = next((
             item for item in reversed(history)
             if (
-                item.get("status") in {"generating", "drafting"}
+                item.get("status") in {"generating", "drafting", "GENERATING"}
                 or (
-                    item.get("status") == "pending_approval"
+                    item.get("status") in {"pending_approval", "REVIEW_PENDING"}
                     and not item.get("archive_identifier")
                 )
                 or (
-                    item.get("status") == "READY_FOR_APPROVAL"
+                    item.get("status") in {"READY_FOR_APPROVAL", "MEDIA_READY"}
                     and not item.get("archive_identifier")
                 )
             )
-            and checkpoint_path(item)
+            and is_valid_checkpoint(item)
         ), None)
         if unfinished:
             saved_story = checkpoint_path(unfinished).resolve()
             if saved_story.exists():
-                if unfinished.get("status") == "READY_FOR_APPROVAL" and (saved_story / "15_metadata.json").exists():
+                if unfinished.get("status") in {"READY_FOR_APPROVAL", "MEDIA_READY"} and (saved_story / "15_metadata.json").exists():
                     print(json.dumps({"ok": True, "story_path": str(saved_story), "slug": unfinished["slug"]}, ensure_ascii=False))
                     return saved_story
                 return resume_partial_story(saved_story)
@@ -1029,7 +1061,8 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
     # Register the selected topic before the first long research request. If a
     # provider call fails later, the next run resumes this exact directory and
     # its saved chapters instead of selecting a different topic.
-    upsert_history_checkpoint(history_path, story, topic, "generating")
+    from state_machine import State
+    upsert_history_checkpoint(history_path, story, topic, State.GENERATING)
     research, sources = research_topic(topic)
     write(story / "logs/research_notes_draft.md", research)
     write(story / "logs/research_grounding_sources.json", json.dumps(sources, ensure_ascii=False, indent=2))
@@ -1041,7 +1074,8 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
     write(story / "logs/assembled_story.md", draft)
     story_text, quality_gate, fact_check = finalize_story_text(story, topic, research, draft)
     build_metadata_files(story, topic, research, sources, story_text, quality_gate, fact_check)
-    upsert_history_checkpoint(history_path, story, topic, "drafting")
+    from state_machine import State
+    upsert_history_checkpoint(history_path, story, topic, State.GENERATING)
     print(json.dumps({"ok": True, "story_path": str(story), "slug": topic["slug"]}, ensure_ascii=False))
     return story
 

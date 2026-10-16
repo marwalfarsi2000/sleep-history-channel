@@ -29,7 +29,8 @@ class GeneratorResumeTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "temporary"):
                     generate_daily.create_daily_story()
             history = json.loads((root / "config" / "topics_history.json").read_text(encoding="utf-8"))
-            self.assertEqual(history[0]["status"], "generating")
+            from state_machine import normalize_state, State
+            self.assertEqual(normalize_state(history[0]["status"]), State.GENERATING)
             self.assertTrue((root / history[0]["story_path"]).exists())
 
     def test_existing_generating_checkpoint_is_resumed(self):
@@ -77,6 +78,7 @@ class GeneratorResumeTests(unittest.TestCase):
             root = Path(directory)
             (root / "config").mkdir()
             (root / "stories").mkdir()
+            now_iso = "2026-10-16T12:00:00+00:00"
             history = [
                 {
                     "slug": "older-draft",
@@ -84,6 +86,7 @@ class GeneratorResumeTests(unittest.TestCase):
                     "angle": "زاوية أقدم",
                     "status": "drafting",
                     "story_path": "stories/older-draft",
+                    "created_at": now_iso,
                 },
                 {
                     "slug": "latest-draft",
@@ -91,6 +94,7 @@ class GeneratorResumeTests(unittest.TestCase):
                     "angle": "زاوية أخيرة",
                     "status": "drafting",
                     "story_path": "stories/latest-draft",
+                    "created_at": now_iso,
                 },
             ]
             (root / "config" / "topics_history.json").write_text(

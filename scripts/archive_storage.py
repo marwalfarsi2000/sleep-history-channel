@@ -12,7 +12,14 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from internetarchive import delete, get_item, upload
+from internetarchive import ArchiveSession, delete, upload
+
+
+def get_archive_item(identifier: str, access_key: str = "", secret_key: str = ""):
+    if not access_key or not secret_key:
+        access_key, secret_key = credentials()
+    session = ArchiveSession(config={"s3": {"access": access_key, "secret": secret_key}})
+    return session.get_item(identifier)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,6 +72,7 @@ def safe_identifier(slug: str, created_at: str = "") -> str:
 
 
 def metadata_for_story(story: Path, identifier: str) -> dict[str, str | list[str]]:
+    from state_machine import State
     data = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
     description = (story / "02_description.txt").read_text(encoding="utf-8").strip()
     return {
@@ -78,7 +86,7 @@ def metadata_for_story(story: Path, identifier: str) -> dict[str, str | list[str
         "language": "ara",
         "subject": ["Arabic", "sleep story", "history", "documentary"],
         "licenseurl": SETTINGS.get("archive_license_url", "https://creativecommons.org/licenses/by-nc-nd/4.0/"),
-        "approval_status": "REVIEW_PENDING",
+        "approval_status": State.REVIEW_PENDING,
         "slug": data["slug"],
     }
 
@@ -240,13 +248,14 @@ def update_index(record: dict) -> None:
 
 
 def finalize_story(story: Path, identifier: str, verified: dict) -> dict:
+    from state_machine import State, transition_state, normalize_state
     metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
     record = {
         "identifier": identifier,
         "slug": metadata["slug"],
         "title": metadata["title"],
         "created_at": metadata.get("created_at"),
-        "status": "REVIEW_PENDING",
+        "status": State.REVIEW_PENDING,
         "video_filename": "14_video_final.mp4",
         "item_url": f"https://archive.org/details/{identifier}",
         "video_url": public_file_url(identifier, "14_video_final.mp4"),
@@ -261,7 +270,8 @@ def finalize_story(story: Path, identifier: str, verified: dict) -> dict:
     history = json.loads(history_path.read_text(encoding="utf-8"))
     for item in history:
         if item.get("slug") == metadata["slug"]:
-            item["status"] = "REVIEW_PENDING"
+            current = item.get("status", "")
+            item["status"] = transition_state(current, State.REVIEW_PENDING) if current else State.REVIEW_PENDING
             item["archive_identifier"] = identifier
             item["archive_url"] = record["item_url"]
             item.pop("story_path", None)
@@ -303,7 +313,7 @@ def upload_story(story: Path) -> dict:
 
 def delete_rejected(identifier: str) -> None:
     access, secret = credentials()
-    item = get_item(identifier, access_key=access, secret_key=secret)
+    item = get_archive_item(identifier, access_key=access, secret_key=secret)
     files = [entry["name"] for entry in (item.item_metadata.get("files") or []) if entry.get("name")]
     original = [name for name in files if not name.startswith("__")]
     if original:
@@ -322,11 +332,14 @@ def delete_rejected(identifier: str) -> None:
 
 
 def set_index_status(identifier: str, status: str, **updates: object) -> None:
+    from state_machine import transition_state, normalize_state
     records = json.loads(ARCHIVE_INDEX.read_text(encoding="utf-8")) if ARCHIVE_INDEX.exists() else []
     found = False
+    target_status = normalize_state(status)
     for record in records:
         if record.get("identifier") == identifier:
-            record["status"] = status
+            current = record.get("status", "")
+            record["status"] = transition_state(current, target_status) if current else target_status
             record.update(updates)
             found = True
     if not found:
@@ -336,7 +349,8 @@ def set_index_status(identifier: str, status: str, **updates: object) -> None:
     history = json.loads(history_path.read_text(encoding="utf-8"))
     for item in history:
         if item.get("archive_identifier") == identifier:
-            item["status"] = status
+            current = item.get("status", "")
+            item["status"] = transition_state(current, target_status) if current else target_status
             item.update({key: value for key, value in updates.items() if key in {"youtube_video_id"}})
     atomic_json(history_path, history)
 
