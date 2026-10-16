@@ -29,11 +29,32 @@ def diagnostic_summary() -> str:
     useful = [
         line.strip()
         for line in lines
-        if line.strip() and re.search(r"error|runtimeerror|httperror|failed|quota|unavailable|missing", line, re.I)
+        if line.strip() and re.search(r"runtimeerror|httperror|gemini http|quota|unavailable|missing", line, re.I)
     ]
-    summary = (useful[-1] if useful else lines[-1] if lines else "سجل فارغ")[:500]
+    if not useful:
+        summary = (lines[-1] if lines else "سجل فارغ")[:500]
+    else:
+        json_lines = [line for line in useful if '{"error":' in line]
+        summary = (json_lines[-1] if json_lines else useful[-1])[:500]
     summary = re.sub(r"(?i)(api[_-]?key|token|secret|authorization)\s*[:=]\s*\S+", r"\1=[REDACTED]", summary)
-    return summary
+    summary = re.sub(r"(?i)bearer\s+\S+", "Bearer [REDACTED]", summary)
+    try:
+        if '{"error":' in summary:
+            json_start = summary.find('{"error":')
+            json_str = summary[json_start:]
+            error_json = json.loads(json_str)
+            if isinstance(error_json, dict) and "error" in error_json:
+                error_obj = error_json["error"]
+                if isinstance(error_obj, dict):
+                    if "message" in error_obj:
+                        summary = str(error_obj["message"])[:300]
+                    elif "status" in error_obj:
+                        summary = f"{error_obj.get('status', '')} {summary[:200]}"
+    except (json.JSONDecodeError, ValueError):
+        pass
+    if len(summary) > 300:
+        summary = summary[:300]
+    return summary.strip()
 
 
 def main() -> None:
