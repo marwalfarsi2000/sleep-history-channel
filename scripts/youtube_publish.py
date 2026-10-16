@@ -159,6 +159,36 @@ def publish_archive_item(identifier: str) -> dict:
 
     title = read_text(identifier, "01_title.txt")
     description = read_text(identifier, "02_description.txt")
+
+    # Hard-crash recovery: search YouTube directly for an existing video uploaded with this exact title
+    if not existing:
+        try:
+            search_response = youtube.search().list(
+                part="id,snippet",
+                forMine=True,
+                type="video",
+                q=title,
+                maxResults=5,
+            ).execute()
+            for item in search_response.get("items") or []:
+                item_title = item.get("snippet", {}).get("title", "").strip()
+                item_id = item.get("id", {}).get("videoId", "")
+                if item_id and item_title == title.strip():
+                    try:
+                        verified = wait_until_processed(youtube, item_id)
+                        if verified.get("status", {}).get("privacyStatus") == "public":
+                            record_remote_upload(identifier, item_id, "verified")
+                            return {
+                                "video_id": item_id,
+                                "url": f"https://www.youtube.com/watch?v={item_id}",
+                                "already_published": True,
+                                "verified": verified,
+                            }
+                    except Exception as verify_exc:
+                        print(f"Warning: verification of discovered YouTube video {item_id} failed: {verify_exc}")
+        except Exception as search_exc:
+            print(f"Warning: YouTube search discovery failed: {search_exc}")
+
     with tempfile.TemporaryDirectory(prefix="sleep-history-youtube-") as folder:
         directory = Path(folder)
         video = directory / "video.mp4"
