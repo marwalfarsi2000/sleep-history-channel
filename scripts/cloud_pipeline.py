@@ -213,8 +213,8 @@ def remote_status(identifier: str) -> str:
 
 
 def modify_remote(identifier: str, fields: dict) -> None:
-    from internetarchive import get_item
-    item = get_item(identifier, access_key=os.environ["IAS3_ACCESS_KEY"], secret_key=os.environ["IAS3_SECRET_KEY"])
+    from archive_storage import get_archive_item
+    item = get_archive_item(identifier, access_key=os.environ["IAS3_ACCESS_KEY"], secret_key=os.environ["IAS3_SECRET_KEY"])
     response = item.modify_metadata(fields)
     if getattr(response, "status_code", 200) >= 400:
         raise RuntimeError(f"Internet Archive metadata update failed with HTTP {response.status_code}")
@@ -230,14 +230,20 @@ def download_file(identifier: str, filename: str, destination: Path) -> None:
 
 
 def publish(identifier: str) -> dict:
-    if remote_status(identifier) != "REVIEW_PENDING":
-        raise RuntimeError("HUMAN_APPROVAL_GATE_FAILED: archive item is not REVIEW_PENDING")
+    from state_machine import State, normalize_state
+    current_remote = normalize_state(remote_status(identifier))
+    allowed_states = {State.REVIEW_PENDING, State.APPROVED_FOR_PUBLISH, State.PUBLISHING, State.PUBLISHED}
+    if current_remote not in allowed_states:
+        raise RuntimeError(f"HUMAN_APPROVAL_GATE_FAILED: archive item status {current_remote!r} is not publishable")
+
     from youtube_publish import publish_archive_item
-    modify_remote(identifier, {
-        "approval_status": "APPROVED_FOR_PUBLISH",
-        "approved_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-    })
-    set_index_status(identifier, "APPROVED_FOR_PUBLISH")
+    if current_remote == State.REVIEW_PENDING:
+        modify_remote(identifier, {
+            "approval_status": "APPROVED_FOR_PUBLISH",
+            "approved_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        })
+        set_index_status(identifier, "APPROVED_FOR_PUBLISH")
+
     result = publish_archive_item(identifier)
     set_index_status(identifier, "COMPLETED", youtube_video_id=result["video_id"], youtube_url=result["url"])
     modify_remote(identifier, {

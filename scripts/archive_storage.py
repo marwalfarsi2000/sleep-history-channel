@@ -12,7 +12,14 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from internetarchive import delete, get_item, upload
+from internetarchive import ArchiveSession, delete, upload
+
+
+def get_archive_item(identifier: str, access_key: str = "", secret_key: str = ""):
+    if not access_key or not secret_key:
+        access_key, secret_key = credentials()
+    session = ArchiveSession(config={"s3": {"access": access_key, "secret": secret_key}})
+    return session.get_item(identifier)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -303,7 +310,7 @@ def upload_story(story: Path) -> dict:
 
 def delete_rejected(identifier: str) -> None:
     access, secret = credentials()
-    item = get_item(identifier, access_key=access, secret_key=secret)
+    item = get_archive_item(identifier, access_key=access, secret_key=secret)
     files = [entry["name"] for entry in (item.item_metadata.get("files") or []) if entry.get("name")]
     original = [name for name in files if not name.startswith("__")]
     if original:

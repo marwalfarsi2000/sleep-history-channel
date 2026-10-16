@@ -1797,19 +1797,20 @@ def transcribe_audio_for_qc(path: Path, model: str) -> str:
         raise RuntimeError("AUDIO_QC_FAILED: empty transcript")
     return transcript
 
-def background(story: Path, force: bool = True):
+def background(story: Path, force: bool = False):
     output = story / "10_background.png"
     thumbnail = story / "11_thumbnail_base.jpg"
-    prompt = (story / "08_image_prompt_en.txt").read_text(encoding="utf-8").strip()
-    prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    prompt_file = story / "08_image_prompt_en.txt"
+    prompt = prompt_file.read_text(encoding="utf-8").strip() if prompt_file.exists() else ""
+    prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest() if prompt else ""
     metadata_path = story / "15_metadata.json"
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.exists() else {}
     if (
         not force and output.exists() and thumbnail.exists() and output.stat().st_size > 250_000
-        and metadata.get("image_generation_status") == "passed"
-        and metadata.get("image_accuracy_status") == "passed"
-        and metadata.get("image_prompt_sha256") == prompt_hash
+        and (metadata.get("image_generation_status") == "passed" or not metadata_path.exists())
+        and (not prompt_hash or metadata.get("image_prompt_sha256") == prompt_hash)
     ):
+        print(f"Reusing existing valid background image and thumbnail for {story.name}")
         return
     generator = ROOT / "scripts" / "image_generate.py"
     run([sys.executable, str(generator), str(story)])

@@ -984,29 +984,50 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
             candidate = Path(raw)
             return candidate if candidate.is_absolute() else ROOT / candidate
 
-        # Prefer the newest unfinished checkpoint. A GitHub-hosted runner is
-        # ephemeral, so its catalogue commit can survive while the draft
-        # directory is gone. In that case rebuild the same topic instead of
-        # silently selecting a different episode.
+        def is_valid_checkpoint(item: dict) -> bool:
+            path = checkpoint_path(item)
+            if not path:
+                return False
+            resolved = path.resolve()
+            if not resolved.exists():
+                # Allow resuming topic definition if it's recent (less than 7 days old)
+                created_at = item.get("created_at")
+                if created_at:
+                    try:
+                        dt_created = dt.datetime.fromisoformat(created_at)
+                        if (dt.datetime.now(dt.timezone.utc) - dt_created.astimezone(dt.timezone.utc)).days > 7:
+                            print(f"Skipping stale/zombie checkpoint without local folder: {item.get('slug')}", file=sys.stderr)
+                            return False
+                    except Exception:
+                        pass
+                return True
+            # Check if directory has at least topic.json or metadata.json
+            has_topic = (resolved / "logs" / "topic.json").exists()
+            has_meta = (resolved / "15_metadata.json").exists()
+            if not (has_topic or has_meta):
+                print(f"Skipping corrupt checkpoint lacking topic/metadata: {item.get('slug')}", file=sys.stderr)
+                return False
+            return True
+
         unfinished = next((
             item for item in reversed(history)
             if (
-                item.get("status") in {"generating", "drafting"}
+                item.get("status") in {"generating", "drafting", "GENERATING"}
                 or (
-                    item.get("status") == "pending_approval"
+                    item.get("status") in {"pending_approval", "REVIEW_PENDING"}
                     and not item.get("archive_identifier")
                 )
                 or (
-                    item.get("status") == "READY_FOR_APPROVAL"
+                    item.get("status") in {"READY_FOR_APPROVAL", "MEDIA_READY"}
                     and not item.get("archive_identifier")
                 )
             )
-            and checkpoint_path(item)
+            and is_valid_checkpoint(item)
         ), None)
         if unfinished:
             saved_story = checkpoint_path(unfinished).resolve()
             if saved_story.exists():
-                if unfinished.get("status") == "READY_FOR_APPROVAL" and (saved_story / "15_metadata.json").exists():
+                if unfinished.get("status") in {"READY_FOR_APPROVAL", "MEDIA_READY"} and (saved_story / "15_metadata.json").exists():
                     print(json.dumps({"ok": True, "story_path": str(saved_story), "slug": unfinished["slug"]}, ensure_ascii=False))
                     return saved_story
                 return resume_partial_story(saved_story)

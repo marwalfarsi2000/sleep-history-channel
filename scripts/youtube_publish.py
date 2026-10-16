@@ -20,8 +20,8 @@ def record_remote_upload(identifier: str, video_id: str, status: str) -> None:
     secret = os.environ.get("IAS3_SECRET_KEY", "")
     if not access or not secret:
         raise RuntimeError("Internet Archive credentials are required for atomic YouTube publishing")
-    from internetarchive import get_item
-    get_item(identifier, access_key=access, secret_key=secret).modify_metadata({
+    from archive_storage import get_archive_item
+    get_archive_item(identifier, access_key=access, secret_key=secret).modify_metadata({
         "youtube_video_id": video_id,
         "youtube_url": f"https://www.youtube.com/watch?v={video_id}",
         "youtube_upload_status": status,
@@ -81,6 +81,20 @@ def publish_archive_item(identifier: str) -> dict:
     payload = archive_metadata(identifier)
     metadata = payload.get("metadata") or {}
     existing = metadata.get("youtube_video_id")
+    if existing:
+        youtube = build("youtube", "v3", credentials=credentials(), cache_discovery=False)
+        try:
+            verified = wait_until_processed(youtube, existing)
+            if verified.get("status", {}).get("privacyStatus") == "public":
+                return {
+                    "video_id": existing,
+                    "url": f"https://www.youtube.com/watch?v={existing}",
+                    "already_published": True,
+                    "verified": verified,
+                }
+        except Exception as exc:
+            print(f"Warning: verification of existing YouTube ID {existing} failed: {exc}")
+
     title = read_text(identifier, "01_title.txt")
     description = read_text(identifier, "02_description.txt")
     with tempfile.TemporaryDirectory(prefix="sleep-history-youtube-") as folder:
