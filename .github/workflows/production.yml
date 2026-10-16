@@ -115,5 +115,6 @@ jobs:
           git add config/topics_history.json config/topic_candidate_bank.json config/archive_index.json config/tts_usage.json config/tts_quota_state.json config/pronunciation_dictionary.json
           if ! git diff --cached --quiet; then
             git commit -m "Update sleep history catalogue"
+            git pull --rebase origin main
             git push
           fi

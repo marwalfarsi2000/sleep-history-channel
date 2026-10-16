@@ -38,6 +38,14 @@ class TtsGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "SPEECH_SAFE_VALIDATION_FAILED"):
             pipeline.require_speech_safe(unsafe, stage="TEST")
 
+    def test_speech_safe_gate_does_not_split_diacritized_arabic_words(self):
+        safe = "مِنَ المَدِينَةِ سارَ الرَّجُلُ صَباحًا في هُدوء."
+        self.assertEqual(pipeline.speech_safe_violations(safe), [])
+        self.assertIn(
+            "ambiguous abbreviation",
+            " ".join(pipeline.speech_safe_violations("بلغ طوله م.")),
+        )
+
     def test_tts_normalizer_creates_spoken_form_and_checkpoints_it(self):
         source = "في سنة 1258 م، قطع المسافر 3.5 km."
         spoken = "في سنة ألف ومئتين وثمانية وخمسين ميلادية، قطع المسافر ثلاثة كيلومترات ونصف."

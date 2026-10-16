@@ -171,6 +171,9 @@ def lexical_fidelity(source: str, candidate: str) -> tuple[bool, list[tuple[str,
 
 def speech_safe_violations(text: str) -> list[str]:
     """Return deterministic hazards that must never reach a speech provider."""
+    # Combining Arabic marks are not token boundaries. Scan an unvocalized
+    # mirror so a word such as مِنهُ is never mistaken for standalone "م".
+    scan_text = DIACRITICS_RE.sub("", text)
     checks = (
         (r"[0-9٠-٩]", "raw number"),
         (r"https?://|www\.", "URL"),
@@ -190,7 +193,7 @@ def speech_safe_violations(text: str) -> list[str]:
     )
     violations: list[str] = []
     for pattern, label in checks:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
+        match = re.search(pattern, scan_text, flags=re.IGNORECASE)
         if match:
             sample = " ".join(match.group(0).split())[:60]
             violations.append(f"{label}: {sample}")
