@@ -1,4 +1,6 @@
 from unittest.mock import MagicMock, patch
+import json
+from pathlib import Path
 import pytest
 import youtube_publish
 
@@ -62,11 +64,25 @@ def test_publish_recovery_after_failure_post_youtube_insert(tmp_path, monkeypatc
         with pytest.raises(RuntimeError):
             youtube_publish.publish_archive_item("item-failure-test")
 
-    # Prove that second run recovers using local pending ID and does NOT call insert again
+    # Explicitly wipe .runtime pending record to simulate a fresh GitHub Actions runner
+    pending_file = youtube_publish.pending_youtube_record_path("item-failure-test")
+    if pending_file.exists():
+        pending_file.unlink()
+
+    # Prove that second run recovers using catalogue metadata/files and does NOT call insert again
     mock_videos.insert.reset_mock()
-    with patch("youtube_publish.archive_metadata", return_value=mock_payload), \
+
+    mock_payload_recovered = {
+        "metadata": {
+            "youtube_video_id": "new_yt_123"
+        }
+    }
+
+    with patch("youtube_publish.archive_metadata", return_value=mock_payload_recovered), \
          patch("youtube_publish.build", return_value=mock_youtube), \
          patch("youtube_publish.credentials", return_value=MagicMock()), \
+         patch("youtube_publish.download", side_effect=mock_download), \
+         patch("youtube_publish.read_text", return_value="title"), \
          patch("youtube_publish.record_remote_upload"):
 
         res = youtube_publish.publish_archive_item("item-failure-test")

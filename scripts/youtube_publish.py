@@ -22,9 +22,11 @@ def record_remote_upload(identifier: str, video_id: str, status: str) -> None:
         raise RuntimeError("Internet Archive credentials are required for atomic YouTube publishing")
     from archive_storage import get_archive_item, set_index_status
     from error_classifier import retry_transient
+    from state_machine import State
 
+    canonical_state = State.PUBLISHED if status == "verified" else State.PUBLISHING
     try:
-        set_index_status(identifier, status, youtube_video_id=video_id)
+        set_index_status(identifier, canonical_state, youtube_video_id=video_id)
     except Exception as exc:
         print(f"Warning: local catalogue update for {identifier} failed: {exc}")
 
@@ -131,7 +133,7 @@ def publish_archive_item(identifier: str) -> dict:
                 try:
                     data = json.loads(cfg_file.read_text(encoding="utf-8"))
                     for rec in data if isinstance(data, list) else []:
-                        if (rec.get("identifier") == identifier or rec.get("archive_identifier") == identifier) and rec.get("youtube_video_id"):
+                        if (rec.get("identifier") == identifier or rec.get("archive_identifier") == identifier or rec.get("slug") in identifier) and rec.get("youtube_video_id"):
                             existing = rec.get("youtube_video_id")
                             break
                 except Exception:

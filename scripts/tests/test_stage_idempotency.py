@@ -82,3 +82,52 @@ def test_completed_artifacts_are_current_skips_rerunning_expensive_stages(tmp_pa
     (story_dir / "15_metadata.json").write_text(json.dumps(meta), encoding="utf-8")
 
     assert pipeline.completed_artifacts_are_current(story_dir) is True
+
+
+def test_tts_reused_on_retry_after_later_stage_failure(tmp_path, monkeypatch):
+    story_dir = tmp_path / "stories" / "test-tts-reuse"
+    story_dir.mkdir(parents=True)
+    tdir = story_dir / "tts_chunks"
+    adir = story_dir / "audio_chunks"
+    logs = story_dir / "logs"
+    tdir.mkdir()
+    adir.mkdir()
+    logs.mkdir()
+
+    # Create dummy tts chunk and audio chunk
+    chunk_file = tdir / "001.txt"
+    chunk_file.write_text("نص تجريبي للاختبار", encoding="utf-8")
+    audio_file = adir / "001.mp3"
+    audio_file.write_bytes(b"MP3_AUDIO_DATA_" + b"X" * 2000)
+
+    # Calculate expected hash as synthesize does
+    import pipeline
+    source_hash = hashlib.sha256(
+        (
+            pipeline.TTS_AUDIO_CACHE_VERSION
+            + "\nedge\nedge\nar-AE-FatimaNeural\n"
+            + "نص تجريبي للاختبار"
+        ).encode("utf-8")
+    ).hexdigest()
+
+    (logs / "tts_chunk_hashes.json").write_text(json.dumps({"001.txt": source_hash}), encoding="utf-8")
+    (logs / "tts_chunk_models.json").write_text(json.dumps({"001.txt": "edge"}), encoding="utf-8")
+
+    # Mock tts_one so if called it raises an error
+    mock_tts_one = MagicMock(side_effect=RuntimeError("TTS generator should NOT be called"))
+
+    with patch("pipeline.SETTINGS", {"tts_provider": "edge", "tts_voice": "ar-AE-FatimaNeural", "background_audio_file": ""}), \
+         patch("pipeline.SECRETS", {}), \
+         patch("pipeline.prepare"), \
+         patch("pipeline.tts_one", mock_tts_one), \
+         patch("pipeline.validate_audio"), \
+         patch("pipeline.mix_background_audio"), \
+             patch("pipeline.duration", return_value=100.0), \
+         patch("pipeline.run"):
+
+        import asyncio
+        asyncio.run(pipeline.synthesize(story_dir))
+
+        # Prove tts_one was never called and audio chunk remained intact
+        mock_tts_one.assert_not_called()
+        assert audio_file.exists()

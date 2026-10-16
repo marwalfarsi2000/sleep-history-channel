@@ -940,7 +940,8 @@ def build_metadata_files(story: Path, topic: dict, research: str, sources: list[
     write(story / "08_image_prompt_en.txt", image_prompt)
     write(story / "09_image_source.md", "# مصدر الصورة\n\nImage generation pending")
     write(story / "16_fact_check.md", "# Fact Check\n\n```json\n" + json.dumps(fact_check, ensure_ascii=False, indent=2) + "\n```")
-    write(story / "17_status.md", "# الحالة\n\n- الحالة الحالية: `drafting`\n- النشر: `not_published`.\n- سيحدّث خط الإنتاج هذه الحالة بعد اكتمال الصوت والفيديو والتحقق.")
+    from state_machine import State
+    write(story / "17_status.md", f"# الحالة\n\n- الحالة الحالية: `{State.GENERATING}`\n- النشر: `not_published`.\n- سيحدّث خط الإنتاج هذه الحالة بعد اكتمال الصوت والفيديو والتحقق.")
     metadata = {
         "title": title,
         "topic": topic["topic_ar"],
@@ -973,7 +974,7 @@ def build_metadata_files(story: Path, topic: dict, research: str, sources: list[
         "audio_path": "",
         "video_path": "",
         "thumbnail_path": "",
-        "approval_status": "drafting",
+        "approval_status": State.GENERATING,
         "publish_status": "not_published",
         "youtube_video_id": None,
     }
@@ -1073,7 +1074,8 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
     write(story / "logs/assembled_story.md", draft)
     story_text, quality_gate, fact_check = finalize_story_text(story, topic, research, draft)
     build_metadata_files(story, topic, research, sources, story_text, quality_gate, fact_check)
-    upsert_history_checkpoint(history_path, story, topic, "drafting")
+    from state_machine import State
+    upsert_history_checkpoint(history_path, story, topic, State.GENERATING)
     print(json.dumps({"ok": True, "story_path": str(story), "slug": topic["slug"]}, ensure_ascii=False))
     return story
 
