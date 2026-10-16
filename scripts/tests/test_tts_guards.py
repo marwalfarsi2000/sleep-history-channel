@@ -27,6 +27,50 @@ class _FakeResponse:
 
 
 class TtsGuardTests(unittest.TestCase):
+    def test_speech_safe_gate_rejects_raw_tts_hazards(self):
+        unsafe = "في 1258 م قطع 3.5 km، بنسبة 25%، وفق https://example.com [1]."
+        violations = pipeline.speech_safe_violations(unsafe)
+        labels = " ".join(violations)
+        self.assertIn("raw number", labels)
+        self.assertIn("URL", labels)
+        self.assertIn("Latin text", labels)
+        self.assertIn("unexpanded symbol", labels)
+        with self.assertRaisesRegex(RuntimeError, "SPEECH_SAFE_VALIDATION_FAILED"):
+            pipeline.require_speech_safe(unsafe, stage="TEST")
+
+    def test_tts_normalizer_creates_spoken_form_and_checkpoints_it(self):
+        source = "في سنة 1258 م، قطع المسافر 3.5 km."
+        spoken = "في سنة ألف ومئتين وثمانية وخمسين ميلادية، قطع المسافر ثلاثة كيلومترات ونصف."
+        semantic_pass = json.dumps({
+            "status": "PASS",
+            "meaning_preserved": True,
+            "context_resolved": True,
+            "natural_spoken_arabic": True,
+            "remaining_ambiguities": [],
+            "issues": [],
+        }, ensure_ascii=False)
+        with tempfile.TemporaryDirectory() as directory:
+            story = Path(directory)
+            (story / "logs").mkdir()
+            with mock.patch.object(
+                pipeline, "gemini", side_effect=[(spoken, []), (semantic_pass, [])]
+            ) as gemini:
+                result = pipeline.normalize_for_tts(source, story)
+            self.assertEqual(result, spoken)
+            self.assertEqual(pipeline.speech_safe_violations(result), [])
+            self.assertTrue((story / "logs" / "tts_normalization.json").exists())
+            self.assertEqual(gemini.call_count, 2)
+
+    def test_tts_normalizer_skips_llm_when_text_is_already_speech_safe(self):
+        source = "في سنة ألف ومئتين وثمانية وخمسين ميلادية، بدأ الصباح بهدوء."
+        with tempfile.TemporaryDirectory() as directory:
+            story = Path(directory)
+            (story / "logs").mkdir()
+            with mock.patch.object(pipeline, "gemini") as gemini:
+                result = pipeline.normalize_for_tts(source, story)
+            self.assertEqual(result, source)
+            gemini.assert_not_called()
+
     def test_pausal_form_removes_all_marks_from_every_sentence_final_word(self):
         source = "في مَدِينَةٍ عَمِيقَةٍ، كانَتِ الرِّحْلَةُ عَمِيقَةً؟ ثُمَّ عادَ المُسَافِرُ!"
         result = pipeline.api_text(source)

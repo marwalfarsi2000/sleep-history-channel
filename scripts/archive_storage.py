@@ -92,6 +92,7 @@ def story_files(story: Path) -> dict[str, str]:
         "03_sources.md",
         "04_research_notes.md",
         "05_story_clean.md",
+        "05b_story_tts_normalized.md",
         "06_story_tts_annotated.md",
         "07_story_tts_api.md",
         "08_image_prompt_en.txt",

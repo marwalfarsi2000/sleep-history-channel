@@ -97,8 +97,11 @@ ARABIC_DIRECTION_TAGS = {
 }
 DIACRITICS_RE = re.compile(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]")
 DIRECTION_RE = re.compile(r"\[[^\]\n]{1,100}\]")
-DIACRITIZATION_VERSION = "full-v7-double-reviewed-pausal-final-words"
-TTS_AUDIO_CACHE_VERSION = "native-speed-1.0-v2"
+DIACRITIZATION_VERSION = "full-v8-speech-normalized-pausal-final-words"
+TTS_NORMALIZATION_VERSION = "arabic-speech-normalizer-v1"
+TTS_AUDIO_CACHE_VERSION = "native-speed-1.0-v3-speech-normalized"
+TTS_RULES_PATH = ROOT / "config" / "tts_speech_normalization_rules.md"
+PRONUNCIATION_DICTIONARY_PATH = ROOT / "config" / "pronunciation_dictionary.json"
 _DIACRITIZATION_LAST_REQUEST_AT = 0.0
 MALFORMED_DIACRITIC_PATTERNS = (
     re.compile(r"الِا"),
@@ -164,6 +167,161 @@ def lexical_fidelity(source: str, candidate: str) -> tuple[bool, list[tuple[str,
         corrections.append((original, revised))
     allowed = max(2, int(len(source_tokens) * 0.02))
     return len(corrections) <= allowed, corrections
+
+
+def speech_safe_violations(text: str) -> list[str]:
+    """Return deterministic hazards that must never reach a speech provider."""
+    checks = (
+        (r"[0-9٠-٩]", "raw number"),
+        (r"https?://|www\.", "URL"),
+        (r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b", "email"),
+        (r"@[A-Za-z0-9_]", "username"),
+        (r"[A-Za-z]", "Latin text or abbreviation"),
+        (r"<[^>]+>", "HTML"),
+        (r"(?m)^\s{0,3}(?:#{1,6}|[-+*]>?|>)\s+|```|`", "Markdown"),
+        (r"\[\s*\d+\s*\]|\(\s*[^)]*\d{4}[^)]*\)", "citation or footnote"),
+        (r"[%٪°$€£¥+×÷=&<>/@#*_\\²³]", "unexpanded symbol"),
+        (r"[–—]", "unresolved dash"),
+        (r"(?<!\w)-(?!\w)|(?<=\w)-(?=\w)", "unresolved hyphen"),
+        (r"[()\[\]{}]", "parenthetical or bracketed text"),
+        (r"[\"“”«»]", "quotation marks requiring spoken context"),
+        (r"(?:\.{3,}|[!؟?]{2,})", "repeated punctuation"),
+        (r"(?<![\w])(?:هـ|ق\.?م\.?|سم|كم|كغ|د\.|أ\.?د\.?|ص|م)(?![\w])", "ambiguous abbreviation"),
+    )
+    violations: list[str] = []
+    for pattern, label in checks:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            sample = " ".join(match.group(0).split())[:60]
+            violations.append(f"{label}: {sample}")
+    return violations
+
+
+def require_speech_safe(text: str, *, stage: str) -> None:
+    violations = speech_safe_violations(text)
+    if violations:
+        raise RuntimeError(
+            f"SPEECH_SAFE_VALIDATION_FAILED[{stage}]: "
+            + json.dumps(violations, ensure_ascii=False)
+        )
+
+
+def _strip_model_fence(text: str) -> str:
+    value = text.strip()
+    if value.startswith("```"):
+        value = re.sub(r"^```[^\n]*\n?", "", value)
+        value = re.sub(r"\n?```$", "", value)
+    return value.strip()
+
+
+def validate_speech_safe_semantics(source: str, candidate: str) -> dict:
+    prompt = f"""أنت SPEECH_SAFE_VALIDATOR مستقل. لا تعيد كتابة النص.
+قارن النص الأصلي بنسخة النطق، وتأكد أن كل حقيقة ومعنى وعلاقة زمنية وكمية محفوظة، وأن الأرقام والتواريخ والعصور والوحدات والاختصارات فُهمت من السياق ولم تُخمن، وأن الصياغة عربية طبيعية لما يجب أن يسمعه المستمع.
+أعد JSON فقط:
+{{"status":"PASS أو FAIL","meaning_preserved":true,"context_resolved":true,"natural_spoken_arabic":true,"remaining_ambiguities":[],"issues":[]}}
+
+النص الأصلي:
+{source}
+
+نسخة النطق:
+{candidate}
+"""
+    result_text, _ = gemini(prompt, json_mode=True, max_tokens=1800, temperature=0.0)
+    result = parse_json(result_text)
+    passed = (
+        result.get("status") == "PASS"
+        and result.get("meaning_preserved") is True
+        and result.get("context_resolved") is True
+        and result.get("natural_spoken_arabic") is True
+        and not (result.get("remaining_ambiguities") or [])
+        and not (result.get("issues") or [])
+    )
+    if not passed:
+        result["status"] = "FAIL"
+    return result
+
+
+def normalize_for_tts(clean_story: str, story: Path) -> str:
+    """Create and checkpoint an ear-first narration without changing facts."""
+    rules = TTS_RULES_PATH.read_text(encoding="utf-8")
+    cache_dir = story / "logs" / "tts_normalizer_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    records: list[dict] = []
+    outputs: list[str] = []
+    blocks = split_diacritization_blocks(clean_story, limit=7000)
+    for index, block in enumerate(blocks, 1):
+        hazards = speech_safe_violations(block)
+        if not hazards:
+            outputs.append(block)
+            records.append({"block": index, "status": "already_safe", "violations": []})
+            continue
+        cache_key = hashlib.sha256(
+            f"{TTS_NORMALIZATION_VERSION}\n{rules}\n{block}".encode("utf-8")
+        ).hexdigest()
+        cache_path = cache_dir / f"{cache_key}.txt"
+        cache_hit = cache_path.exists()
+        candidate = cache_path.read_text(encoding="utf-8").strip() if cache_hit else ""
+        last_violations = speech_safe_violations(candidate) if candidate else hazards
+        semantic_gate: dict = {}
+        if candidate and not last_violations:
+            # A cache entry is written only after both deterministic and semantic
+            # validators pass for this exact source/rules/version hash.
+            semantic_gate = (
+                {"status": "PASS", "cached": True}
+                if cache_hit
+                else validate_speech_safe_semantics(block, candidate)
+            )
+        if not candidate or last_violations or semantic_gate.get("status") != "PASS":
+            for _attempt in range(2):
+                prompt = f"""أنت TTS_NORMALIZER عربي مستقل. حوّل النص المكتوب إلى نص نطق طبيعي فقط.
+لا تلخص ولا تحذف أي حقيقة سردية ولا تضف معلومة. غيّر فقط ما يلزم للنطق: الأرقام والتواريخ والعصور والاختصارات والوحدات والعملات والرموز والأسماء الأجنبية والتنسيق.
+استخدم السياق داخل المقطع لاختيار الصيغة العربية الطبيعية. عند الغموض أعد صياغة الجملة بلا تخمين.
+أخرج النص المنظَّم وحده دون عنوان أو Markdown أو شرح.
+
+القواعد الإلزامية:
+{rules}
+
+المخاطر أو ملاحظات المدقق المستقل:
+{json.dumps(last_violations or semantic_gate, ensure_ascii=False)}
+
+النص:
+{block}
+"""
+                result, _ = gemini(prompt, max_tokens=8000, temperature=0.0)
+                candidate = _strip_model_fence(result)
+                last_violations = speech_safe_violations(candidate)
+                minimum_words = max(1, int(arabic_words(block) * 0.85))
+                semantic_gate = (
+                    validate_speech_safe_semantics(block, candidate)
+                    if not last_violations and arabic_words(candidate) >= minimum_words
+                    else {"status": "FAIL", "issues": ["output became too short"]}
+                )
+                if not last_violations and semantic_gate.get("status") == "PASS":
+                    cache_path.write_text(candidate + "\n", encoding="utf-8")
+                    break
+            else:
+                raise RuntimeError(
+                    f"TTS_NORMALIZATION_FAILED block {index}: "
+                    + json.dumps(last_violations or semantic_gate, ensure_ascii=False)
+                )
+        outputs.append(candidate)
+        records.append({
+            "block": index,
+            "status": "normalized",
+            "violations": hazards,
+            "semantic_validation": semantic_gate,
+        })
+    normalized = "\n\n".join(outputs).strip()
+    require_speech_safe(normalized, stage="TTS_NORMALIZER_OUTPUT")
+    (story / "logs" / "tts_normalization.json").write_text(
+        json.dumps({
+            "version": TTS_NORMALIZATION_VERSION,
+            "status": "passed",
+            "blocks": records,
+        }, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return normalized
 
 def restore_source_lexemes(source: str, candidate: str) -> str:
     """Keep Gemini's marks while mechanically restoring every original letter."""
@@ -537,15 +695,33 @@ def apply_pronunciation_replacement(text: str, current: str, replacement: str) -
 
 
 def pronunciation_validate(clean_story: str, annotated: str, story: Path) -> str:
+    dictionary = {}
+    if PRONUNCIATION_DICTIONARY_PATH.exists():
+        dictionary = json.loads(PRONUNCIATION_DICTIONARY_PATH.read_text(encoding="utf-8"))
+    revised = annotated
+    dictionary_applied = []
+    bare_revised = DIACRITICS_RE.sub("", revised)
+    for current, replacement in dictionary.items():
+        current = str(current).strip()
+        replacement = str(replacement).strip()
+        if not current or not replacement or current not in bare_revised:
+            continue
+        revised, occurrences = apply_pronunciation_replacement(revised, current, replacement)
+        dictionary_applied.append({
+            "current": current,
+            "replacement": replacement,
+            "occurrences": occurrences,
+        })
     prompt = f"""أنت بوابة نطق مستقلة لنص تاريخي عربي سيحوّل إلى صوت.
 راجع فقط أسماء الأشخاص والمدن والمواقع والسلالات والحضارات والكلمات الأجنبية المعربة.
 لا تغير الحقائق أو الكلمات. إذا كان التشكيل الحالي يسبب نطقًا خاطئًا، اقترح استبدالًا مشكولًا لنفس الحروف.
+طُبق قاموس النطق الدائم أولًا. لا تتراجع عن تصحيحاته، واقترح فقط تصحيحات جديدة لازمة.
 هذه نسخة المراجعة المشكولة بالكامل. ستُحذف آليًا جميع علامات تشكيل آخر كلمة في كل جملة من نسخة TTS النهائية لتطبيق الوقف، فلا تقترح تغيير الحروف لهذا السبب.
 أعد JSON فقط:
 {{"status":"PASS أو FAIL","replacements":[{{"current":"النص المشكول المطابق حرفيًا","replacement":"نفس الحروف بتشكيل أصح","reason":"..."}}],"unresolved":[]}}
 
 النص المشكول:
-{annotated[:100000]}
+{revised[:100000]}
 """
     result_text, _ = gemini(prompt, json_mode=True, max_tokens=5000, temperature=0.0)
     result = parse_json(result_text)
@@ -556,7 +732,6 @@ def pronunciation_validate(clean_story: str, annotated: str, story: Path) -> str
     )
     if result.get("status") not in {"PASS", "FAIL"}:
         raise RuntimeError("PRONUNCIATION_VALIDATION_FAILED: invalid response status")
-    revised = annotated
     applied = []
     for item in result.get("replacements") or []:
         current = str(item.get("current", ""))
@@ -565,12 +740,21 @@ def pronunciation_validate(clean_story: str, annotated: str, story: Path) -> str
             raise RuntimeError("PRONUNCIATION_VALIDATION_FAILED: proposed source text was not found")
         revised, occurrences = apply_pronunciation_replacement(revised, current, replacement)
         applied.append({**item, "occurrences": occurrences})
+        dictionary[DIACRITICS_RE.sub("", current)] = replacement
     faithful, _ = lexical_fidelity(clean_story, revised)
     if not faithful:
         raise RuntimeError("PRONUNCIATION_VALIDATION_FAILED: pronunciation changes altered letters")
     unresolved = result.get("unresolved") or []
     if result.get("status") != "PASS" or unresolved:
         raise RuntimeError("PRONUNCIATION_VALIDATION_FAILED: " + json.dumps(result, ensure_ascii=False))
+    if applied:
+        temporary_dictionary = PRONUNCIATION_DICTIONARY_PATH.with_suffix(".json.tmp")
+        temporary_dictionary.write_text(
+            json.dumps(dictionary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        temporary_dictionary.replace(PRONUNCIATION_DICTIONARY_PATH)
+    result["dictionary_applied"] = dictionary_applied
     result["applied"] = applied
     result["status"] = "PASS"
     result["application_status"] = "passed"
@@ -1181,14 +1365,33 @@ def prepare(story: Path):
         clean_path.write_text(clean_story+"\n",encoding="utf-8")
     logs = story / "logs"
     logs.mkdir(exist_ok=True)
-    source_hash = hashlib.sha256(clean_story.encode("utf-8")).hexdigest()
+    raw_source_hash = hashlib.sha256(clean_story.encode("utf-8")).hexdigest()
+    rules_hash = file_sha256(TTS_RULES_PATH)
     prepare_manifest_path = logs / "tts_prepare.json"
     prepare_manifest = {}
     if prepare_manifest_path.exists():
         prepare_manifest = json.loads(prepare_manifest_path.read_text(encoding="utf-8"))
+    normalized_path = story / "05b_story_tts_normalized.md"
+    normalization_reusable = (
+        prepare_manifest.get("raw_source_sha256") == raw_source_hash
+        and prepare_manifest.get("normalization_version") == TTS_NORMALIZATION_VERSION
+        and prepare_manifest.get("normalization_rules_sha256") == rules_hash
+        and prepare_manifest.get("tts_normalization_status") == "passed"
+        and prepare_manifest.get("speech_safe_validation_status") == "passed"
+        and normalized_path.exists()
+        and not speech_safe_violations(normalized_path.read_text(encoding="utf-8"))
+    )
+    if normalization_reusable:
+        normalized_story = normalized_path.read_text(encoding="utf-8").strip()
+    else:
+        normalized_story = normalize_for_tts(clean_story, story)
+        normalized_path.write_text(normalized_story + "\n", encoding="utf-8")
+    require_speech_safe(normalized_story, stage="PRE_DIACRITIZATION")
+    source_hash = hashlib.sha256(normalized_story.encode("utf-8")).hexdigest()
     annotated_path=story/"06_story_tts_annotated.md"
     reusable = (
         prepare_manifest.get("source_sha256") == source_hash
+        and normalization_reusable
         and prepare_manifest.get("version") == DIACRITIZATION_VERSION
         and prepare_manifest.get("diacritization_status") == "passed"
         and prepare_manifest.get("pronunciation_validation_status") == "passed"
@@ -1201,12 +1404,17 @@ def prepare(story: Path):
     if reusable:
         annotated = annotated_path.read_text(encoding="utf-8").strip()
     else:
-        annotated = diacritize_and_annotate(clean_story, logs / "diacritics_cache")
-        annotated = pronunciation_validate(clean_story, annotated, story)
+        annotated = diacritize_and_annotate(normalized_story, logs / "diacritics_cache")
+        annotated = pronunciation_validate(normalized_story, annotated, story)
         annotated_path.write_text(annotated+"\n",encoding="utf-8")
         prepare_manifest_path.write_text(json.dumps({
+            "raw_source_sha256": raw_source_hash,
             "source_sha256": source_hash,
             "version": DIACRITIZATION_VERSION,
+            "normalization_version": TTS_NORMALIZATION_VERSION,
+            "normalization_rules_sha256": rules_hash,
+            "tts_normalization_status": "passed",
+            "speech_safe_validation_status": "passed",
             "diacritic_ratio": round(diacritic_ratio(annotated), 4),
             "diacritization_status": "passed",
             "pronunciation_validation_status": "passed",
@@ -1218,11 +1426,14 @@ def prepare(story: Path):
         }, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
     clean = api_text(annotated)
     require_pausal_sentence_endings(clean)
-    api_faithful, _ = lexical_fidelity(clean_story, clean)
+    require_speech_safe(clean, stage="FINAL_TTS_TEXT")
+    api_faithful, _ = lexical_fidelity(normalized_story, clean)
     if not api_faithful:
-        raise RuntimeError("TTS API text differs lexically from the clean story")
+        raise RuntimeError("TTS API text differs lexically from the normalized speech story")
     (story / "07_story_tts_api.md").write_text(clean + "\n", encoding="utf-8")
     metadata.update(
+        tts_normalization_status="passed",
+        speech_safe_validation_status="passed",
         diacritization_status="passed",
         pronunciation_validation_status="passed",
         tts_preparation_status="passed",
@@ -1623,13 +1834,16 @@ def render(story: Path):
     run([ffmpeg(),"-y","-loop","1","-framerate","1","-i",str(story/"10_background.png"),"-i",str(audio),"-vf","format=yuv420p","-r","2",*codec,"-c:a","aac","-b:a","128k","-t",f"{exact_duration:.3f}","-movflags","+faststart",str(out)])
 
 def validate(story: Path):
-    required=["01_title.txt","02_description.txt","03_sources.md","04_research_notes.md","05_story_clean.md","06_story_tts_annotated.md","07_story_tts_api.md","10_background.png","11_thumbnail_base.jpg","12_audio_narration.mp3","12_audio_full.mp3","13_audio_review.opus","14_video_final.mp4","15_metadata.json","16_fact_check.md","17_status.md"]
+    required=["01_title.txt","02_description.txt","03_sources.md","04_research_notes.md","05_story_clean.md","05b_story_tts_normalized.md","06_story_tts_annotated.md","07_story_tts_api.md","10_background.png","11_thumbnail_base.jpg","12_audio_narration.mp3","12_audio_full.mp3","13_audio_review.opus","14_video_final.mp4","15_metadata.json","16_fact_check.md","17_status.md"]
     missing=[x for x in required if not (story/x).exists()]
     if missing: raise RuntimeError("Missing: "+", ".join(missing))
     annotated_text=(story/"06_story_tts_annotated.md").read_text(encoding="utf-8")
     api_tts_text=(story/"07_story_tts_api.md").read_text(encoding="utf-8")
     clean_story_text=(story/"05_story_clean.md").read_text(encoding="utf-8")
-    faithful, lexical_corrections=lexical_fidelity(clean_story_text, annotated_text)
+    normalized_story_text=(story/"05b_story_tts_normalized.md").read_text(encoding="utf-8")
+    require_speech_safe(normalized_story_text, stage="VALIDATE_NORMALIZED_STORY")
+    require_speech_safe(api_tts_text, stage="VALIDATE_FINAL_TTS")
+    faithful, lexical_corrections=lexical_fidelity(normalized_story_text, annotated_text)
     if not faithful:
         raise RuntimeError("TTS annotated text differs lexically from the clean story")
     current_diacritic_ratio=diacritic_ratio(annotated_text)
@@ -1639,7 +1853,7 @@ def validate(story: Path):
     api_tags=DIRECTION_RE.findall(api_tts_text)
     if human_tags or api_tags:
         raise RuntimeError(f"Performance tags are forbidden in TTS files: {(human_tags + api_tags)[:3]}")
-    api_faithful, _ = lexical_fidelity(clean_story_text, api_tts_text)
+    api_faithful, _ = lexical_fidelity(normalized_story_text, api_tts_text)
     if not api_faithful:
         raise RuntimeError("API TTS text differs lexically from the clean story")
     quality_errors=diacritization_quality_errors(annotated_text)
@@ -1682,7 +1896,7 @@ def validate(story: Path):
     long_silences=re.findall(r"silence_duration:\s*([0-9.]+)",silence.stderr)
     stats=subprocess.run([ffmpeg(),"-hide_banner","-i",str(story/"12_audio_full.mp3"),"-af","astats=metadata=1:reset=1","-f","null","-"],capture_output=True,text=True)
     duration_status="PASS" if SETTINGS["target_min_seconds"] <= ad <= SETTINGS["target_max_seconds"] else "FAIL"
-    validation={"audio_duration_seconds":round(ad,2),"video_duration_seconds":round(vd,2),"duration_status":duration_status,"tts_diacritization_status":"PASS_DOUBLE_REVIEWED_PAUSAL","pronunciation_validation_status":"PASS","tts_preparation_status":"PASS","diacritic_ratio":round(current_diacritic_ratio,4),"diacritization_engine":DIACRITIZATION_VERSION,"tts_generation_speed":float(SETTINGS.get("tts_generation_speed",1.0)),"post_processing_tempo":float(SETTINGS.get("post_tts_tempo",1.0)),"effective_speed":float(SETTINGS.get("post_tts_tempo",1.0)),"sentence_pause_strategy":SETTINGS.get("sentence_pause_strategy"),"sentence_pause_boundaries":sentence_boundaries,"pausal_sentence_endings_status":"PASS","lexical_corrections_count":len(lexical_corrections),"lexical_corrections_preview":lexical_corrections[:20],"performance_tags":0,"long_silences_seconds":[float(x) for x in long_silences],"audio_chunks":len(list((story/"audio_chunks").glob("*.mp3"))),"tts_chunks":len(list((story/"tts_chunks").glob("*.txt"))),"zero_byte_files":[str(p) for p in story.rglob("*") if p.is_file() and p.stat().st_size==0]}
+    validation={"audio_duration_seconds":round(ad,2),"video_duration_seconds":round(vd,2),"duration_status":duration_status,"tts_normalization_status":"PASS","speech_safe_validation_status":"PASS","tts_diacritization_status":"PASS_DOUBLE_REVIEWED_PAUSAL","pronunciation_validation_status":"PASS","tts_preparation_status":"PASS","diacritic_ratio":round(current_diacritic_ratio,4),"diacritization_engine":DIACRITIZATION_VERSION,"tts_generation_speed":float(SETTINGS.get("tts_generation_speed",1.0)),"post_processing_tempo":float(SETTINGS.get("post_tts_tempo",1.0)),"effective_speed":float(SETTINGS.get("post_tts_tempo",1.0)),"sentence_pause_strategy":SETTINGS.get("sentence_pause_strategy"),"sentence_pause_boundaries":sentence_boundaries,"pausal_sentence_endings_status":"PASS","lexical_corrections_count":len(lexical_corrections),"lexical_corrections_preview":lexical_corrections[:20],"performance_tags":0,"long_silences_seconds":[float(x) for x in long_silences],"audio_chunks":len(list((story/"audio_chunks").glob("*.mp3"))),"tts_chunks":len(list((story/"tts_chunks").glob("*.txt"))),"zero_byte_files":[str(p) for p in story.rglob("*") if p.is_file() and p.stat().st_size==0]}
     (logs/"validation.json").write_text(json.dumps(validation,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     (logs/"ffmpeg_astats.txt").write_text(stats.stderr,encoding="utf-8")
     if validation["zero_byte_files"]: raise RuntimeError("zero-byte files found")
@@ -1691,7 +1905,7 @@ def validate(story: Path):
     chunk_models_path = logs / "tts_chunk_models.json"
     chunk_models = json.loads(chunk_models_path.read_text(encoding="utf-8")) if chunk_models_path.exists() else {}
     models_used = sorted(set(chunk_models.values()))
-    meta=json.loads((story/"15_metadata.json").read_text(encoding="utf-8")); meta.update(audio_duration_seconds=round(ad,2),video_duration_seconds=round(vd,2),word_count=arabic_words((story/"05_story_clean.md").read_text(encoding="utf-8")),**voice_metadata(),tts_models_used=models_used,audio_generation_status="passed",audio_qc_status="passed",video_assembly_status="passed",video_qc_status="passed",metadata_validation_status="passed",clean_story_sha256=file_sha256(story/"05_story_clean.md"),tts_api_sha256=file_sha256(story/"07_story_tts_api.md"),audio_sha256=file_sha256(story/"12_audio_full.mp3"),image_sha256=file_sha256(story/"10_background.png"),video_sha256=file_sha256(video_path),background_audio="pink noise",background_audio_volume_percent=15,narration_audio_path=str(story/"12_audio_narration.mp3"),audio_path=str(story/"12_audio_full.mp3"),video_path=str(story/"14_video_final.mp4"),thumbnail_path=str(story/"11_thumbnail_base.jpg"),approval_status="READY_FOR_APPROVAL",publish_status="not_published")
+    meta=json.loads((story/"15_metadata.json").read_text(encoding="utf-8")); meta.update(audio_duration_seconds=round(ad,2),video_duration_seconds=round(vd,2),word_count=arabic_words((story/"05_story_clean.md").read_text(encoding="utf-8")),**voice_metadata(),tts_models_used=models_used,tts_normalization_status="passed",speech_safe_validation_status="passed",audio_generation_status="passed",audio_qc_status="passed",video_assembly_status="passed",video_qc_status="passed",metadata_validation_status="passed",clean_story_sha256=file_sha256(story/"05_story_clean.md"),tts_normalized_sha256=file_sha256(story/"05b_story_tts_normalized.md"),tts_api_sha256=file_sha256(story/"07_story_tts_api.md"),audio_sha256=file_sha256(story/"12_audio_full.mp3"),image_sha256=file_sha256(story/"10_background.png"),video_sha256=file_sha256(video_path),background_audio="pink noise",background_audio_volume_percent=15,narration_audio_path=str(story/"12_audio_narration.mp3"),audio_path=str(story/"12_audio_full.mp3"),video_path=str(story/"14_video_final.mp4"),thumbnail_path=str(story/"11_thumbnail_base.jpg"),approval_status="READY_FOR_APPROVAL",publish_status="not_published")
     (story/"15_metadata.json").write_text(json.dumps(meta,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     (story/"17_status.md").write_text(
         "# الحالة\n\n- الحالة الحالية: `READY_FOR_APPROVAL`\n- النشر: `not_published`\n- بانتظار مراجعة Marwa واعتماد صريح قبل النشر.\n",
@@ -1726,6 +1940,7 @@ def completed_artifacts_are_current(story: Path) -> bool:
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     required_statuses = (
         "fact_check_status", "second_fact_check_status", "diacritization_status",
+        "tts_normalization_status", "speech_safe_validation_status",
         "pronunciation_validation_status", "tts_preparation_status", "audio_qc_status",
         "image_generation_status", "image_accuracy_status", "video_qc_status",
         "metadata_validation_status",
@@ -1734,6 +1949,7 @@ def completed_artifacts_are_current(story: Path) -> bool:
         return False
     expected = {
         "clean_story_sha256": story / "05_story_clean.md",
+        "tts_normalized_sha256": story / "05b_story_tts_normalized.md",
         "tts_api_sha256": story / "07_story_tts_api.md",
         "audio_sha256": story / "12_audio_full.mp3",
         "image_sha256": story / "10_background.png",

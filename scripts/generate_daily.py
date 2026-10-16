@@ -648,7 +648,7 @@ def make_outline(topic: dict, research: str) -> list[dict]:
 
 
 def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path) -> str:
-    rules = production_rules(2, 3, 4, 5, 6, 7, 17, 23)
+    rules = production_rules(2, 3, 4, 5, 6, 7, 17, 23, 61)
     chapters: list[str] = []
     for index, section in enumerate(sections, 1):
         previous = chapters[-1][-2500:] if chapters else "هذه بداية السرد."
@@ -681,7 +681,10 @@ def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path)
             # provider failure instead of generating the chapter again.
             write(chapter_path, chapter)
         if word_count(chapter) < 600:
-            expansion_prompt = f"""أعد كتابة المسودة التالية ووسّعها إلى ما بين {target_words} و{target_words + 150} كلمة عربية.
+            expansion_prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
+{rules}
+
+أعد كتابة المسودة التالية ووسّعها إلى ما بين {target_words} و{target_words + 150} كلمة عربية.
 حافظ على الحقائق والنبرة الهادئة وتسلسل الفقرة، وأضف فقط تفاصيل يومية وتاريخية يدعمها المصدر المعرفي. لا تضف عنوانًا ولا مقدمة للمستمع ولا خاتمة شكر.
 
 الموضوع: {topic['topic_ar']}

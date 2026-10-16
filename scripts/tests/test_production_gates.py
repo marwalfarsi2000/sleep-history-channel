@@ -87,12 +87,17 @@ class ProductionGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             story = Path(directory)
             (story / "logs").mkdir()
-            with mock.patch.object(pipeline, "gemini", return_value=(response, [])):
+            dictionary = story / "pronunciation_dictionary.json"
+            dictionary.write_text("{}", encoding="utf-8")
+            with mock.patch.object(pipeline, "PRONUNCIATION_DICTIONARY_PATH", dictionary), \
+                    mock.patch.object(pipeline, "gemini", return_value=(response, [])):
                 revised = pipeline.pronunciation_validate("مرحبا في قرطبة.", annotated, story)
             self.assertEqual(revised, "مَرْحَبًا فِي قُرْطُبَة.")
             saved = json.loads((story / "logs" / "pronunciation_validation.json").read_text(encoding="utf-8"))
             self.assertEqual(saved["application_status"], "passed")
             self.assertEqual(saved["applied"][0]["occurrences"], 1)
+            learned = json.loads(dictionary.read_text(encoding="utf-8"))
+            self.assertEqual(learned["قرطبة"], "قُرْطُبَة")
 
     def test_pronunciation_validation_still_rejects_changed_letters(self):
         response = json.dumps({
@@ -107,7 +112,10 @@ class ProductionGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             story = Path(directory)
             (story / "logs").mkdir()
-            with mock.patch.object(pipeline, "gemini", return_value=(response, [])):
+            dictionary = story / "pronunciation_dictionary.json"
+            dictionary.write_text("{}", encoding="utf-8")
+            with mock.patch.object(pipeline, "PRONUNCIATION_DICTIONARY_PATH", dictionary), \
+                    mock.patch.object(pipeline, "gemini", return_value=(response, [])):
                 with self.assertRaisesRegex(RuntimeError, "altered letters"):
                     pipeline.pronunciation_validate("قرطبة", "قُرْطُبَة", story)
 
