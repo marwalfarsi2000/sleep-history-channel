@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -69,31 +70,43 @@ class SleepFirstSelectionTests(unittest.TestCase):
             "scores": {name: 5 for name in SCORE_NAMES},
             "reasons": [],
         }
-        with mock.patch.object(
-            generate_daily,
-            "gemini",
-            side_effect=[
-                (json.dumps({"candidates": candidates}, ensure_ascii=False), []),
-                (json.dumps(gate, ensure_ascii=False), []),
-            ],
-        ) as gemini:
-            selected = generate_daily.choose_topic([])
+        with tempfile.TemporaryDirectory() as directory:
+            bank_path = Path(directory) / "topic_candidate_bank.json"
+            bank_path.write_text("[]", encoding="utf-8")
+            with mock.patch.object(generate_daily, "TOPIC_CANDIDATE_BANK_PATH", bank_path), \
+                    mock.patch.object(
+                        generate_daily,
+                        "gemini",
+                        side_effect=[
+                            (json.dumps({"candidates": candidates}, ensure_ascii=False), []),
+                            (json.dumps(gate, ensure_ascii=False), []),
+                        ],
+                    ) as gemini:
+                selected = generate_daily.choose_topic([])
+            saved = json.loads(bank_path.read_text(encoding="utf-8"))
 
         self.assertEqual(selected["slug"], "topic-6")
         self.assertEqual(selected["discovery_candidate_count"], 6)
         self.assertGreaterEqual(selected["discovery_family_count"], 4)
         self.assertIn("# 62. SLEEP-FIRST", gemini.call_args_list[0].args[0])
         self.assertIn("# 62. SLEEP-FIRST", gemini.call_args_list[1].args[0])
+        statuses = {item["slug"]: item["bank_status"] for item in saved}
+        self.assertEqual(statuses["topic-6"], "selected")
+        self.assertEqual(statuses["topic-5"], "queued")
 
     def test_discovery_rejects_insufficient_narrative_variety(self) -> None:
         candidates = [candidate(index, "same-family", 5) for index in range(1, 7)]
-        with mock.patch.object(
-            generate_daily,
-            "gemini",
-            return_value=(json.dumps({"candidates": candidates}, ensure_ascii=False), []),
-        ):
-            with self.assertRaisesRegex(RuntimeError, "fewer than 4 narrative families"):
-                generate_daily.choose_topic([])
+        with tempfile.TemporaryDirectory() as directory:
+            bank_path = Path(directory) / "topic_candidate_bank.json"
+            bank_path.write_text("[]", encoding="utf-8")
+            with mock.patch.object(generate_daily, "TOPIC_CANDIDATE_BANK_PATH", bank_path), \
+                    mock.patch.object(
+                        generate_daily,
+                        "gemini",
+                        return_value=(json.dumps({"candidates": candidates}, ensure_ascii=False), []),
+                    ):
+                with self.assertRaisesRegex(RuntimeError, "fewer than 4 narrative families"):
+                    generate_daily.choose_topic([])
 
 
 if __name__ == "__main__":

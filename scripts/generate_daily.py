@@ -17,6 +17,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SETTINGS = json.loads((ROOT / "config" / "settings.json").read_text(encoding="utf-8"))
 MASTER_RULES_PATH = ROOT / "config" / "master_production_rules.md"
+TOPIC_CANDIDATE_BANK_PATH = ROOT / "config" / "topic_candidate_bank.json"
+SLEEP_SCORE_NAMES = (
+    "gentle_engagement", "low_cognitive_arousal", "narrative_flow",
+    "sensory_potential", "reentry_tolerance", "low_stakes",
+    "gradual_unwind_potential", "novelty_variety",
+)
 SECRETS_FILE = Path(os.environ.get(
     "SLEEP_HISTORY_SECRETS_FILE",
     SETTINGS.get(
@@ -291,12 +297,73 @@ def topic_from_checkpoint(record: dict) -> dict:
     return topic
 
 
+def load_topic_candidate_bank() -> list[dict]:
+    if not TOPIC_CANDIDATE_BANK_PATH.exists():
+        return []
+    value = json.loads(TOPIC_CANDIDATE_BANK_PATH.read_text(encoding="utf-8"))
+    if not isinstance(value, list):
+        raise RuntimeError("TOPIC_CANDIDATE_BANK_INVALID: expected a JSON list")
+    return value
+
+
+def save_topic_candidate_bank(
+    candidates: list[dict], *, selected_slug: str = "", rejected_slug: str = ""
+) -> None:
+    """Persist strong unused ideas and their full sleep-story design."""
+    records = load_topic_candidate_bank()
+    by_slug = {str(item.get("slug", "")): item for item in records if item.get("slug")}
+    now = dt.datetime.now(dt.timezone(dt.timedelta(hours=4))).isoformat()
+    for source in candidates:
+        slug = safe_slug(str(source.get("slug", "")))
+        scores = source.get("scores") or {}
+        if not slug or not all(isinstance(scores.get(name), int) for name in SLEEP_SCORE_NAMES):
+            continue
+        average = sum(scores[name] for name in SLEEP_SCORE_NAMES) / len(SLEEP_SCORE_NAMES)
+        if min(scores[name] for name in SLEEP_SCORE_NAMES) < 3 or average < 3.75:
+            continue
+        existing = by_slug.get(slug, {})
+        status = existing.get("bank_status", "queued")
+        if status not in {"selected", "rejected"}:
+            status = "queued"
+        record = {**existing, **source}
+        record.update(
+            slug=slug,
+            bank_status=status,
+            sleep_score_average=round(average, 3),
+            first_discovered_at=existing.get("first_discovered_at", now),
+            last_considered_at=now,
+        )
+        by_slug[slug] = record
+    if selected_slug and selected_slug in by_slug:
+        by_slug[selected_slug]["bank_status"] = "selected"
+        by_slug[selected_slug]["selected_at"] = now
+    if rejected_slug and rejected_slug in by_slug:
+        by_slug[rejected_slug]["bank_status"] = "rejected"
+        by_slug[rejected_slug]["rejected_at"] = now
+    ordered = sorted(
+        by_slug.values(),
+        key=lambda item: (
+            item.get("bank_status") != "queued",
+            -float(item.get("sleep_score_average", 0)),
+            str(item.get("first_discovered_at", "")),
+        ),
+    )
+    write(TOPIC_CANDIDATE_BANK_PATH, json.dumps(ordered, ensure_ascii=False, indent=2))
+
+
 def choose_topic(history: list[dict]) -> dict:
     prior = "\n".join(
         f"- {item.get('topic', item.get('slug', ''))} | {item.get('angle', '')} | "
         f"{item.get('period_ar', '')} | {item.get('location_ar', '')} | {item.get('key_elements', [])}"
         for item in history
     ) or "لا يوجد سجل سابق"
+    bank = load_topic_candidate_bank()
+    used_slugs = {str(item.get("slug", "")) for item in history}
+    saved_ideas = [
+        item for item in bank
+        if item.get("bank_status") == "queued" and item.get("slug") not in used_slugs
+    ]
+    saved_summary = json.dumps(saved_ideas[:20], ensure_ascii=False)
     rules = production_rules(*range(2, 17), 62)
     prompt = f"""أنت محرر قناة عربية اسمها «لن تُكمل هذه القصة» تقدم سردًا تاريخيًا حقيقيًا هادئًا للنوم.
 التزم بالقواعد التالية التزامًا إلزاميًا:
@@ -306,6 +373,9 @@ def choose_topic(history: list[dict]) -> dict:
 
 السجل السابق:
 {prior}
+
+بنك الأفكار القوية غير المستخدمة؛ لا تكررها بصياغة أخرى لأن النظام سيعيد إدخالها في المنافسة تلقائيًا:
+{saved_summary}
 
 أعد JSON فقط:
 {{"candidates":[{{
@@ -323,16 +393,18 @@ def choose_topic(history: list[dict]) -> dict:
     families = {str(item.get("family", "")).strip().casefold() for item in candidates if item.get("family")}
     if len(families) < 4:
         raise RuntimeError("TOPIC_DISCOVERY_FAILED: fewer than 4 narrative families")
-    score_names = (
-        "gentle_engagement", "low_cognitive_arousal", "narrative_flow",
-        "sensory_potential", "reentry_tolerance", "low_stakes",
-        "gradual_unwind_potential", "novelty_variety",
-    )
     for candidate in candidates:
         scores = candidate.get("scores") or {}
-        if not all(isinstance(scores.get(name), int) and 0 <= scores[name] <= 5 for name in score_names):
+        if not all(isinstance(scores.get(name), int) and 0 <= scores[name] <= 5 for name in SLEEP_SCORE_NAMES):
             raise RuntimeError("TOPIC_DISCOVERY_FAILED: invalid sleep-suitability scores")
-    topic = max(candidates, key=lambda item: sum(item["scores"][name] for name in score_names))
+    save_topic_candidate_bank(candidates)
+    combined = {str(item.get("slug", "")): item for item in saved_ideas}
+    combined.update({str(item.get("slug", "")): item for item in candidates})
+    eligible = [item for item in combined.values() if item.get("scores")]
+    topic = max(
+        eligible,
+        key=lambda item: sum(item["scores"][name] for name in SLEEP_SCORE_NAMES),
+    )
     topic["slug"] = safe_slug(str(topic.get("slug", "")))
     required = (
         "topic_ar", "angle_ar", "slug", "search_query_en", "period_ar",
@@ -366,27 +438,29 @@ def choose_topic(history: list[dict]) -> dict:
     verified_scores = validation.get("scores") or {}
     valid_scores = all(
         isinstance(verified_scores.get(name), int) and 0 <= verified_scores[name] <= 5
-        for name in score_names
+        for name in SLEEP_SCORE_NAMES
     )
     score_average = (
-        sum(verified_scores[name] for name in score_names) / len(score_names)
+        sum(verified_scores[name] for name in SLEEP_SCORE_NAMES) / len(SLEEP_SCORE_NAMES)
         if valid_scores else 0
     )
     if (
         validation.get("status") != "PASS"
         or not all(validation.get(name) is True for name in gate_names)
         or not valid_scores
-        or min((verified_scores[name] for name in score_names), default=0) < 3
+        or min((verified_scores[name] for name in SLEEP_SCORE_NAMES), default=0) < 3
         or verified_scores.get("low_cognitive_arousal", 0) < 4
         or verified_scores.get("low_stakes", 0) < 4
         or score_average < 4.0
     ):
+        save_topic_candidate_bank([], rejected_slug=topic["slug"])
         raise RuntimeError(
             "TOPIC_GATE_REJECTED: " + json.dumps(validation, ensure_ascii=False)
         )
     topic["discovery_candidate_count"] = len(candidates)
     topic["discovery_family_count"] = len(families)
     topic["selection_gate"] = validation
+    save_topic_candidate_bank([], selected_slug=topic["slug"])
     return topic
 
 
