@@ -65,6 +65,15 @@ def _daily_quota_exhausted(body: str) -> bool:
     return any(marker in normalized for marker in markers)
 
 
+def thinking_config_for_model(model: str) -> dict:
+    """Return appropriate thinking config for a Gemini model."""
+    if model == "gemini-3.8-flash":
+        return {"thinkingLevel": "low"}
+    if model.startswith("gemini-3") and model != "gemini-3.1-flash-lite":
+        return {"thinkingLevel": "minimal"}
+    return {"thinkingBudget": 0}
+
+
 def _llm_models(*, search: bool = False) -> list[str]:
     configured = SETTINGS.get("llm_fallback_models", [])
     research = SETTINGS.get("research_fallback_models", []) if search else []
@@ -108,11 +117,7 @@ def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: boo
     config: dict = {
         "temperature": temperature,
         "maxOutputTokens": max_tokens,
-        "thinkingConfig": (
-            {"thinkingLevel": "minimal"}
-            if model.startswith("gemini-3") and model != "gemini-3.1-flash-lite"
-            else {"thinkingBudget": 0}
-        ),
+        "thinkingConfig": thinking_config_for_model(model),
     }
     if json_mode:
         config["responseMimeType"] = "application/json"
@@ -132,6 +137,7 @@ def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: boo
     result = None
     last_error = ""
     retry_delays = GEMINI_RETRY_DELAYS
+    unsupported_thinking_recovered = False
     for attempt in range(len(retry_delays) + 1):
         try:
             with urllib.request.urlopen(request, timeout=180) as response:
@@ -144,6 +150,29 @@ def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: boo
                 raise RuntimeError(
                     "Gemini daily quota is exhausted; checkpoint preserved for the next run"
                 ) from error
+            if (
+                error.code == 400
+                and not unsupported_thinking_recovered
+                and "thinking level" in body.lower()
+                and "not supported" in body.lower()
+            ):
+                unsupported_thinking_recovered = True
+                config["thinkingConfig"] = {"thinkingLevel": "low"}
+                payload["generationConfig"] = config
+                request = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                print(
+                    "Gemini HTTP 400: unsupported thinking level; retrying with 'low'",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                with urllib.request.urlopen(request, timeout=180) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                break
             cat = classify_error(error)
             if cat != ErrorCategory.TRANSIENT_RETRYABLE or attempt == len(retry_delays):
                 prefix = "GROUNDED_RESEARCH_UNAVAILABLE: " if search else ""
