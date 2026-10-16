@@ -21,37 +21,35 @@ def failed_stage() -> str:
     return next((label for label, outcome in outcomes if outcome == "failure"), "مرحلة غير محددة")
 
 
+def _json_error_message(raw: str) -> str:
+    """Read the real API error message even when the JSON payload spans several lines."""
+    starts = [match.start() for match in re.finditer(r'"error"\s*:\s*\{', raw)]
+    if not starts:
+        return ""
+    message = re.search(r'"message"\s*:\s*"(?P<text>(?:[^"\\]|\\.)*)"', raw[starts[-1]:], re.S)
+    return message.group("text") if message else ""
+
+
 def diagnostic_summary() -> str:
     candidates = sorted((ROOT / "logs").glob("*.log"), key=lambda path: path.stat().st_mtime, reverse=True)
     if not candidates:
         return "لا يوجد سجل تشخيصي محفوظ."
-    lines = candidates[0].read_text(encoding="utf-8", errors="replace").splitlines()
+    raw = candidates[0].read_text(encoding="utf-8", errors="replace")
+    lines = raw.splitlines()
     useful = [
         line.strip()
         for line in lines
         if line.strip() and re.search(r"runtimeerror|httperror|gemini http|quota|unavailable|missing", line, re.I)
     ]
-    if not useful:
-        summary = (lines[-1] if lines else "سجل فارغ")[:500]
-    else:
-        json_lines = [line for line in useful if '{"error":' in line]
-        summary = (json_lines[-1] if json_lines else useful[-1])[:500]
+    summary = _json_error_message(raw)
+    if not summary:
+        if useful:
+            json_lines = [line for line in useful if '{"error":' in line]
+            summary = json_lines[-1] if json_lines else useful[-1]
+        else:
+            summary = lines[-1] if lines else "سجل فارغ"
     summary = re.sub(r"(?i)(api[_-]?key|token|secret|authorization)\s*[:=]\s*\S+", r"\1=[REDACTED]", summary)
     summary = re.sub(r"(?i)bearer\s+\S+", "Bearer [REDACTED]", summary)
-    try:
-        if '{"error":' in summary:
-            json_start = summary.find('{"error":')
-            json_str = summary[json_start:]
-            error_json = json.loads(json_str)
-            if isinstance(error_json, dict) and "error" in error_json:
-                error_obj = error_json["error"]
-                if isinstance(error_obj, dict):
-                    if "message" in error_obj:
-                        summary = str(error_obj["message"])[:300]
-                    elif "status" in error_obj:
-                        summary = f"{error_obj.get('status', '')} {summary[:200]}"
-    except (json.JSONDecodeError, ValueError):
-        pass
     if len(summary) > 300:
         summary = summary[:300]
     return summary.strip()

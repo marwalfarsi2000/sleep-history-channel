@@ -51,6 +51,28 @@ Gemini HTTP 503: {"error":{"status":"UNAVAILABLE","message":"Service unavailable
                 self.assertIn("Service unavailable", summary)
                 self.assertNotIn('"error":', summary)
 
+    def test_extracts_message_from_multiline_json_error_like_run_44(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "logs").mkdir()
+            log_content = (
+                "working\n"
+                "RuntimeError: Gemini HTTP 400: {\n"
+                '  "error": {\n'
+                '    "code": 400,\n'
+                '    "message": "Thinking level MINIMAL is not supported for this model. '
+                'Please retry with other thinking level.",\n'
+                '    "status": "INVALID_ARGUMENT"\n'
+                "  }\n"
+                "}\n"
+            )
+            (root / "logs" / "cloud-generate.log").write_text(log_content, encoding="utf-8")
+            with mock.patch.object(notify_failure, "ROOT", root):
+                summary = notify_failure.diagnostic_summary()
+                self.assertIn("Thinking level MINIMAL is not supported", summary)
+                self.assertNotIn('"error": {', summary)
+                self.assertNotIn("RuntimeError", summary)
+
     def test_redacts_secrets_from_summary(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
