@@ -18,6 +18,18 @@ ROOT = Path(__file__).resolve().parents[1]
 SETTINGS = json.loads((ROOT / "config" / "settings.json").read_text(encoding="utf-8"))
 MASTER_RULES_PATH = ROOT / "config" / "master_production_rules.md"
 TOPIC_CANDIDATE_BANK_PATH = ROOT / "config" / "topic_candidate_bank.json"
+ARCHIVE_INDEX_PATH = ROOT / "config" / "archive_index.json"
+YOUTUBE_PACKAGING_RULES_PATH = ROOT / "config" / "youtube_packaging_rules.md"
+TITLE_SUFFIXES = (
+    "قصة تاريخية للنوم 😴",
+    "قصة تاريخية هادئة للنوم 😴",
+    "ستنام قبل النهاية 😴",
+    "حكاية تاريخية للنوم 😴",
+    "رحلة هادئة إلى الماضي 😴",
+    "حكاية هادئة من الماضي 😴",
+    "قصة طويلة وهادئة للنوم 😴",
+    "رحلة تاريخية هادئة للنوم 😴",
+)
 SLEEP_SCORE_NAMES = (
     "gentle_engagement", "low_cognitive_arousal", "narrative_flow",
     "sensory_potential", "reentry_tolerance", "low_stakes",
@@ -65,6 +77,15 @@ def _daily_quota_exhausted(body: str) -> bool:
     return any(marker in normalized for marker in markers)
 
 
+def thinking_config_for_model(model: str) -> dict:
+    """Return appropriate thinking config for a Gemini model."""
+    if model == "gemini-3.8-flash":
+        return {"thinkingLevel": "low"}
+    if model.startswith("gemini-3") and model != "gemini-3.1-flash-lite":
+        return {"thinkingLevel": "minimal"}
+    return {"thinkingBudget": 0}
+
+
 def _llm_models(*, search: bool = False) -> list[str]:
     configured = SETTINGS.get("llm_fallback_models", [])
     research = SETTINGS.get("research_fallback_models", []) if search else []
@@ -96,14 +117,6 @@ def _error_summary(body: str) -> str:
     return f"{error.get('status', '')} {', '.join(filter(None, quota))} {str(error.get('message', ''))[:160]}".strip()
 
 
-def thinking_config_for_model(model: str) -> dict | None:
-    if model == "gemini-3.1-flash-lite":
-        return {"thinkingBudget": 0}
-    if model.startswith("gemini-3"):
-        return {"thinkingLevel": "low"}
-    return None
-
-
 def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: bool = False,
                 max_tokens: int = 8192, temperature: float = 0.4) -> tuple[str, list[dict]]:
     key = load_secrets().get("GEMINI_API_KEY", "")
@@ -113,13 +126,11 @@ def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: boo
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         f"?key={key}"
     )
-    thinking = thinking_config_for_model(model)
     config: dict = {
         "temperature": temperature,
         "maxOutputTokens": max_tokens,
+        "thinkingConfig": thinking_config_for_model(model),
     }
-    if thinking is not None:
-        config["thinkingConfig"] = thinking
     if json_mode:
         config["responseMimeType"] = "application/json"
     payload: dict = {
@@ -138,6 +149,7 @@ def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: boo
     result = None
     last_error = ""
     retry_delays = GEMINI_RETRY_DELAYS
+    unsupported_thinking_recovered = False
     for attempt in range(len(retry_delays) + 1):
         try:
             with urllib.request.urlopen(request, timeout=180) as response:
@@ -146,33 +158,33 @@ def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: boo
         except urllib.error.HTTPError as error:
             body = error.read().decode("utf-8", errors="replace")
             last_error = f"Gemini HTTP {error.code}: {body[:600]}"
-            if error.code == 400 and "thinking level" in body.lower() and "not supported" in body.lower():
-                print(f"Gemini HTTP 400 thinking level mismatch for {model}; retrying with fallback thinking config", file=sys.stderr, flush=True)
-                # Fallback: if currently sending thinkingConfig, downgrade to low or remove it
-                if "thinkingConfig" in payload.get("generationConfig", {}):
-                    curr_level = payload["generationConfig"]["thinkingConfig"].get("thinkingLevel")
-                    if curr_level != "low":
-                        payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "low"}
-                    else:
-                        payload["generationConfig"].pop("thinkingConfig", None)
-                    request = urllib.request.Request(
-                        url,
-                        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                        headers={"Content-Type": "application/json"},
-                        method="POST",
-                    )
-                    try:
-                        with urllib.request.urlopen(request, timeout=180) as response:
-                            result = json.loads(response.read().decode("utf-8"))
-                        break
-                    except urllib.error.HTTPError as err2:
-                        body = err2.read().decode("utf-8", errors="replace")
-                        last_error = f"Gemini HTTP {err2.code}: {body[:600]}"
-
             if error.code == 429 and _daily_quota_exhausted(body):
                 raise RuntimeError(
                     "Gemini daily quota is exhausted; checkpoint preserved for the next run"
                 ) from error
+            if (
+                error.code == 400
+                and not unsupported_thinking_recovered
+                and "thinking level" in body.lower()
+                and "not supported" in body.lower()
+            ):
+                unsupported_thinking_recovered = True
+                config["thinkingConfig"] = {"thinkingLevel": "low"}
+                payload["generationConfig"] = config
+                request = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                print(
+                    "Gemini HTTP 400: unsupported thinking level; retrying with 'low'",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                with urllib.request.urlopen(request, timeout=180) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                break
             cat = classify_error(error)
             if cat != ErrorCategory.TRANSIENT_RETRYABLE or attempt == len(retry_delays):
                 prefix = "GROUNDED_RESEARCH_UNAVAILABLE: " if search else ""
@@ -926,6 +938,172 @@ def resume_partial_story(story: Path) -> Path:
     return story
 
 
+def recent_published_packaging(limit: int = 10) -> list[dict]:
+    if not ARCHIVE_INDEX_PATH.exists():
+        return []
+    records = json.loads(ARCHIVE_INDEX_PATH.read_text(encoding="utf-8"))
+    published = [item for item in records if str(item.get("status", "")).lower() == "published"]
+    recent = []
+    for source in reversed(published[-limit:]):
+        item = dict(source)
+        if not item.get("title_suffix"):
+            title = str(item.get("final_youtube_title") or item.get("title") or "")
+            item["title_suffix"] = next((suffix for suffix in TITLE_SUFFIXES if suffix in title), "")
+        recent.append(item)
+    return recent
+
+
+def local_packaging_issues(package: dict, topic: dict, recent: list[dict]) -> list[str]:
+    issues: list[str] = []
+    required = (
+        "episode_title_core", "title_suffix", "final_youtube_title",
+        "thumbnail_text", "thumbnail_prompt",
+    )
+    for field in required:
+        if not str(package.get(field, "")).strip():
+            issues.append(field)
+    if issues:
+        return issues
+    core = str(package["episode_title_core"]).strip()
+    suffix = str(package["title_suffix"]).strip()
+    final = str(package["final_youtube_title"]).strip()
+    label = str(package["thumbnail_text"]).strip()
+    prompt = str(package["thumbnail_prompt"]).strip()
+    core_words = re.findall(r"[\u0621-\u064A]+", core)
+    label_words = re.findall(r"[\u0621-\u064A]+", label)
+    if not 3 <= len(core_words) <= 10:
+        issues.append("episode_title_core")
+    if suffix not in TITLE_SUFFIXES:
+        issues.append("title_suffix")
+    if final != f"{core} | {suffix}" or len(final) > 95 or final.count("😴") != 1:
+        issues.append("final_youtube_title")
+    recent_suffixes = [str(item.get("title_suffix", "")) for item in recent[:3]]
+    if suffix and suffix in recent_suffixes:
+        issues.append("title_suffix")
+    forbidden_labels = {"قصة للنوم", "قصة تاريخية", "حكاية للنوم", "للنوم", "قبل النوم"}
+    recent_labels = {str(item.get("thumbnail_text", "")).strip() for item in recent}
+    if not 2 <= len(label_words) <= 4 or label in forbidden_labels or "😴" in label or label in recent_labels:
+        issues.append("thumbnail_text")
+    if not prompt or len(prompt) < 20 or len(prompt) > 1700:
+        issues.append("thumbnail_prompt")
+    elif any(placeholder in prompt for placeholder in ("[EPISODE_TOPIC]", "[THUMBNAIL_TEXT]", "[TOPIC]")):
+        issues.append("thumbnail_prompt")
+    elif any(forbidden in prompt.lower() for forbidden in ("add text", "render text", "render letters", "include typography", "include logo", "include watermark")):
+        issues.append("thumbnail_prompt")
+    elif len(prompt + ", 16:9 horizontal background, calm sleep-story atmosphere, no action, no text, no logo, no watermark, no fantasy, no modern objects.") > 2048:
+        issues.append("thumbnail_prompt")
+    return sorted(set(issues))
+
+
+def generate_youtube_packaging(story: Path, topic: dict) -> dict:
+    log_path = story / "logs" / "youtube_packaging.json"
+    attempts_log_path = story / "logs" / "youtube_packaging_attempts.json"
+    topic_hash = hashlib.sha256(json.dumps(topic, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+    recent = recent_published_packaging(10)
+    recent_hash = hashlib.sha256(json.dumps(recent, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+    if log_path.exists():
+        cached = json.loads(log_path.read_text(encoding="utf-8"))
+        if (
+            cached.get("status") == "PASS"
+            and cached.get("topic_sha256") == topic_hash
+            and cached.get("recent_packaging_sha256") == recent_hash
+        ):
+            return cached["package"]
+    rules = YOUTUBE_PACKAGING_RULES_PATH.read_text(encoding="utf-8")
+    setting = f"{topic.get('location_ar', '')} — {topic.get('period_ar', '')}".strip(" —")
+    package: dict = {}
+    failing = list((
+        "episode_title_core", "title_suffix", "final_youtube_title",
+        "thumbnail_text", "thumbnail_prompt",
+    ))
+    attempts_records: list[dict] = []
+    for attempt in range(1, 4):
+        repair = ""
+        if package:
+            repair = f"""
+أعد توليد الحقول الفاشلة فقط: {json.dumps(failing, ensure_ascii=False)}.
+حافظ على بقية القيم التالية حرفيًا بلا تغيير:
+{json.dumps(package, ensure_ascii=False)}
+"""
+        prompt = f"""طبّق قواعد حزمة YouTube التالية حرفيًا.
+{rules}
+
+EPISODE TOPIC: {topic['topic_ar']}
+HISTORICAL SETTING: {setting}
+ANGLE: {topic.get('angle_ar', '')}
+RECENT TEN PUBLISHED RECORDS:
+{json.dumps(recent, ensure_ascii=False)}
+{repair}
+
+Keep thumbnail_prompt concise and strictly under 1700 characters.
+
+Return JSON only with exactly these five keys:
+{{"episode_title_core":"...","title_suffix":"...","final_youtube_title":"...","thumbnail_text":"...","thumbnail_prompt":"..."}}
+"""
+        text, _ = gemini(prompt, json_mode=True, max_tokens=5000, temperature=0.35)
+        candidate = parse_json(text)
+        if package and failing:
+            for key, value in package.items():
+                if key not in failing:
+                    candidate[key] = value
+        package = {key: str(candidate.get(key, "")).strip() for key in (
+            "episode_title_core", "title_suffix", "final_youtube_title",
+            "thumbnail_text", "thumbnail_prompt",
+        )}
+        local_failing = local_packaging_issues(package, topic, recent)
+        attempt_record = {
+            "attempt": attempt,
+            "candidate": package,
+            "local_failing_fields": local_failing,
+            "validation": None,
+        }
+        if local_failing:
+            failing = local_failing
+            attempts_records.append(attempt_record)
+            write(attempts_log_path, json.dumps(attempts_records, ensure_ascii=False, indent=2))
+            continue
+        validation_prompt = f"""أنت بوابة مستقلة لحزمة YouTube. لا تعيد الكتابة.
+تحقق من الدقة التاريخية، طبيعية العربية، ظهور الموضوع أولًا، ملاءمة اللاحقة وعدم تكرارها، نص مصغر من كلمتين إلى أربع، تكامل النص مع العنوان، مشهد واحد خاص بالحلقة، هوية الألوان، وضوح الهاتف، غياب التضليل والوجوه العملاقة والـclickbait والفانتازيا والمظهر السياحي اللامع.
+الموضوع: {json.dumps(topic, ensure_ascii=False)}
+آخر عشر حلقات: {json.dumps(recent, ensure_ascii=False)}
+الحزمة: {json.dumps(package, ensure_ascii=False)}
+أعد JSON فقط: {{"status":"PASS أو FAIL","title":true,"thumbnail_text":true,"thumbnail_prompt":true,"failing_fields":[],"issues":[]}}
+"""
+        validation_text, _ = gemini(validation_prompt, json_mode=True, max_tokens=1600, temperature=0.0)
+        validation = parse_json(validation_text)
+        attempt_record["validation"] = validation
+        attempts_records.append(attempt_record)
+        write(attempts_log_path, json.dumps(attempts_records, ensure_ascii=False, indent=2))
+        if (
+            validation.get("status") == "PASS"
+            and validation.get("title") is True
+            and validation.get("thumbnail_text") is True
+            and validation.get("thumbnail_prompt") is True
+            and not (validation.get("failing_fields") or [])
+            and not (validation.get("issues") or [])
+        ):
+            write(log_path, json.dumps({
+                "status": "PASS", "topic_sha256": topic_hash,
+                "recent_packaging_sha256": recent_hash,
+                "historical_setting": setting, "recent_records_checked": len(recent),
+                "package": package, "validation": validation,
+            }, ensure_ascii=False, indent=2))
+            return package
+        failing = list(validation.get("failing_fields") or [
+            "episode_title_core", "title_suffix", "final_youtube_title",
+            "thumbnail_text", "thumbnail_prompt",
+        ])
+    diag_reasons = []
+    if attempts_records:
+        last = attempts_records[-1]
+        if last.get("local_failing_fields"):
+            diag_reasons.append(f"local issues in {last['local_failing_fields']}")
+        if last.get("validation") and last["validation"].get("issues"):
+            diag_reasons.append(f"validation issues: {last['validation']['issues']}")
+    reason_str = "; ".join(diag_reasons) if diag_reasons else "validation failed"
+    raise RuntimeError(f"YOUTUBE_PACKAGING_VALIDATION_FAILED: {failing}: {reason_str}")
+
+
 def build_metadata_files(story: Path, topic: dict, research: str, sources: list[dict], story_text: str,
                          quality_gate: dict, fact_check: dict) -> None:
     today = dt.date.today().isoformat()
@@ -935,12 +1113,8 @@ def build_metadata_files(story: Path, topic: dict, research: str, sources: list[
     if not sources:
         source_lines += ["- راجع الروابط المباشرة الواردة داخل `04_research_notes.md` قبل الاعتماد."]
 
-    title_rules = production_rules(44)
-    title_prompt = f"""{title_rules}
-
-أنشئ عنوان YouTube عربيًا واحدًا صادقًا وهادئًا للنوم عن «{topic['topic_ar']}» وفق قالب مثل «ستنام قبل النهاية 😴 | ...» أو «لن تُكمل هذه القصة 😴 | ...». أعد العنوان فقط، بلا اقتباس وبحد أقصى 95 حرفًا."""
-    title, _ = gemini(title_prompt, max_tokens=250, temperature=0.5)
-    title = title.splitlines()[0].strip().strip('"')
+    packaging = generate_youtube_packaging(story, topic)
+    title = packaging["final_youtube_title"]
 
     description_template = (ROOT / "config" / "youtube_description_template.txt").read_text(encoding="utf-8")
     topic_block = f"""📖 قصة اليوم:
@@ -957,7 +1131,10 @@ def build_metadata_files(story: Path, topic: dict, research: str, sources: list[
     # and inserts human-readable/Fish direction tags before audio generation.
     annotated = story_text
     api_text = story_text
-    image_prompt = f"""16:9 horizontal YouTube background, 1920x1080, ultra realistic cinematic historical reconstruction of {topic['search_query_en']}, calm quiet night, soft warm low lighting, subtle moonlight, sleep-inducing composition, historically plausible environment, no action, no text, no logo, no watermark, no fantasy, no modern objects."""
+    thumbnail_prompt = packaging["thumbnail_prompt"]
+    image_prompt = thumbnail_prompt + """
+
+PIPELINE SCENE RENDER: Generate the historical scene and reserved dark text area only. Do not render letters, words, typography, logos, or watermarks; the exact Arabic label will be overlaid deterministically after generation."""
 
     write(story / "01_title.txt", title)
     write(story / "02_description.txt", description)
@@ -967,12 +1144,22 @@ def build_metadata_files(story: Path, topic: dict, research: str, sources: list[
     write(story / "06_story_tts_annotated.md", annotated)
     write(story / "07_story_tts_api.md", api_text)
     write(story / "08_image_prompt_en.txt", image_prompt)
+    write(story / "08_thumbnail_prompt_en.txt", thumbnail_prompt)
     write(story / "09_image_source.md", "# مصدر الصورة\n\nImage generation pending")
     write(story / "16_fact_check.md", "# Fact Check\n\n```json\n" + json.dumps(fact_check, ensure_ascii=False, indent=2) + "\n```")
     from state_machine import State
     write(story / "17_status.md", f"# الحالة\n\n- الحالة الحالية: `{State.GENERATING}`\n- النشر: `not_published`.\n- سيحدّث خط الإنتاج هذه الحالة بعد اكتمال الصوت والفيديو والتحقق.")
     metadata = {
         "title": title,
+        "episode_title_core": packaging["episode_title_core"],
+        "title_suffix": packaging["title_suffix"],
+        "final_youtube_title": title,
+        "thumbnail_text": packaging["thumbnail_text"],
+        "thumbnail_prompt": thumbnail_prompt,
+        "thumbnail_scene_type": topic.get("family") or "historical-place-immersion",
+        "historical_setting": f"{topic.get('location_ar', '')} — {topic.get('period_ar', '')}".strip(" —"),
+        "youtube_packaging_status": "passed",
+        "youtube_packaging_validation_status": "passed",
         "topic": topic["topic_ar"],
         "slug": topic["slug"],
         "created_at": dt.datetime.now(dt.timezone(dt.timedelta(hours=4))).isoformat(),

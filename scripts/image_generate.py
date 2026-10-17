@@ -6,6 +6,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
 import secrets
 import socket
 import time
@@ -14,12 +15,61 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageStat
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps, ImageStat, features
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SETTINGS = json.loads((ROOT / "config" / "settings.json").read_text(encoding="utf-8"))
 IMAGE_LOG = ROOT / "logs" / "image_generation.jsonl"
+
+
+def _thumbnail_font(size: int) -> ImageFont.FreeTypeFont:
+    candidates = (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
+        "C:/Windows/Fonts/arialbd.ttf",
+        "C:/Windows/Fonts/segoeuib.ttf",
+    )
+    for path in candidates:
+        if Path(path).exists():
+            return ImageFont.truetype(path, size=size)
+    raise RuntimeError("THUMBNAIL_TEXT_FAILED: no Arabic-capable bold font found")
+
+
+def render_thumbnail(base: Image.Image, path: Path, text: str) -> None:
+    words = re.findall(r"[\u0621-\u064A]+", text)
+    if not 2 <= len(words) <= 4:
+        raise RuntimeError("THUMBNAIL_TEXT_FAILED: expected 2-4 Arabic words")
+    canvas = base.resize((1280, 720), Image.Resampling.LANCZOS).convert("RGBA")
+    overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    box = (55, 205, 535, 515)
+    draw.rounded_rectangle(box, radius=32, fill=(5, 13, 25, 178), outline=(224, 210, 174, 72), width=2)
+    max_width, max_height = 410, 210
+    font = _thumbnail_font(108)
+    shaped_text = text
+    text_options = {"direction": "rtl", "language": "ar"}
+    if not features.check_feature("raqm"):
+        try:
+            import arabic_reshaper
+            from bidi.algorithm import get_display
+        except ImportError as exc:
+            raise RuntimeError("THUMBNAIL_TEXT_FAILED: Arabic shaping dependency is unavailable") from exc
+        shaped_text = get_display(arabic_reshaper.reshape(text))
+        text_options = {}
+    for size in range(108, 51, -4):
+        font = _thumbnail_font(size)
+        bounds = draw.textbbox((0, 0), shaped_text, font=font, **text_options)
+        if bounds[2] - bounds[0] <= max_width and bounds[3] - bounds[1] <= max_height:
+            break
+    draw.text(
+        (295, 360), shaped_text, font=font, fill=(241, 233, 211, 255),
+        anchor="mm", **text_options,
+        stroke_width=2, stroke_fill=(8, 12, 20, 210),
+    )
+    Image.alpha_composite(canvas, overlay).convert("RGB").save(
+        path, format="JPEG", quality=94, optimize=True
+    )
 
 
 def safe_log(provider: str, model: str, success: bool, latency_ms: int, error_code: str | None = None) -> None:
@@ -410,6 +460,9 @@ def generate(story: Path, seed: int | None = None) -> None:
     prompt_path = story / "08_image_prompt_en.txt"
     if not prompt_path.exists():
         raise FileNotFoundError(prompt_path)
+    metadata_path = story / "15_metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    thumbnail_text = str(metadata.get("thumbnail_text", "")).strip()
     if provider == "cloudflare_workers_ai":
         model_id = SETTINGS.get("image_model", "@cf/black-forest-labs/flux-1-schnell")
     elif provider == "bytez":
@@ -469,9 +522,16 @@ def generate(story: Path, seed: int | None = None) -> None:
         background = story / "10_background.png"
         thumbnail = story / "11_thumbnail_base.jpg"
         image.save(background, format="PNG", optimize=True)
-        image.resize((1280, 720), Image.Resampling.LANCZOS).save(
-            thumbnail, format="JPEG", quality=94, optimize=True
-        )
+        if thumbnail_text:
+            render_thumbnail(image, thumbnail, thumbnail_text)
+            thumbnail_status = "passed"
+        else:
+            # Backward compatibility for review regeneration of episodes made
+            # before the packaging automation existed.
+            image.resize((1280, 720), Image.Resampling.LANCZOS).save(
+                thumbnail, format="JPEG", quality=94, optimize=True
+            )
+            thumbnail_status = "legacy_no_text"
         accuracy = historical_accuracy_gate(background, original_prompt, secret_values)
     finally:
         temporary.unlink(missing_ok=True)
@@ -485,8 +545,6 @@ def generate(story: Path, seed: int | None = None) -> None:
         "- ملاحظة تاريخية: إعادة بناء بصرية مولدة آليًا وليست مرجعًا أثريًا حرفيًا.\n",
         encoding="utf-8",
     )
-    metadata_path = story / "15_metadata.json"
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     metadata.update({
         "image_provider": actual_provider,
         "image_model": actual_model,
@@ -499,6 +557,8 @@ def generate(story: Path, seed: int | None = None) -> None:
         "image_accuracy_gate": accuracy,
         "image_prompt_sha256": hashlib.sha256(original_prompt.encode("utf-8")).hexdigest(),
         "image_sha256": hashlib.sha256(background.read_bytes()).hexdigest(),
+        "thumbnail_sha256": hashlib.sha256(thumbnail.read_bytes()).hexdigest(),
+        "thumbnail_text_render_status": thumbnail_status,
     })
     temporary_metadata = metadata_path.with_name(metadata_path.name + ".tmp")
     temporary_metadata.write_text(json.dumps(metadata, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")

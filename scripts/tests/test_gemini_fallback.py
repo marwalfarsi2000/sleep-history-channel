@@ -34,6 +34,22 @@ def _http_error(code: int, body: str) -> urllib.error.HTTPError:
 
 
 class GeminiFallbackTests(unittest.TestCase):
+    def test_thinking_config_for_model_uses_low_for_gemini_3_8_flash(self):
+        config = generate_daily.thinking_config_for_model("gemini-3.8-flash")
+        self.assertEqual(config, {"thinkingLevel": "low"})
+
+    def test_thinking_config_for_model_uses_minimal_for_gemini_3_family(self):
+        config = generate_daily.thinking_config_for_model("gemini-3.5-flash-lite")
+        self.assertEqual(config, {"thinkingLevel": "minimal"})
+        config = generate_daily.thinking_config_for_model("gemini-3.0-flash")
+        self.assertEqual(config, {"thinkingLevel": "minimal"})
+
+    def test_thinking_config_for_model_uses_budget_for_non_gemini_3(self):
+        config = generate_daily.thinking_config_for_model("gemini-2.5-flash")
+        self.assertEqual(config, {"thinkingBudget": 0})
+        config = generate_daily.thinking_config_for_model("gemini-3.1-flash-lite")
+        self.assertEqual(config, {"thinkingBudget": 0})
+
     def test_transient_primary_failure_switches_to_free_writing_model(self):
         success = {"candidates": [{"content": {"parts": [{"text": "مخطط ناجح"}]}}]}
         responses = [
@@ -58,7 +74,7 @@ class GeminiFallbackTests(unittest.TestCase):
         fallback_payload = json.loads(urlopen.call_args_list[1].args[0].data.decode("utf-8"))
         self.assertEqual(
             fallback_payload["generationConfig"]["thinkingConfig"],
-            {"thinkingLevel": "low"},
+            {"thinkingLevel": "minimal"},
         )
 
     def test_search_quota_fails_closed_without_model_memory_fallback(self):
@@ -110,6 +126,47 @@ class GeminiFallbackTests(unittest.TestCase):
                 text, _ = generate_daily.gemini("prompt")
         self.assertEqual(text, "ok")
         self.assertIn("gemini-3.1-flash-lite", urlopen.call_args_list[1].args[0].full_url)
+
+    def test_unsupported_thinking_level_400_retries_with_low_once(self):
+        success = {"candidates": [{"content": {"parts": [{"text": "recovered"}]}}]}
+        unsupported_error = _http_error(
+            400,
+            '{"error":{"status":"INVALID_ARGUMENT","message":"Thinking level MINIMAL is not supported for this model. Please retry with other thinking level."}}',
+        )
+        call_count = [0]
+        def side_effect_func(request, timeout=None):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise unsupported_error
+            return _Response(success)
+        with mock.patch.object(generate_daily, "load_secrets", return_value={"GEMINI_API_KEY": "test"}), \
+             mock.patch.object(generate_daily, "GEMINI_RETRY_DELAYS", ()), \
+             mock.patch.object(generate_daily.urllib.request, "urlopen", side_effect=side_effect_func) as urlopen:
+            text, _ = generate_daily._gemini_one("gemini-3.5-flash-lite", "prompt")
+
+        self.assertEqual(text, "recovered")
+        self.assertEqual(urlopen.call_count, 2)
+        first_payload = json.loads(urlopen.call_args_list[0].args[0].data.decode("utf-8"))
+        self.assertEqual(
+            first_payload["generationConfig"]["thinkingConfig"],
+            {"thinkingLevel": "minimal"},
+        )
+        second_payload = json.loads(urlopen.call_args_list[1].args[0].data.decode("utf-8"))
+        self.assertEqual(
+            second_payload["generationConfig"]["thinkingConfig"],
+            {"thinkingLevel": "low"},
+        )
+
+    def test_other_400_errors_fail_fast_without_retry(self):
+        invalid_error = _http_error(
+            400,
+            '{"error":{"status":"INVALID_ARGUMENT","message":"Invalid request"}}',
+        )
+        with mock.patch.object(generate_daily, "load_secrets", return_value={"GEMINI_API_KEY": "test"}), \
+             mock.patch.object(generate_daily, "GEMINI_RETRY_DELAYS", ()), \
+             mock.patch.object(generate_daily.urllib.request, "urlopen", side_effect=[invalid_error]):
+            with self.assertRaisesRegex(RuntimeError, "Gemini HTTP 400"):
+                generate_daily._gemini_one("gemini-3.8-flash", "prompt")
 
 
 if __name__ == "__main__":

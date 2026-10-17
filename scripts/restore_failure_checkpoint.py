@@ -19,16 +19,18 @@ ARTIFACT_PREFIX = "sleep-history-failure-"
 
 
 def latest_unfinished_story(root: Path = ROOT) -> str | None:
+    from state_machine import State, normalize_state
     history_path = root / "config" / "topics_history.json"
+    if not history_path.exists():
+        return None
     history = json.loads(history_path.read_text(encoding="utf-8"))
     for item in reversed(history):
-        status = item.get("status")
-        upload_incomplete = (
-            status == "pending_approval"
-            and not item.get("archive_identifier")
-        )
-        review_incomplete = status == "READY_FOR_APPROVAL" and not item.get("archive_identifier")
-        if (status in {"generating", "drafting"} or upload_incomplete or review_incomplete) and item.get("story_path"):
+        status = normalize_state(item.get("status", ""))
+        archive_id = item.get("archive_identifier")
+        # Do not restore stale failure checkpoints for completed stories
+        if archive_id or status in {State.APPROVED_FOR_PUBLISH, State.PUBLISHING, State.PUBLISHED, State.REJECTED}:
+            continue
+        if status in {State.GENERATING, State.MEDIA_READY, State.REVIEW_PENDING} and item.get("story_path"):
             return PurePosixPath(str(item["story_path"]).replace("\\", "/")).as_posix()
     return None
 
@@ -87,12 +89,13 @@ def safe_story_members(archive: zipfile.ZipFile, story_path: str) -> list[zipfil
     story_prefix = PurePosixPath(story_path).as_posix().rstrip("/") + "/"
     allowed_root_files = {
         "05_story_clean.md",
+        "05b_story_tts_normalized.md",
         "06_story_tts_annotated.md",
         "07_story_tts_api.md",
         "15_metadata.json",
         "17_status.md",
         "01_title.txt", "02_description.txt", "03_sources.md", "04_research_notes.md",
-        "08_image_prompt_en.txt", "09_image_source.md", "10_background.png",
+        "08_image_prompt_en.txt", "08_thumbnail_prompt_en.txt", "09_image_source.md", "10_background.png",
         "11_thumbnail_base.jpg", "12_audio_narration.mp3", "12_audio_full.mp3",
         "13_audio_review.opus", "14_video_final.mp4", "16_fact_check.md", "00_package.html",
     }

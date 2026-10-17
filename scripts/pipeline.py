@@ -1841,8 +1841,24 @@ def render(story: Path):
 
 def validate(story: Path):
     required=["01_title.txt","02_description.txt","03_sources.md","04_research_notes.md","05_story_clean.md","05b_story_tts_normalized.md","06_story_tts_annotated.md","07_story_tts_api.md","10_background.png","11_thumbnail_base.jpg","12_audio_narration.mp3","12_audio_full.mp3","13_audio_review.opus","14_video_final.mp4","15_metadata.json","16_fact_check.md","17_status.md"]
+    initial_meta = json.loads((story / "15_metadata.json").read_text(encoding="utf-8")) if (story / "15_metadata.json").exists() else {}
+    packaged_episode = bool(initial_meta.get("youtube_packaging_status"))
+    if packaged_episode:
+        required.append("08_thumbnail_prompt_en.txt")
     missing=[x for x in required if not (story/x).exists()]
     if missing: raise RuntimeError("Missing: "+", ".join(missing))
+    if packaged_episode:
+        final_title = (story / "01_title.txt").read_text(encoding="utf-8").strip()
+        thumbnail_prompt = (story / "08_thumbnail_prompt_en.txt").read_text(encoding="utf-8").strip()
+        thumbnail_text = str(initial_meta.get("thumbnail_text", "")).strip()
+        if final_title != initial_meta.get("final_youtube_title") or final_title != initial_meta.get("title"):
+            raise RuntimeError("YOUTUBE_PACKAGING_VALIDATION_FAILED: title file and metadata differ")
+        if thumbnail_prompt != str(initial_meta.get("thumbnail_prompt", "")).strip():
+            raise RuntimeError("YOUTUBE_PACKAGING_VALIDATION_FAILED: thumbnail prompt file and metadata differ")
+        if not 2 <= len(re.findall(r"[\u0621-\u064A]+", thumbnail_text)) <= 4:
+            raise RuntimeError("YOUTUBE_PACKAGING_VALIDATION_FAILED: thumbnail text must contain 2-4 Arabic words")
+        if initial_meta.get("thumbnail_text_render_status") != "passed":
+            raise RuntimeError("YOUTUBE_PACKAGING_VALIDATION_FAILED: exact thumbnail text was not rendered")
     annotated_text=(story/"06_story_tts_annotated.md").read_text(encoding="utf-8")
     api_tts_text=(story/"07_story_tts_api.md").read_text(encoding="utf-8")
     clean_story_text=(story/"05_story_clean.md").read_text(encoding="utf-8")
@@ -1902,7 +1918,7 @@ def validate(story: Path):
     long_silences=re.findall(r"silence_duration:\s*([0-9.]+)",silence.stderr)
     stats=subprocess.run([ffmpeg(),"-hide_banner","-i",str(story/"12_audio_full.mp3"),"-af","astats=metadata=1:reset=1","-f","null","-"],capture_output=True,text=True)
     duration_status="PASS" if SETTINGS["target_min_seconds"] <= ad <= SETTINGS["target_max_seconds"] else "FAIL"
-    validation={"audio_duration_seconds":round(ad,2),"video_duration_seconds":round(vd,2),"duration_status":duration_status,"tts_normalization_status":"PASS","speech_safe_validation_status":"PASS","tts_diacritization_status":"PASS_DOUBLE_REVIEWED_PAUSAL","pronunciation_validation_status":"PASS","tts_preparation_status":"PASS","diacritic_ratio":round(current_diacritic_ratio,4),"diacritization_engine":DIACRITIZATION_VERSION,"tts_generation_speed":float(SETTINGS.get("tts_generation_speed",1.0)),"post_processing_tempo":float(SETTINGS.get("post_tts_tempo",1.0)),"effective_speed":float(SETTINGS.get("post_tts_tempo",1.0)),"sentence_pause_strategy":SETTINGS.get("sentence_pause_strategy"),"sentence_pause_boundaries":sentence_boundaries,"pausal_sentence_endings_status":"PASS","lexical_corrections_count":len(lexical_corrections),"lexical_corrections_preview":lexical_corrections[:20],"performance_tags":0,"long_silences_seconds":[float(x) for x in long_silences],"audio_chunks":len(list((story/"audio_chunks").glob("*.mp3"))),"tts_chunks":len(list((story/"tts_chunks").glob("*.txt"))),"zero_byte_files":[str(p) for p in story.rglob("*") if p.is_file() and p.stat().st_size==0]}
+    validation={"audio_duration_seconds":round(ad,2),"video_duration_seconds":round(vd,2),"duration_status":duration_status,"youtube_packaging_status":"PASS" if packaged_episode else "LEGACY","tts_normalization_status":"PASS","speech_safe_validation_status":"PASS","tts_diacritization_status":"PASS_DOUBLE_REVIEWED_PAUSAL","pronunciation_validation_status":"PASS","tts_preparation_status":"PASS","diacritic_ratio":round(current_diacritic_ratio,4),"diacritization_engine":DIACRITIZATION_VERSION,"tts_generation_speed":float(SETTINGS.get("tts_generation_speed",1.0)),"post_processing_tempo":float(SETTINGS.get("post_tts_tempo",1.0)),"effective_speed":float(SETTINGS.get("post_tts_tempo",1.0)),"sentence_pause_strategy":SETTINGS.get("sentence_pause_strategy"),"sentence_pause_boundaries":sentence_boundaries,"pausal_sentence_endings_status":"PASS","lexical_corrections_count":len(lexical_corrections),"lexical_corrections_preview":lexical_corrections[:20],"performance_tags":0,"long_silences_seconds":[float(x) for x in long_silences],"audio_chunks":len(list((story/"audio_chunks").glob("*.mp3"))),"tts_chunks":len(list((story/"tts_chunks").glob("*.txt"))),"zero_byte_files":[str(p) for p in story.rglob("*") if p.is_file() and p.stat().st_size==0]}
     (logs/"validation.json").write_text(json.dumps(validation,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     (logs/"ffmpeg_astats.txt").write_text(stats.stderr,encoding="utf-8")
     if validation["zero_byte_files"]: raise RuntimeError("zero-byte files found")
@@ -1912,7 +1928,7 @@ def validate(story: Path):
     chunk_models = json.loads(chunk_models_path.read_text(encoding="utf-8")) if chunk_models_path.exists() else {}
     models_used = sorted(set(chunk_models.values()))
     from state_machine import State, transition_state
-    meta=json.loads((story/"15_metadata.json").read_text(encoding="utf-8")); meta.update(audio_duration_seconds=round(ad,2),video_duration_seconds=round(vd,2),word_count=arabic_words((story/"05_story_clean.md").read_text(encoding="utf-8")),**voice_metadata(),tts_models_used=models_used,tts_normalization_status="passed",speech_safe_validation_status="passed",audio_generation_status="passed",audio_qc_status="passed",video_assembly_status="passed",video_qc_status="passed",metadata_validation_status="passed",clean_story_sha256=file_sha256(story/"05_story_clean.md"),tts_normalized_sha256=file_sha256(story/"05b_story_tts_normalized.md"),tts_api_sha256=file_sha256(story/"07_story_tts_api.md"),audio_sha256=file_sha256(story/"12_audio_full.mp3"),image_sha256=file_sha256(story/"10_background.png"),video_sha256=file_sha256(video_path),background_audio="pink noise",background_audio_volume_percent=15,narration_audio_path=str(story/"12_audio_narration.mp3"),audio_path=str(story/"12_audio_full.mp3"),video_path=str(story/"14_video_final.mp4"),thumbnail_path=str(story/"11_thumbnail_base.jpg"),approval_status=State.MEDIA_READY,publish_status="not_published")
+    meta=json.loads((story/"15_metadata.json").read_text(encoding="utf-8")); meta.update(audio_duration_seconds=round(ad,2),video_duration_seconds=round(vd,2),word_count=arabic_words((story/"05_story_clean.md").read_text(encoding="utf-8")),**voice_metadata(),tts_models_used=models_used,tts_normalization_status="passed",speech_safe_validation_status="passed",audio_generation_status="passed",audio_qc_status="passed",video_assembly_status="passed",video_qc_status="passed",metadata_validation_status="passed",clean_story_sha256=file_sha256(story/"05_story_clean.md"),tts_normalized_sha256=file_sha256(story/"05b_story_tts_normalized.md"),tts_api_sha256=file_sha256(story/"07_story_tts_api.md"),audio_sha256=file_sha256(story/"12_audio_full.mp3"),image_sha256=file_sha256(story/"10_background.png"),thumbnail_sha256=file_sha256(story/"11_thumbnail_base.jpg"),video_sha256=file_sha256(video_path),background_audio="pink noise",background_audio_volume_percent=15,narration_audio_path=str(story/"12_audio_narration.mp3"),audio_path=str(story/"12_audio_full.mp3"),video_path=str(story/"14_video_final.mp4"),thumbnail_path=str(story/"11_thumbnail_base.jpg"),approval_status=State.MEDIA_READY,publish_status="not_published")
     (story/"15_metadata.json").write_text(json.dumps(meta,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     (story/"17_status.md").write_text(
         f"# الحالة\n\n- الحالة الحالية: `{State.MEDIA_READY}`\n- النشر: `not_published`\n- بانتظار مراجعة Marwa واعتماد صريح قبل النشر.\n",
@@ -1950,18 +1966,22 @@ def completed_artifacts_are_current(story: Path) -> bool:
     required_statuses = (
         "fact_check_status", "second_fact_check_status", "diacritization_status",
         "tts_normalization_status", "speech_safe_validation_status",
-        "pronunciation_validation_status", "tts_preparation_status", "audio_qc_status",
-        "image_generation_status", "image_accuracy_status", "video_qc_status",
-        "metadata_validation_status",
+        "pronunciation_validation_status", "tts_preparation_status",
+        "youtube_packaging_status", "youtube_packaging_validation_status",
+        "audio_qc_status", "video_qc_status",
     )
     if any(metadata.get(name) != "passed" for name in required_statuses):
         return False
+    if metadata.get("youtube_packaging_status"):
+        if metadata.get("youtube_packaging_validation_status") != "passed" or metadata.get("thumbnail_text_render_status") != "passed":
+            return False
     expected = {
         "clean_story_sha256": story / "05_story_clean.md",
         "tts_normalized_sha256": story / "05b_story_tts_normalized.md",
         "tts_api_sha256": story / "07_story_tts_api.md",
         "audio_sha256": story / "12_audio_full.mp3",
         "image_sha256": story / "10_background.png",
+        "thumbnail_sha256": story / "11_thumbnail_base.jpg",
         "video_sha256": story / "14_video_final.mp4",
     }
     return all(path.exists() and metadata.get(key) == file_sha256(path) for key, path in expected.items())

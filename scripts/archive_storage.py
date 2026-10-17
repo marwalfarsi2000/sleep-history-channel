@@ -110,7 +110,11 @@ def story_files(story: Path) -> dict[str, str]:
     missing = [name for name in names if not (story / name).is_file()]
     if missing:
         raise RuntimeError("Archive upload is missing files: " + ", ".join(missing))
-    return {name: str(story / name) for name in names}
+    files = {name: str(story / name) for name in names}
+    optional_thumbnail_prompt = story / "08_thumbnail_prompt_en.txt"
+    if optional_thumbnail_prompt.is_file():
+        files[optional_thumbnail_prompt.name] = str(optional_thumbnail_prompt)
+    return files
 
 
 def public_file_url(identifier: str, filename: str) -> str:
@@ -243,7 +247,7 @@ def update_index(record: dict) -> None:
         records = json.loads(ARCHIVE_INDEX.read_text(encoding="utf-8"))
     records = [item for item in records if item.get("identifier") != record["identifier"]]
     records.append(record)
-    records.sort(key=lambda item: item.get("created_at", ""))
+    records.sort(key=lambda item: str(item.get("created_at") or ""))
     atomic_json(ARCHIVE_INDEX, records)
 
 
@@ -254,6 +258,13 @@ def finalize_story(story: Path, identifier: str, verified: dict) -> dict:
         "identifier": identifier,
         "slug": metadata["slug"],
         "title": metadata["title"],
+        "episode_title_core": metadata.get("episode_title_core", ""),
+        "title_suffix": metadata.get("title_suffix", ""),
+        "final_youtube_title": metadata.get("final_youtube_title", metadata["title"]),
+        "thumbnail_text": metadata.get("thumbnail_text", ""),
+        "thumbnail_scene_type": metadata.get("thumbnail_scene_type", ""),
+        "thumbnail_prompt": metadata.get("thumbnail_prompt", ""),
+        "historical_setting": metadata.get("historical_setting", ""),
         "created_at": metadata.get("created_at"),
         "status": State.REVIEW_PENDING,
         "video_filename": "14_video_final.mp4",
@@ -331,8 +342,53 @@ def delete_rejected(identifier: str) -> None:
                 raise RuntimeError(f"Internet Archive delete failed with HTTP {status}")
 
 
+def ensure_index_record(identifier: str) -> dict:
+    records = json.loads(ARCHIVE_INDEX.read_text(encoding="utf-8")) if ARCHIVE_INDEX.exists() else []
+    existing = next((rec for rec in records if rec.get("identifier") == identifier), None)
+    if existing:
+        return existing
+
+    try:
+        remote_meta = archive_metadata(identifier)
+    except Exception as exc:
+        raise RuntimeError(f"Cannot recover catalogue record: Internet Archive identifier {identifier} not found ({exc})")
+
+    meta_dict = remote_meta.get("metadata") or {}
+    slug = str(meta_dict.get("slug") or identifier)
+    title = str(meta_dict.get("title") or identifier)
+    created_at = meta_dict.get("date") or meta_dict.get("publicdate")
+    status = meta_dict.get("approval_status") or "REVIEW_PENDING"
+
+    record = {
+        "identifier": identifier,
+        "slug": slug,
+        "title": title,
+        "created_at": created_at,
+        "status": status,
+        "video_filename": "14_video_final.mp4",
+        "item_url": f"https://archive.org/details/{identifier}",
+        "video_url": public_file_url(identifier, "14_video_final.mp4"),
+        "thumbnail_url": public_file_url(identifier, "11_thumbnail_base.jpg"),
+    }
+    update_index(record)
+
+    history_path = ROOT / "config" / "topics_history.json"
+    if history_path.exists():
+        history = json.loads(history_path.read_text(encoding="utf-8"))
+        for item in history:
+            if item.get("slug") == slug or item.get("archive_identifier") == identifier:
+                item["status"] = status
+                item["archive_identifier"] = identifier
+                item["archive_url"] = record["item_url"]
+                item.pop("story_path", None)
+        atomic_json(history_path, history)
+
+    return record
+
+
 def set_index_status(identifier: str, status: str, **updates: object) -> None:
     from state_machine import transition_state, normalize_state
+    ensure_index_record(identifier)
     records = json.loads(ARCHIVE_INDEX.read_text(encoding="utf-8")) if ARCHIVE_INDEX.exists() else []
     found = False
     target_status = normalize_state(status)

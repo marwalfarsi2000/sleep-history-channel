@@ -54,6 +54,7 @@ def test_completed_artifacts_are_current_skips_rerunning_expensive_stages(tmp_pa
         "07_story_tts_api.md": b"api story",
         "12_audio_full.mp3": b"X" * 5000,
         "10_background.png": b"X" * 5000,
+            "11_thumbnail_base.jpg": b"X" * 5000,
         "14_video_final.mp4": b"X" * 5000,
     }
     for name, content in files.items():
@@ -67,16 +68,17 @@ def test_completed_artifacts_are_current_skips_rerunning_expensive_stages(tmp_pa
         "speech_safe_validation_status": "passed",
         "pronunciation_validation_status": "passed",
         "tts_preparation_status": "passed",
+        "youtube_packaging_status": "passed",
+        "youtube_packaging_validation_status": "passed",
+            "thumbnail_text_render_status": "passed",
         "audio_qc_status": "passed",
-        "image_generation_status": "passed",
-        "image_accuracy_status": "passed",
         "video_qc_status": "passed",
-        "metadata_validation_status": "passed",
         "clean_story_sha256": hashlib.sha256(b"clean story").hexdigest(),
         "tts_normalized_sha256": hashlib.sha256(b"normalized story").hexdigest(),
         "tts_api_sha256": hashlib.sha256(b"api story").hexdigest(),
         "audio_sha256": hashlib.sha256(b"X" * 5000).hexdigest(),
         "image_sha256": hashlib.sha256(b"X" * 5000).hexdigest(),
+            "thumbnail_sha256": hashlib.sha256(b"X" * 5000).hexdigest(),
         "video_sha256": hashlib.sha256(b"X" * 5000).hexdigest(),
     }
     (story_dir / "15_metadata.json").write_text(json.dumps(meta), encoding="utf-8")
@@ -122,7 +124,7 @@ def test_tts_reused_on_retry_after_later_stage_failure(tmp_path, monkeypatch):
          patch("pipeline.tts_one", mock_tts_one), \
          patch("pipeline.validate_audio"), \
          patch("pipeline.mix_background_audio"), \
-             patch("pipeline.duration", return_value=100.0), \
+         patch("pipeline.duration", return_value=100.0), \
          patch("pipeline.run"):
 
         import asyncio

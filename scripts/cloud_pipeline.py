@@ -240,6 +240,11 @@ def download_file(identifier: str, filename: str, destination: Path) -> None:
 
 def publish(identifier: str) -> dict:
     from state_machine import State, normalize_state
+    from archive_storage import ensure_index_record
+
+    # Preflight check: ensure local catalogue record exists before any side effect
+    ensure_index_record(identifier)
+
     current_remote = normalize_state(remote_status(identifier))
     allowed_states = {State.REVIEW_PENDING, State.APPROVED_FOR_PUBLISH, State.PUBLISHING, State.PUBLISHED}
     if current_remote not in allowed_states:
@@ -247,14 +252,20 @@ def publish(identifier: str) -> dict:
 
     from youtube_publish import publish_archive_item
     if current_remote == State.REVIEW_PENDING:
+        set_index_status(identifier, State.APPROVED_FOR_PUBLISH)
         modify_remote(identifier, {
             "approval_status": State.APPROVED_FOR_PUBLISH,
             "approved_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         })
-        set_index_status(identifier, State.APPROVED_FOR_PUBLISH)
 
     result = publish_archive_item(identifier)
-    set_index_status(identifier, State.PUBLISHED, youtube_video_id=result["video_id"], youtube_url=result["url"])
+    set_index_status(
+        identifier,
+        State.PUBLISHED,
+        youtube_video_id=result["video_id"],
+        youtube_url=result["url"],
+        published_at=dt.datetime.now(dt.timezone(dt.timedelta(hours=4))).isoformat(),
+    )
     modify_remote(identifier, {
         "approval_status": State.PUBLISHED,
         "output_verification_status": "passed",
@@ -297,6 +308,8 @@ def regenerate(identifier: str) -> dict:
     for name in REVIEW_SOURCE_FILES:
         download_file(identifier, name, story / name)
     metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
+    if metadata.get("youtube_packaging_status"):
+        download_file(identifier, "08_thumbnail_prompt_en.txt", story / "08_thumbnail_prompt_en.txt")
     metadata["approval_status"] = State.GENERATING
     atomic_json(story / "15_metadata.json", metadata)
     (story / "09_image_source.md").write_text("# مصدر الصورة\n\nستُعاد توليد الصورة آليًا.\n", encoding="utf-8")
