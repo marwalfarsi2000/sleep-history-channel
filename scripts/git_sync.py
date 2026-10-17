@@ -1,39 +1,15 @@
-"""Helper for non-blocking git state persistence in cloud environment."""
+"""Persist runtime state to the automation-state branch. Never pushes to main."""
 
-import subprocess
 import sys
+
+import state_store
 
 
 def sync_git_catalogue() -> bool:
     try:
-        subprocess.run(["git", "config", "user.name", "sleep-history-bot"], check=False)
-        subprocess.run(["git", "config", "user.email", "marwalfarsi2000@gmail.com"], check=False)
-        subprocess.run([
-            "git", "add",
-            "config/topics_history.json",
-            "config/topic_candidate_bank.json",
-            "config/archive_index.json",
-            "config/tts_usage.json",
-            "config/tts_quota_state.json",
-            "config/pronunciation_dictionary.json"
-        ], check=False)
-        diff = subprocess.run(["git", "diff", "--cached", "--quiet"])
-        if diff.returncode != 0:
-            subprocess.run(["git", "commit", "-m", "Update sleep history catalogue"], check=False)
-            for attempt in range(1, 4):
-                rebase = subprocess.run(["git", "pull", "--rebase", "origin", "main"])
-                if rebase.returncode != 0:
-                    subprocess.run(["git", "rebase", "--abort"], check=False)
-                    print(f"WARNING: Git rebase failed on attempt {attempt}, aborted rebase.", file=sys.stderr)
-                    continue
-                push = subprocess.run(["git", "push", "origin", "HEAD:main"])
-                if push.returncode == 0:
-                    return True
-            print("WARNING: Git state persistence push failed after retries, but production result is preserved.", file=sys.stderr)
-            return False
-        return True
+        return state_store.persist_all()
     except Exception as exc:
-        print(f"WARNING: Exception during git catalogue sync: {exc}", file=sys.stderr)
+        print(f"WARNING: runtime state persistence failed: {exc}", file=sys.stderr)
         return False
 
 

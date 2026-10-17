@@ -26,13 +26,12 @@ jobs:
     timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
-      - name: Ensure automation-state branch
+      - name: Ensure automation-state branch and hydrate runtime state
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          git config --global user.name "sleep-history-bot"
-          git config --global user.email "marwalfarsi2000@gmail.com"
-          python3 -c "from pathlib import Path; import sys; sys.path.insert(0, 'scripts'); from state_store import _ensure_automation_branch; _ensure_automation_branch()"
+          python3 scripts/state_store.py ensure
+          python3 scripts/state_store.py hydrate
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -68,7 +67,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python scripts/cloud_pipeline.py notify-review
-      - name: Persist decision
+      - name: Persist decision to automation-state branch
         if: always()
         run: python scripts/git_sync.py
 

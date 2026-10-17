@@ -4,6 +4,8 @@ from pathlib import Path
 import pytest
 import youtube_publish
 
+FULL = {youtube_publish.SCOPE_MANAGE}
+
 
 def test_publish_archive_item_existing_video_id():
     mock_payload = {
@@ -25,6 +27,8 @@ def test_publish_archive_item_existing_video_id():
     with patch("youtube_publish.archive_metadata", return_value=mock_payload), \
          patch("youtube_publish.build", return_value=mock_youtube), \
          patch("youtube_publish.credentials", return_value=MagicMock()), \
+         patch("youtube_publish.get_granted_scopes", return_value=FULL), \
+         patch("youtube_publish.publish_mode", return_value="private_verify_public"), \
          patch("youtube_publish.record_remote_upload"):
 
         result = youtube_publish.publish_archive_item("item-123")
@@ -82,6 +86,8 @@ def test_publish_recovery_after_failure_post_youtube_insert(tmp_path, monkeypatc
     with patch("youtube_publish.archive_metadata", return_value=mock_payload), \
          patch("youtube_publish.build", return_value=mock_youtube), \
          patch("youtube_publish.credentials", return_value=MagicMock()), \
+         patch("youtube_publish.get_granted_scopes", return_value=FULL), \
+         patch("youtube_publish.publish_mode", return_value="private_verify_public"), \
          patch("youtube_publish.download", side_effect=mock_download), \
          patch("youtube_publish.read_text", side_effect=mock_read_text), \
          patch("youtube_publish.record_remote_upload", side_effect=RuntimeError("IA update failed")):
@@ -99,6 +105,8 @@ def test_publish_recovery_after_failure_post_youtube_insert(tmp_path, monkeypatc
     with patch("youtube_publish.archive_metadata", return_value=mock_payload), \
          patch("youtube_publish.build", return_value=mock_youtube), \
          patch("youtube_publish.credentials", return_value=MagicMock()), \
+         patch("youtube_publish.get_granted_scopes", return_value=FULL), \
+         patch("youtube_publish.publish_mode", return_value="private_verify_public"), \
          patch("youtube_publish.download", side_effect=mock_download), \
          patch("youtube_publish.read_text", side_effect=mock_read_text), \
          patch("youtube_publish.record_remote_upload"):
