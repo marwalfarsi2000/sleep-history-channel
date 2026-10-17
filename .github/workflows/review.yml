@@ -26,6 +26,13 @@ jobs:
     timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
+      - name: Ensure automation-state branch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git config --global user.name "sleep-history-bot"
+          git config --global user.email "marwalfarsi2000@gmail.com"
+          python3 -c "from pathlib import Path; import sys; sys.path.insert(0, 'scripts'); from state_store import _ensure_automation_branch; _ensure_automation_branch()"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"

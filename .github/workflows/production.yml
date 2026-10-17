@@ -31,6 +31,13 @@ jobs:
     timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
+      - name: Ensure automation-state branch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git config --global user.name "sleep-history-bot"
+          git config --global user.email "marwalfarsi2000@gmail.com"
+          python3 -c "from pathlib import Path; import sys; sys.path.insert(0, 'scripts'); from state_store import _ensure_automation_branch; _ensure_automation_branch()"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -107,6 +114,29 @@ jobs:
             !stories/**/*.m4a
           if-no-files-found: warn
           retention-days: 7
-      - name: Persist topic and archive catalogues
+      - name: Persist episode state to automation-state branch
         if: always()
-        run: python scripts/git_sync.py
+        run: |
+          git config --global user.name "sleep-history-bot"
+          git config --global user.email "marwalfarsi2000@gmail.com"
+          python scripts/git_sync.py
+          python3 << 'SYNC_STATE'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          root = Path(".")
+          stories = list(root.glob("stories/*/15_metadata.json"))
+          if stories:
+              from scripts.state_store import save_episode_state
+              for meta_file in stories:
+                  story_dir = meta_file.parent
+                  metadata = json.loads(meta_file.read_text(encoding="utf-8"))
+                  episode_id = metadata.get("episode_id", story_dir.name)
+                  if episode_id:
+                      save_episode_state(episode_id, {
+                          "approval_status": metadata.get("approval_status"),
+                          "youtube_video_id": metadata.get("youtube_video_id"),
+                          "story_path": str(story_dir.relative_to(root)),
+                      })
+          SYNC_STATE
