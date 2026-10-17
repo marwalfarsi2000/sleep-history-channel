@@ -211,11 +211,12 @@ def publish_archive_item(identifier: str) -> dict:
         if video.stat().st_size <= 1024:
             raise RuntimeError("Downloaded archive video is empty")
 
+        # Step 1: Upload as PRIVATE to verify processing before public release
         request = youtube.videos().insert(
             part="snippet,status",
             body={
                 "snippet": {"title": title, "description": description, "categoryId": "27", "defaultLanguage": "ar"},
-                "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": False},
+                "status": {"privacyStatus": "private", "selfDeclaredMadeForKids": False},
             },
             media_body=MediaFileUpload(str(video), mimetype="video/mp4", resumable=True, chunksize=8 * 1024 * 1024),
         )
@@ -227,13 +228,26 @@ def publish_archive_item(identifier: str) -> dict:
             raise RuntimeError("YouTube upload finished without a video ID")
         save_pending_youtube_id(identifier, video_id)
         record_remote_upload(identifier, video_id, "processing")
+
+        # Step 2: Set thumbnail while processing
         youtube.thumbnails().set(
             videoId=video_id,
             media_body=MediaFileUpload(str(thumbnail), mimetype="image/jpeg"),
         ).execute()
+
+        # Step 3: Wait for verification while PRIVATE
         verified = wait_until_processed(youtube, video_id)
-        if verified.get("status", {}).get("privacyStatus") != "public":
-            raise RuntimeError("YouTube output verification failed: video is not public")
+        if verified.get("status", {}).get("uploadStatus") != "processed":
+            raise RuntimeError("YouTube upload processing failed or did not complete")
+
+        # Step 4: Change to PUBLIC only after verification
+        youtube.videos().update(
+            part="status",
+            body={
+                "id": video_id,
+                "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": False},
+            },
+        ).execute()
         record_remote_upload(identifier, video_id, "verified")
     return {"video_id": video_id, "url": f"https://www.youtube.com/watch?v={video_id}", "already_published": False, "verified": verified}
 

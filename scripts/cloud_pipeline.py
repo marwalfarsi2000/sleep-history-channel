@@ -240,6 +240,15 @@ def download_file(identifier: str, filename: str, destination: Path) -> None:
 
 def publish(identifier: str) -> dict:
     from state_machine import State, normalize_state
+    from archive_recovery import ensure_index_record
+
+    # Preflight: recover index if missing (handles crashed/orphaned archives)
+    ensure_index_record(
+        identifier,
+        access_key=os.environ.get("IAS3_ACCESS_KEY", ""),
+        secret_key=os.environ.get("IAS3_SECRET_KEY", "")
+    )
+
     current_remote = normalize_state(remote_status(identifier))
     allowed_states = {State.REVIEW_PENDING, State.APPROVED_FOR_PUBLISH, State.PUBLISHING, State.PUBLISHED}
     if current_remote not in allowed_states:
