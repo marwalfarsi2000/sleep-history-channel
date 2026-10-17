@@ -20,9 +20,12 @@ from archive_storage import (
 )
 
 
+import episode_selection
+import run_summary
 import state_store
 
 
+WAITING_EXIT_CODE = 75
 ROOT = Path(__file__).resolve().parents[1]
 SETTINGS = json.loads((ROOT / "config" / "settings.json").read_text(encoding="utf-8"))
 
@@ -59,6 +62,10 @@ def run(command: list[str], log_name: str) -> str:
     process.stdout.close()
     return_code = process.wait()
     combined = "".join(output)
+    if return_code == WAITING_EXIT_CODE:
+        raise RuntimeError(
+            f"WAITING_FOR_LLM_QUOTA: the episode is saved and will resume; diagnostic log: {log_path.relative_to(ROOT)}"
+        )
     if return_code:
         raise RuntimeError(
             f"Command failed ({return_code}); diagnostic log: {log_path.relative_to(ROOT)}"
@@ -101,6 +108,7 @@ def telegram(method: str, payload: dict) -> dict:
 
 
 def send_message(text: str, keyboard: dict | None = None) -> None:
+    run_summary.count("telegram")
     payload = {
         "chat_id": os.environ["TELEGRAM_CHAT_ID"],
         "text": text,
@@ -197,8 +205,31 @@ def review_record(story: Path, archive_record: dict) -> dict:
     return record
 
 
+def announce_resume_of_active_episode() -> dict | None:
+    """A new-video request never starts a second topic while one is unfinished."""
+    try:
+        history = json.loads((ROOT / "config" / "topics_history.json").read_text(encoding="utf-8"))
+        state_episodes = state_store._load_state().get("episodes", {})
+    except Exception:
+        return None
+    active = episode_selection.active_episode(history, ROOT, state_episodes)
+    if not active:
+        return None
+    run_summary.update(story_path=str(active.get("story_path") or ""))
+    try:
+        send_message(
+            "يوجد فيديو غير مكتمل؛ سأكمله أولًا من آخر نقطة محفوظة.\n"
+            f"<code>{active.get('slug', '')}</code>"
+        )
+    except Exception as exc:
+        print(f"Warning: resume notice not sent: {exc}", file=sys.stderr)
+    return active
+
+
 def produce() -> dict:
     from state_machine import State, normalize_state
+    run_summary.stage("produce")
+    announce_resume_of_active_episode()
     ensure_background_audio()
     output = run([sys.executable, str(ROOT / "scripts" / "generate_daily.py")], "cloud-generate.log")
     generated = None
@@ -290,6 +321,7 @@ def publish(identifier: str) -> dict:
     result = publish_archive_item(identifier)
 
     if result.get("requires_owner_action"):
+        run_summary.update(owner_action_required=True, owner_action=result.get("action"))
         persist_state(
             identifier,
             approval_status=current_remote,
@@ -312,6 +344,7 @@ def publish(identifier: str) -> dict:
         "youtube_video_id": result["video_id"],
         "youtube_url": result["url"],
     })
+    run_summary.update(youtube_video_id=result["video_id"], archive_identifier=identifier)
     persist_state(
         identifier,
         approval_status=State.PUBLISHED,
@@ -377,6 +410,18 @@ def main() -> None:
     ])
     parser.add_argument("--identifier")
     args = parser.parse_args()
+    state_store.ensure_hydrated()
+    run_summary.start(workflow="cloud_pipeline", action=args.command, archive_identifier=args.identifier or "")
+    try:
+        result = dispatch_command(args, parser)
+    except BaseException as exc:
+        run_summary.fail(exc)
+        raise
+    run_summary.finish()
+    print(json.dumps(result, ensure_ascii=False))
+
+
+def dispatch_command(args, parser) -> dict:
     if args.command == "produce":
         result = produce()
     elif args.command == "notify-review":
@@ -399,7 +444,7 @@ def main() -> None:
         if not args.identifier:
             parser.error("--identifier is required")
         result = regenerate(args.identifier)
-    print(json.dumps(result, ensure_ascii=False))
+    return result
 
 
 if __name__ == "__main__":

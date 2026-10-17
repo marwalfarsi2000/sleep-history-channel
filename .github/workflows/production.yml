@@ -104,6 +104,7 @@ jobs:
           # final outputs (video, full narration, review audio) are excluded.
           path: |
             logs/*.log
+            .runtime/run_summary.json
             stories/**
             !stories/**/*.mp4
             !stories/**/12_audio_full.mp3
@@ -111,6 +112,7 @@ jobs:
             !stories/**/13_audio_review.opus
             !stories/**/*.wav
             !stories/**/*.m4a
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
       - name: Persist runtime and episode state to automation-state branch

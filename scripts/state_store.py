@@ -31,6 +31,7 @@ RUNTIME_FILES = (
     "topic_candidate_bank.json",
     "tts_usage.json",
     "tts_quota_state.json",
+    "llm_quota_state.json",
     "pronunciation_dictionary.json",
 )
 PUSH_ATTEMPTS = 4
@@ -340,6 +341,21 @@ def hydrate_runtime_files() -> list[str]:
         path.write_text(content, encoding="utf-8")
         hydrated.append(name)
     return hydrated
+
+
+def ensure_hydrated() -> bool:
+    """Hydrate runtime catalogues once per runner; safe to call from every entry point."""
+    marker = ROOT / ".runtime" / "hydrated.json"
+    if marker.exists():
+        return True
+    try:
+        hydrated = hydrate_runtime_files()
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"hydrated": hydrated}), encoding="utf-8")
+        return True
+    except Exception as exc:
+        print(f"Warning: runtime state hydration skipped: {exc}", file=sys.stderr)
+        return False
 
 
 def _story_episode_states(root: Path) -> dict[str, dict]:

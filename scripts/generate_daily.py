@@ -13,6 +13,9 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import episode_selection
+import llm_router
+import run_summary
 import state_store
 
 
@@ -160,10 +163,6 @@ def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: boo
         except urllib.error.HTTPError as error:
             body = error.read().decode("utf-8", errors="replace")
             last_error = f"Gemini HTTP {error.code}: {body[:600]}"
-            if error.code == 429 and _daily_quota_exhausted(body):
-                raise RuntimeError(
-                    "Gemini daily quota is exhausted; checkpoint preserved for the next run"
-                ) from error
             if (
                 error.code == 400
                 and not unsupported_thinking_recovered
@@ -187,15 +186,16 @@ def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: boo
                 with urllib.request.urlopen(request, timeout=180) as response:
                     result = json.loads(response.read().decode("utf-8"))
                 break
-            cat = classify_error(error)
-            if cat != ErrorCategory.TRANSIENT_RETRYABLE or attempt == len(retry_delays):
+            info = llm_router.classify_gemini_error(error.code, body, error.headers)
+            # Rate limits (429) are never retried against the same model here: the
+            # router records the cooldown and moves on or waits. Only transient
+            # server-side failures get short in-place retries.
+            if info.kind != llm_router.QuotaKind.CAPACITY or attempt == len(retry_delays):
                 prefix = "GROUNDED_RESEARCH_UNAVAILABLE: " if search else ""
-                raise RuntimeError(prefix + last_error) from error
-            retry_after = error.headers.get("Retry-After") if error.headers else None
-            try:
-                delay = max(retry_delays[attempt], int(retry_after or 0))
-            except ValueError:
-                delay = retry_delays[attempt]
+                raise llm_router.GeminiApiError(prefix + last_error, info) from error
+            delay = retry_delays[attempt]
+            if info.retry_after:
+                delay = max(delay, int(info.retry_after))
             print(
                 f"Gemini temporary HTTP {error.code}; retrying in {delay}s "
                 f"({attempt + 1}/{len(retry_delays)}): {_error_summary(body)}",
@@ -231,35 +231,24 @@ def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: boo
 
 def gemini(prompt: str, *, json_mode: bool = False, search: bool = False,
            max_tokens: int = 8192, temperature: float = 0.4) -> tuple[str, list[dict]]:
-    last_error: RuntimeError | None = None
+    """Call the approved Gemini models through the quota-aware router."""
     models = _llm_models(search=search)
-    for index, model in enumerate(models):
-        try:
-            return _gemini_one(
-                model,
-                prompt,
-                json_mode=json_mode,
-                search=search,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
-        except RuntimeError as error:
-            last_error = error
-            message = str(error).lower()
-            # 404/403 mean the model was retired or is not enabled for this
-            # project; skip to the next approved model instead of failing.
-            recoverable = any(
-                marker in message
-                for marker in ("http 429", "http 503", "http 404", "http 403", "daily quota", "unavailable")
-            )
-            if not recoverable or index + 1 >= len(models):
-                raise
-            print(
-                f"Gemini writing model {model} is unavailable; switching to free fallback {models[index + 1]}",
-                file=sys.stderr,
-                flush=True,
-            )
-    raise last_error or RuntimeError("Gemini request failed")
+
+    def attempt(model: str) -> tuple[str, list[dict]]:
+        run_summary.count("gemini")
+        run_summary.add_unique("models_attempted", model)
+        return _gemini_one(
+            model, prompt, json_mode=json_mode, search=search,
+            max_tokens=max_tokens, temperature=temperature,
+        )
+
+    try:
+        return llm_router.route(models, attempt, allow_wait=not search)
+    except llm_router.LlmQuotaWaiting as waiting:
+        if search:
+            # Grounding is optional: fall back to the search providers at once.
+            raise RuntimeError("GROUNDED_RESEARCH_UNAVAILABLE: " + str(waiting)) from waiting
+        raise
 
 
 def parse_json(text: str) -> dict:
@@ -320,6 +309,8 @@ def upsert_history_checkpoint(history_path: Path, story: Path, topic: dict, stat
         history.append(record)
     record["status"] = canonical_target
     record["story_path"] = story.relative_to(ROOT).as_posix()
+    for stale in ("waiting_for", "waiting_stage", "blocked_until", "quota_kind", "waiting_since"):
+        record.pop(stale, None)
     # Keep enough provider input to rebuild the same episode when a hosted
     # runner disappears after persisting only the catalogue checkpoint.
     for key in (
@@ -606,6 +597,7 @@ def _collect_sources(topic: dict) -> tuple[str, list[dict]]:
         results: list[dict] = []
         try:
             for query in filter(None, queries):
+                run_summary.count("search")
                 for item in search(query, key):
                     url = str(item.get("url") or "")
                     if url.startswith("https://") and not any(found["url"] == url for found in results):
@@ -623,8 +615,24 @@ def _collect_sources(topic: dict) -> tuple[str, list[dict]]:
     raise RuntimeError("GROUNDED_RESEARCH_UNAVAILABLE: all search providers failed (" + "; ".join(failures) + ")")
 
 
-def research_from_search_providers(topic: dict, prompt: str) -> tuple[str, list[dict]]:
-    provider, results = _collect_sources(topic)
+def _research_key(topic: dict) -> str:
+    seed = "|".join(str(topic.get(key, "")) for key in ("topic_ar", "angle_ar", "period_ar", "search_query_en"))
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()
+
+
+def research_from_search_providers(topic: dict, prompt: str, cache_path: Path | None = None) -> tuple[str, list[dict]]:
+    cached = _read_json(cache_path, {}) if cache_path else {}
+    if cached.get("topic_key") == _research_key(topic) and cached.get("results"):
+        # Sources already collected by an earlier attempt are never thrown away.
+        provider, results = cached["provider"], cached["results"]
+        print(f"Reusing {len(results)} previously collected research sources ({provider})", file=sys.stderr, flush=True)
+    else:
+        provider, results = _collect_sources(topic)
+        if cache_path:
+            write(cache_path, json.dumps(
+                {"topic_key": _research_key(topic), "provider": provider, "results": results},
+                ensure_ascii=False, indent=2))
+    run_summary.set_search_provider(provider)
     evidence = "\n\n".join(
         f"[{index}] {item['title']}\n{item['url']}\n{' '.join(str(item['excerpt']).split())[:2500]}"
         for index, item in enumerate(results, 1)
@@ -644,7 +652,7 @@ def research_from_search_providers(topic: dict, prompt: str) -> tuple[str, list[
     return research, sources
 
 
-def research_topic(topic: dict) -> tuple[str, list[dict]]:
+def research_topic(topic: dict, story: Path | None = None) -> tuple[str, list[dict]]:
     rules = production_rules(18, 19, 20, 21)
     prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
 {rules}
@@ -664,7 +672,8 @@ def research_topic(topic: dict) -> tuple[str, list[dict]]:
         if "GROUNDED_RESEARCH_UNAVAILABLE" not in str(error) and "daily quota" not in str(error).lower():
             raise
         print(f"Google Search grounding unavailable ({str(error)[:160]}); using search providers", file=sys.stderr, flush=True)
-        research, sources = research_from_search_providers(topic, prompt)
+        cache = story / "logs" / "research_search_results.json" if story else None
+        research, sources = research_from_search_providers(topic, prompt, cache)
     valid_sources = []
     domains = set()
     for source in sources:
@@ -908,6 +917,7 @@ def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path)
 
 
 def resume_partial_story(story: Path) -> Path:
+    _remember_story(story)
     topic_path = story / "logs/topic.json"
     outline_path = story / "logs/outline.json"
     if not topic_path.exists():
@@ -918,19 +928,25 @@ def resume_partial_story(story: Path) -> Path:
     if research_path.exists():
         research = research_path.read_text(encoding="utf-8")
         sources = json.loads(sources_path.read_text(encoding="utf-8")) if sources_path.exists() else []
+        run_summary.reused("research")
     else:
-        research, sources = research_topic(topic)
+        run_summary.stage("research")
+        research, sources = research_topic(topic, story)
         write(research_path, research)
         write(sources_path, json.dumps(sources, ensure_ascii=False, indent=2))
     if outline_path.exists():
         sections = json.loads(outline_path.read_text(encoding="utf-8"))["sections"]
+        run_summary.reused("outline")
     else:
+        run_summary.stage("outline")
         sections = make_outline(topic, research)
         write(outline_path, json.dumps({"sections": sections}, ensure_ascii=False, indent=2))
+    run_summary.stage("chapters")
     draft = draft_story(topic, research, sections, story / "logs")
     if word_count(draft) < 5000:
         raise RuntimeError(f"Generated story is too short: {word_count(draft)} Arabic words")
     write(story / "logs/assembled_story.md", draft)
+    run_summary.stage("quality_gates")
     story_text, quality_gate, fact_check = finalize_story_text(story, topic, research, draft)
     build_metadata_files(story, topic, research, sources, story_text, quality_gate, fact_check)
     history_path = ROOT / "config/topics_history.json"
@@ -959,15 +975,46 @@ CLOUDFLARE_PROMPT_MAX_CHARS = 2048
 THUMBNAIL_PROMPT_MAX_CHARS = 1600
 
 
-def local_packaging_issues(package: dict, topic: dict, recent: list[dict]) -> list[str]:
-    issues: list[str] = []
-    required = (
-        "episode_title_core", "title_suffix", "final_youtube_title",
-        "thumbnail_text", "thumbnail_prompt",
-    )
-    for field in required:
+PACKAGING_FIELDS = (
+    "episode_title_core", "title_suffix", "final_youtube_title", "thumbnail_text", "thumbnail_prompt",
+)
+# Only these need language work; the suffix and the joined title are produced by code.
+LLM_PACKAGING_FIELDS = ("episode_title_core", "thumbnail_text", "thumbnail_prompt")
+FINAL_TITLE_MAX_CHARS = 95
+MAX_PACKAGING_ATTEMPTS = 3
+TRAVEL_MARKERS = ("قافلة", "قوافل", "طريق", "رحلة", "ميناء", "سفر", "تجارة", "ممر")
+
+
+def choose_title_suffix(topic: dict, recent: list[dict], rejected: tuple[str, ...] | list[str] = ()) -> str:
+    """Pick the title suffix deterministically (no model call).
+
+    Never the previous three suffixes when another fits, balanced across the last
+    ten, matched to the episode (journey suffixes for route/travel topics), with a
+    stable hash as the final tie-break so the same inputs always give the same pick.
+    """
+    recent_suffixes = [str(item.get("title_suffix", "")).strip() for item in recent]
+    pool = [suffix for suffix in TITLE_SUFFIXES if suffix not in rejected] or list(TITLE_SUFFIXES)
+    fresh = [suffix for suffix in pool if suffix not in set(recent_suffixes[:3])] or pool
+    usage = {suffix: sum(1 for used in recent_suffixes[:10] if used == suffix) for suffix in fresh}
+    least = min(usage.values())
+    balanced = [suffix for suffix in fresh if usage[suffix] == least]
+    text = " ".join(str(topic.get(key, "")) for key in ("topic_ar", "angle_ar", "family"))
+    travel = any(marker in text for marker in TRAVEL_MARKERS)
+    key = str(topic.get("slug") or topic.get("topic_ar") or "")
+
+    def rank(suffix: str) -> tuple[int, str]:
+        matches = ("رحلة" in suffix) == travel
+        return (0 if matches else 1, hashlib.sha256(f"{key}|{suffix}".encode("utf-8")).hexdigest())
+
+    return sorted(balanced, key=rank)[0]
+
+
+def packaging_field_issues(package: dict, topic: dict, recent: list[dict]) -> dict[str, str]:
+    """Deterministic content checks: field -> exact reason. Empty dict means valid."""
+    issues: dict[str, str] = {}
+    for field in PACKAGING_FIELDS:
         if not str(package.get(field, "")).strip():
-            issues.append(field)
+            issues[field] = "missing"
     if issues:
         return issues
     core = str(package["episode_title_core"]).strip()
@@ -975,51 +1022,79 @@ def local_packaging_issues(package: dict, topic: dict, recent: list[dict]) -> li
     final = str(package["final_youtube_title"]).strip()
     label = str(package["thumbnail_text"]).strip()
     prompt = str(package["thumbnail_prompt"]).strip()
-    core_words = re.findall(r"[\u0621-\u064A]+", core)
-    label_words = re.findall(r"[\u0621-\u064A]+", label)
+    core_words = re.findall(r"[ء-ي]+", core)
+    label_words = re.findall(r"[ء-ي]+", label)
     if not 3 <= len(core_words) <= 10:
-        issues.append("episode_title_core")
+        issues["episode_title_core"] = f"has {len(core_words)} Arabic words; it must be 4-9 Arabic words"
     if suffix not in TITLE_SUFFIXES:
-        issues.append("title_suffix")
-    if final != f"{core} | {suffix}" or len(final) > 95 or final.count("😴") != 1:
-        issues.append("final_youtube_title")
+        issues["title_suffix"] = "is not one of the approved suffixes"
+    if final != f"{core} | {suffix}":
+        issues["final_youtube_title"] = "must be exactly '[core] | [suffix]'"
+    elif len(final) > FINAL_TITLE_MAX_CHARS:
+        issues["final_youtube_title"] = f"is {len(final)} characters; the maximum is {FINAL_TITLE_MAX_CHARS}"
+    elif final.count("😴") != 1:
+        issues["final_youtube_title"] = "must contain exactly one sleep emoji (the core must not add one)"
     recent_suffixes = [str(item.get("title_suffix", "")) for item in recent[:3]]
     if suffix and suffix in recent_suffixes:
-        issues.append("title_suffix")
+        issues["title_suffix"] = "repeats one of the previous three suffixes"
     forbidden_labels = {"قصة للنوم", "قصة تاريخية", "حكاية للنوم", "للنوم", "قبل النوم"}
     recent_labels = {str(item.get("thumbnail_text", "")).strip() for item in recent}
-    if not 1 <= len(label_words) <= 4 or label in forbidden_labels or "😴" in label or label in recent_labels:
-        issues.append("thumbnail_text")
+    if not 1 <= len(label_words) <= 4:
+        issues["thumbnail_text"] = f"has {len(label_words)} Arabic words; it must be 2-4 Arabic words"
+    elif label in forbidden_labels or "😴" in label:
+        issues["thumbnail_text"] = "is a generic label or contains an emoji"
+    elif label in recent_labels:
+        issues["thumbnail_text"] = "repeats a recent thumbnail label"
     if len(prompt) > THUMBNAIL_PROMPT_MAX_CHARS:
-        issues.append("thumbnail_prompt")
+        issues["thumbnail_prompt"] = f"is {len(prompt)} characters; the maximum is {THUMBNAIL_PROMPT_MAX_CHARS}"
     forbidden_prompt_phrases = {"[topic_ar]", "[thumbnail_text]", "${", "{{", "}}"}
     if any(forbidden in prompt for forbidden in forbidden_prompt_phrases):
-        issues.append("thumbnail_prompt")
+        issues["thumbnail_prompt"] = "contains an unfilled placeholder"
+    lowered = prompt.lower()
     has_no_logo_watermark = (
-        ("no logo" in prompt.lower() or "no watermark" in prompt.lower() or
-         "without logo" in prompt.lower() or "without watermark" in prompt.lower())
-        or ("logo" not in prompt.lower() and "watermark" not in prompt.lower())
+        ("no logo" in lowered or "no watermark" in lowered or "without logo" in lowered or "without watermark" in lowered)
+        or ("logo" not in lowered and "watermark" not in lowered)
     )
     has_text_restriction = (
-        "no text" in prompt.lower() or "no word" in prompt.lower() or
-        "no generated" in prompt.lower() or "no typography" in prompt.lower() or
-        "background only" in prompt.lower() or "without text" in prompt.lower() or
-        "no overlay" in prompt.lower()
+        "no text" in lowered or "no word" in lowered or "no generated" in lowered or "no typography" in lowered
+        or "background only" in lowered or "without text" in lowered or "no overlay" in lowered
     )
-    deterministic_checklist = [
-        "16:9 YouTube thumbnail" in prompt,
-        "background" in prompt.lower() or "scene" in prompt.lower(),
-        has_text_restriction,
-        has_no_logo_watermark,
+    missing_parts = [
+        name for name, ok in (
+            ("'16:9 YouTube thumbnail'", "16:9 YouTube thumbnail" in prompt),
+            ("a background/scene description", "background" in lowered or "scene" in lowered),
+            ("an explicit no-text instruction", has_text_restriction),
+            ("a no-logo/no-watermark instruction", has_no_logo_watermark),
+        ) if not ok
     ]
-    if not all(deterministic_checklist):
-        issues.append("thumbnail_prompt")
-    return sorted(set(issues))
+    if missing_parts and "thumbnail_prompt" not in issues:
+        issues["thumbnail_prompt"] = "is missing " + ", ".join(missing_parts)
+    return issues
+
+
+def local_packaging_issues(package: dict, topic: dict, recent: list[dict]) -> list[str]:
+    return sorted(packaging_field_issues(package, topic, recent))
+
+
+def _read_json(path: Path, default: object) -> object:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def _with_joined_title(package: dict) -> dict:
+    core = str(package.get("episode_title_core", "")).strip()
+    suffix = str(package.get("title_suffix", "")).strip()
+    if core and suffix:
+        package["final_youtube_title"] = f"{core} | {suffix}"
+    return package
 
 
 def generate_youtube_packaging(story: Path, topic: dict) -> dict:
     log_path = story / "logs" / "youtube_packaging.json"
     attempt_log_path = story / "logs" / "youtube_packaging_attempts.json"
+    partial_path = story / "logs" / "youtube_packaging_partial.json"
     topic_hash = hashlib.sha256(json.dumps(topic, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
     recent = recent_published_packaging(10)
     recent_hash = hashlib.sha256(json.dumps(recent, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
@@ -1034,21 +1109,35 @@ def generate_youtube_packaging(story: Path, topic: dict) -> dict:
             and cached.get("rules_sha256") == rules_hash
         ):
             return cached["package"]
+    run_summary.stage("packaging")
     setting = f"{topic.get('location_ar', '')} — {topic.get('period_ar', '')}".strip(" —")
-    package: dict = {}
-    failing = list((
-        "episode_title_core", "title_suffix", "final_youtube_title",
-        "thumbnail_text", "thumbnail_prompt",
-    ))
-    for attempt in range(3):
-        repair = ""
-        if package:
-            repair = f"""
-أعد توليد الحقول الفاشلة فقط: {json.dumps(failing, ensure_ascii=False)}.
-حافظ على بقية القيم التالية حرفيًا بلا تغيير:
-{json.dumps(package, ensure_ascii=False)}
-"""
-        prompt = f"""طبّق قواعد حزمة YouTube التالية حرفيًا.
+    inputs = {"topic_sha256": topic_hash, "recent_packaging_sha256": recent_hash, "rules_sha256": rules_hash}
+    partial = _read_json(partial_path, {})
+    resumed = isinstance(partial, dict) and partial.get("inputs") == inputs
+    package: dict = dict(partial.get("package") or {}) if resumed else {}
+    rejected_suffixes: list[str] = list(partial.get("rejected_suffixes") or []) if resumed else []
+    package["title_suffix"] = choose_title_suffix(topic, recent, rejected_suffixes)
+    _with_joined_title(package)
+
+    def checkpoint() -> None:
+        write(partial_path, json.dumps({
+            "inputs": inputs, "package": package, "rejected_suffixes": rejected_suffixes,
+            "saved_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }, ensure_ascii=False, indent=2))
+        run_summary.update(checkpoint_saved=True, resume_stage="packaging")
+
+    checkpoint()  # progress is on disk before the first provider call
+    details: dict[str, str] = packaging_field_issues(package, topic, recent)
+    for attempt in range(MAX_PACKAGING_ATTEMPTS):
+        details = packaging_field_issues(package, topic, recent)
+        # The suffix and joined title are code-owned; a bad joined title is fixed through the core.
+        ask = [f for f in LLM_PACKAGING_FIELDS if f in details]
+        if ("final_youtube_title" in details or "title_suffix" in details) and "episode_title_core" not in ask:
+            ask.append("episode_title_core")
+        if ask:
+            reasons = {f: details.get(f) or details.get("final_youtube_title") or "invalid" for f in ask}
+            keep = {k: v for k, v in package.items() if k not in ask}
+            prompt = f"""طبّق قواعد حزمة YouTube التالية حرفيًا.
 {rules}
 
 EPISODE TOPIC: {topic['topic_ar']}
@@ -1056,33 +1145,52 @@ HISTORICAL SETTING: {setting}
 ANGLE: {topic.get('angle_ar', '')}
 RECENT TEN PUBLISHED RECORDS:
 {json.dumps(recent, ensure_ascii=False)}
-{repair}
 
-Return JSON only with exactly these five keys:
-{{"episode_title_core":"...","title_suffix":"...","final_youtube_title":"...","thumbnail_text":"...","thumbnail_prompt":"..."}}
+لاحقة العنوان تُختار آليًا وهي: {package['title_suffix']}
+العنوان النهائي سيكون: [episode_title_core] | {package['title_suffix']} ولا يجوز أن يتجاوز {FINAL_TITLE_MAX_CHARS} حرفًا.
+أعد توليد الحقول التالية فقط مع سبب كل رفض:
+{json.dumps(reasons, ensure_ascii=False)}
+حافظ على القيم الصالحة التالية كما هي ولا تُرجعها:
+{json.dumps(keep, ensure_ascii=False)}
+
+Return JSON only with exactly these keys: {json.dumps(ask)}
 """
-        text, _ = gemini(prompt, json_mode=True, max_tokens=5000, temperature=0.35)
-        candidate = parse_json(text)
-        if package and failing:
-            for key, value in package.items():
-                if key not in failing:
-                    candidate[key] = value
-        package = {key: str(candidate.get(key, "")).strip() for key in (
-            "episode_title_core", "title_suffix", "final_youtube_title",
-            "thumbnail_text", "thumbnail_prompt",
-        )}
-        failing = local_packaging_issues(package, topic, recent)
-        if failing:
+            text, _ = gemini(prompt, json_mode=True, max_tokens=3000, temperature=0.35)
+            try:
+                candidate = parse_json(text)
+            except (ValueError, KeyError):
+                candidate = {}
+            for field in ask:
+                value = str(candidate.get(field, "")).strip() if isinstance(candidate, dict) else ""
+                if value:
+                    package[field] = value
+            _with_joined_title(package)
+            checkpoint()
+            details = packaging_field_issues(package, topic, recent)
+        if details:
+            diagnostics = {
+                "attempt": attempt + 1,
+                "deterministic_failures": sorted(details),
+                "reasons": details,
+                "semantic_validation": [],
+            }
+            if len(package.get("thumbnail_prompt", "")) > THUMBNAIL_PROMPT_MAX_CHARS:
+                diagnostics["prompt_length_error"] = f"prompt length {len(package.get('thumbnail_prompt', ''))} exceeds {THUMBNAIL_PROMPT_MAX_CHARS}"
+            _append_attempt(attempt_log_path, diagnostics)
             continue
         validation_prompt = f"""أنت بوابة مستقلة لحزمة YouTube. لا تعيد الكتابة.
-تحقق من الدقة التاريخية، طبيعية العربية، ظهور الموضوع أولًا، ملاءمة اللاحقة وعدم تكرارها، نص مصغر من كلمتين إلى أربع، تكامل النص مع العنوان، مشهد واحد خاص بالحلقة، هوية الألوان، وضوح الهاتف، غياب التضليل والوجوه العملاقة والـclickbait والفانتازيا والمظهر السياحي اللامع.
+تحقق من الدقة التاريخية، طبيعة العربية، ظهور الموضوع أولًا، نص مصغر من كلمتين إلى أربع، تكامل النص مع العنوان، مشهد واحد خاص بالحلقة، هوية الألوان، وضوح الهاتف، غياب التضليل والوجوه العملاقة والـclickbait والفانتازيا والمظهر السياحي اللامع.
+لاحقة العنوان مختارة آليًا ولا تُقيَّم.
 الموضوع: {json.dumps(topic, ensure_ascii=False)}
 آخر عشر حلقات: {json.dumps(recent, ensure_ascii=False)}
 الحزمة: {json.dumps(package, ensure_ascii=False)}
 أعد JSON فقط: {{"status":"PASS أو FAIL","title":true,"thumbnail_text":true,"thumbnail_prompt":true,"failing_fields":[],"issues":[]}}
 """
         validation_text, _ = gemini(validation_prompt, json_mode=True, max_tokens=1600, temperature=0.0)
-        validation = parse_json(validation_text)
+        try:
+            validation = parse_json(validation_text)
+        except (ValueError, KeyError):
+            validation = {"status": "FAIL", "failing_fields": list(LLM_PACKAGING_FIELDS), "issues": ["unparseable validation"]}
         if (
             validation.get("status") == "PASS"
             and validation.get("title") is True
@@ -1092,35 +1200,40 @@ Return JSON only with exactly these five keys:
             and not (validation.get("issues") or [])
         ):
             write(log_path, json.dumps({
-                "status": "PASS", "topic_sha256": topic_hash,
-                "recent_packaging_sha256": recent_hash, "rules_sha256": rules_hash,
+                "status": "PASS", **inputs,
                 "historical_setting": setting, "recent_records_checked": len(recent),
                 "package": package, "validation": validation,
             }, ensure_ascii=False, indent=2))
             return package
-        failing = list(validation.get("failing_fields") or [
-            "episode_title_core", "title_suffix", "final_youtube_title",
-            "thumbnail_text", "thumbnail_prompt",
-        ])
-        diagnostics = {
+        failing = list(validation.get("failing_fields") or LLM_PACKAGING_FIELDS)
+        for field in failing:
+            if field in LLM_PACKAGING_FIELDS:
+                package.pop(field, None)
+            elif field in ("final_youtube_title", "episode_title_core"):
+                package.pop("episode_title_core", None)
+            elif field == "title_suffix":
+                rejected_suffixes.append(package["title_suffix"])
+                package["title_suffix"] = choose_title_suffix(topic, recent, rejected_suffixes)
+        _with_joined_title(package)
+        checkpoint()
+        details = {f: "rejected by the semantic quality gate: " + "; ".join(map(str, validation.get("issues") or [])) for f in failing}
+        _append_attempt(attempt_log_path, {
             "attempt": attempt + 1,
             "deterministic_failures": failing,
             "semantic_validation": validation.get("issues", []),
-        }
-        if len(package.get("thumbnail_prompt", "")) > THUMBNAIL_PROMPT_MAX_CHARS:
-            diagnostics["prompt_length_error"] = f"prompt length {len(package.get('thumbnail_prompt', ''))} exceeds {THUMBNAIL_PROMPT_MAX_CHARS}"
-        if attempt_log_path.parent.exists():
-            existing = []
-            if attempt_log_path.exists():
-                existing = json.loads(attempt_log_path.read_text(encoding="utf-8"))
-            existing.append(diagnostics)
-            write(attempt_log_path, json.dumps(existing, ensure_ascii=False, indent=2))
-    error_detail = failing[0] if failing else "unknown"
-    if error_detail == "thumbnail_prompt" and package.get("thumbnail_prompt"):
-        prompt_len = len(package.get("thumbnail_prompt", ""))
-        if prompt_len > THUMBNAIL_PROMPT_MAX_CHARS:
-            error_detail = f"thumbnail_prompt: length {prompt_len} exceeds {THUMBNAIL_PROMPT_MAX_CHARS}"
-    raise RuntimeError(f"YOUTUBE_PACKAGING_VALIDATION_FAILED: {error_detail}")
+        })
+    field = next(iter(details), "unknown")
+    reason = details.get(field, "")
+    raise RuntimeError(f"YOUTUBE_PACKAGING_VALIDATION_FAILED: {field}" + (f" ({reason})" if reason and reason != "missing" else ""))
+
+
+def _append_attempt(path: Path, record: dict) -> None:
+    if not path.parent.exists():
+        return
+    existing = _read_json(path, [])
+    existing = existing if isinstance(existing, list) else []
+    existing.append(record)
+    write(path, json.dumps(existing, ensure_ascii=False, indent=2))
 
 
 def build_metadata_files(story: Path, topic: dict, research: str, sources: list[dict], story_text: str,
@@ -1132,6 +1245,15 @@ def build_metadata_files(story: Path, topic: dict, research: str, sources: list[
     if not sources:
         source_lines += ["- راجع الروابط المباشرة الواردة داخل `04_research_notes.md` قبل الاعتماد."]
 
+    # Story, quality gates and fact checks are finished: save that fact before the
+    # (small) packaging stage so a provider outage here only ever resumes packaging.
+    write(story / "logs" / "story_ready_for_packaging.json", json.dumps({
+        "story_sha256": hashlib.sha256(story_text.encode("utf-8")).hexdigest(),
+        "word_count": word_count(story_text),
+        "next_stage": "packaging",
+        "saved_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }, ensure_ascii=False, indent=2))
+    run_summary.update(checkpoint_saved=True, resume_stage="packaging")
     packaging = generate_youtube_packaging(story, topic)
     title = packaging["final_youtube_title"]
 
@@ -1221,55 +1343,22 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
     history = json.loads(history_path.read_text(encoding="utf-8"))
     if not dry_run:
         def checkpoint_path(item: dict) -> Path | None:
-            raw = item.get("story_path")
-            if not raw:
-                return None
-            candidate = Path(raw)
-            return candidate if candidate.is_absolute() else ROOT / candidate
+            return episode_selection.story_dir(item, ROOT)
 
-        def is_valid_checkpoint(item: dict) -> bool:
-            path = checkpoint_path(item)
-            if not path:
-                return False
-            resolved = path.resolve()
-            if not resolved.exists():
-                created_at = item.get("created_at")
-                if not created_at:
-                    print(f"Skipping zombie checkpoint missing created_at without local folder: {item.get('slug')}", file=sys.stderr)
-                    return False
-                try:
-                    dt_created = dt.datetime.fromisoformat(str(created_at))
-                    if (dt.datetime.now(dt.timezone.utc) - dt_created.astimezone(dt.timezone.utc)).days > 7:
-                        print(f"Skipping stale/zombie checkpoint without local folder: {item.get('slug')}", file=sys.stderr)
-                        return False
-                except Exception:
-                    print(f"Skipping zombie checkpoint with malformed created_at without local folder: {item.get('slug')}", file=sys.stderr)
-                    return False
-                return True
-            has_topic = (resolved / "logs" / "topic.json").exists()
-            has_meta = (resolved / "15_metadata.json").exists()
-            if not (has_topic or has_meta):
-                if item.get("topic") or item.get("topic_ar") or item.get("slug"):
-                    return True
-                print(f"Skipping corrupt checkpoint lacking topic/metadata: {item.get('slug')}", file=sys.stderr)
-                return False
-            return True
-
-        unfinished = next((
-            item for item in reversed(history)
-            if (
-                item.get("status") in {"generating", "drafting", "GENERATING"}
-                or (
-                    item.get("status") in {"pending_approval", "REVIEW_PENDING"}
-                    and not item.get("archive_identifier")
-                )
-                or (
-                    item.get("status") in {"READY_FOR_APPROVAL", "MEDIA_READY"}
-                    and not item.get("archive_identifier")
-                )
+        try:
+            state_episodes = state_store._load_state().get("episodes", {})
+        except Exception:
+            state_episodes = {}
+        # One canonical rule shared with the checkpoint restore step: an unfinished
+        # episode (GENERATING, FAILED_RETRYABLE, WAITING_FOR_LLM_QUOTA, upload not
+        # finished) always wins, so a new topic is never started while one exists.
+        unfinished = episode_selection.active_episode(history, ROOT, state_episodes)
+        if unfinished:
+            print(
+                f"RESUMING active episode {unfinished.get('slug')} ({unfinished.get('status')}); "
+                "no new topic will be selected.",
+                file=sys.stderr, flush=True,
             )
-            and is_valid_checkpoint(item)
-        ), None)
         if unfinished:
             saved_story = checkpoint_path(unfinished).resolve()
             if saved_story.exists():
@@ -1292,21 +1381,26 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
         raise RuntimeError(f"Story directory already exists: {story}")
     story.mkdir(parents=True)
     (story / "logs").mkdir()
+    _remember_story(story)
     write(story / "logs/topic.json", json.dumps(topic, ensure_ascii=False, indent=2))
     # Register the selected topic before the first long research request. If a
     # provider call fails later, the next run resumes this exact directory and
     # its saved chapters instead of selecting a different topic.
     from state_machine import State
     upsert_history_checkpoint(history_path, story, topic, State.GENERATING)
-    research, sources = research_topic(topic)
+    run_summary.stage("research")
+    research, sources = research_topic(topic, story)
     write(story / "logs/research_notes_draft.md", research)
     write(story / "logs/research_grounding_sources.json", json.dumps(sources, ensure_ascii=False, indent=2))
+    run_summary.stage("outline")
     outline = make_outline(topic, research)
     write(story / "logs/outline.json", json.dumps({"sections": outline}, ensure_ascii=False, indent=2))
+    run_summary.stage("chapters")
     draft = draft_story(topic, research, outline, story / "logs")
     if word_count(draft) < 5000:
         raise RuntimeError(f"Generated story is too short: {word_count(draft)} Arabic words")
     write(story / "logs/assembled_story.md", draft)
+    run_summary.stage("quality_gates")
     story_text, quality_gate, fact_check = finalize_story_text(story, topic, research, draft)
     build_metadata_files(story, topic, research, sources, story_text, quality_gate, fact_check)
     from state_machine import State
@@ -1315,7 +1409,83 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
     return story
 
 
+EXIT_WAITING_FOR_QUOTA = 75
+
+
+def _remember_story(story: Path) -> None:
+    try:
+        import episode_id
+        episode = episode_id.extract_episode_id_from_path(story) or ""
+    except Exception:
+        episode = ""
+    run_summary.update(story_path=story.relative_to(ROOT).as_posix() if story.is_relative_to(ROOT) else str(story),
+                       episode_id=episode)
+
+
+def mark_history_status(story_path: str, status: str, **fields: object) -> bool:
+    """Set the status (and wait details) of the history record that owns ``story_path``."""
+    from state_machine import transition_state
+    history_path = ROOT / "config" / "topics_history.json"
+    try:
+        history = json.loads(history_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    name = Path(story_path.replace("\\", "/")).name
+    for record in history:
+        if Path(str(record.get("story_path") or "").replace("\\", "/")).name == name:
+            try:
+                record["status"] = transition_state(record.get("status", ""), status)
+            except ValueError:
+                return False
+            record.update(fields)
+            write(history_path, json.dumps(history, ensure_ascii=False, indent=2))
+            return True
+    return False
+
+
+def handle_quota_waiting(waiting: "llm_router.LlmQuotaWaiting") -> None:
+    """Park the active episode: planned pause, nothing is lost, the next run resumes it."""
+    from state_machine import State
+    run_summary.fail(waiting)
+    summary = run_summary.load()
+    story_path = summary.get("story_path") or ""
+    if story_path:
+        mark_history_status(
+            story_path, State.WAITING_FOR_LLM_QUOTA,
+            waiting_for="llm_quota", waiting_stage=summary.get("current_stage"),
+            blocked_until=waiting.blocked_until, quota_kind=waiting.kind,
+            waiting_since=dt.datetime.now(dt.timezone.utc).isoformat(),
+        )
+        try:
+            state_store.save_episode_state(Path(story_path).name, {
+                "approval_status": State.WAITING_FOR_LLM_QUOTA, "story_path": story_path,
+                "waiting_stage": summary.get("current_stage"), "blocked_until": waiting.blocked_until,
+            })
+        except Exception as exc:
+            print(f"Warning: episode wait state not saved to automation-state: {exc}", file=sys.stderr)
+    print(json.dumps({
+        "ok": False, "status": State.WAITING_FOR_LLM_QUOTA, "story_path": story_path,
+        "stage": summary.get("current_stage"), "blocked_until": waiting.blocked_until,
+        "quota_kind": waiting.kind, "models_attempted": waiting.models_attempted,
+    }, ensure_ascii=False), flush=True)
+
+
 def main() -> None:
+    state_store.ensure_hydrated()
+    run_summary.start(workflow="generate_daily", action="generate")
+    try:
+        _main()
+    except llm_router.LlmQuotaWaiting as waiting:
+        handle_quota_waiting(waiting)
+        raise SystemExit(EXIT_WAITING_FOR_QUOTA)
+    except SystemExit:
+        raise
+    except BaseException as exc:
+        run_summary.fail(exc)
+        raise
+
+
+def _main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="Choose a topic and verify Gemini without creating files")
     parser.add_argument("--resume-partial", type=Path, help="Resume a generated draft from its saved topic, research, outline, and chapters")

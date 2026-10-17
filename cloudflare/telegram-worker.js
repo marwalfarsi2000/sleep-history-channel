@@ -3,6 +3,14 @@ const json = (value, status = 200) => new Response(JSON.stringify(value), {
   headers: { "content-type": "application/json; charset=utf-8" },
 });
 
+export const NEW_VIDEO_BUTTON = "🎬 فيديو جديد";
+
+export const MAIN_KEYBOARD = {
+  keyboard: [[{ text: NEW_VIDEO_BUTTON }]],
+  resize_keyboard: true,
+  is_persistent: true,
+};
+
 async function telegram(env, method, payload) {
   const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
     method: "POST",
@@ -12,6 +20,15 @@ async function telegram(env, method, payload) {
   const result = await response.json();
   if (!response.ok || !result.ok) throw new Error(`Telegram ${method} failed`);
   return result;
+}
+
+async function tryTelegram(env, method, payload) {
+  try {
+    await telegram(env, method, payload);
+  } catch (_error) {
+    // A failed notification must never turn into a non-200 response: Telegram
+    // would redeliver the update and the workflow could be dispatched twice.
+  }
 }
 
 async function dispatch(env, workflow, inputs = {}) {
@@ -32,9 +49,23 @@ async function dispatch(env, workflow, inputs = {}) {
   if (response.status !== 204) throw new Error(`GitHub dispatch failed: ${response.status}`);
 }
 
-function isNewVideo(text = "") {
-  const normalized = text.trim().toLowerCase().replace(/\s+/g, " ");
-  return ["/new", "/video", "/episode", "فيديو جديد", "حلقة جديدة", "أنشئ فيديو جديد", "انشئ فيديو جديد"].includes(normalized);
+const NEW_VIDEO_COMMANDS = [
+  "/new", "/video", "/episode", "فيديو جديد", "حلقة جديدة", "أنشئ فيديو جديد", "انشئ فيديو جديد",
+];
+
+function normalize(text = "") {
+  return String(text).trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+export function isNewVideo(text = "") {
+  const normalized = normalize(text);
+  const accepted = [...NEW_VIDEO_COMMANDS, NEW_VIDEO_BUTTON].map(normalize);
+  if (accepted.includes(normalized)) return true;
+  return normalized.replace(/^🎬\s*/u, "") === normalize("فيديو جديد");
+}
+
+function isStart(text = "") {
+  return /^\/start(@\w+)?(\s|$)/i.test(String(text).trim());
 }
 
 export default {
@@ -53,11 +84,27 @@ export default {
       return json({ ok: true, ignored: true });
     }
     try {
-      if (update.message && isNewVideo(update.message.text)) {
-        await dispatch(env, "production.yml", { trigger_source: "telegram" });
-        await telegram(env, "sendMessage", {
+      if (update.message && isStart(update.message.text)) {
+        await tryTelegram(env, "sendMessage", {
+          chat_id: chatId,
+          text: "أهلًا بك 🌙\nاضغطي «🎬 فيديو جديد» أسفل الشاشة لبدء حلقة جديدة.",
+          reply_markup: MAIN_KEYBOARD,
+        });
+      } else if (update.message && isNewVideo(update.message.text)) {
+        try {
+          await dispatch(env, "production.yml", { trigger_source: "telegram" });
+        } catch (_error) {
+          await tryTelegram(env, "sendMessage", {
+            chat_id: chatId,
+            text: "تعذر بدء الإجراء السحابي. لم يتم تنفيذ نشر أو حذف. سيبقى الفيديو في حالته الحالية.",
+            reply_markup: MAIN_KEYBOARD,
+          });
+          return json({ ok: false, dispatched: false });
+        }
+        await tryTelegram(env, "sendMessage", {
           chat_id: chatId,
           text: "تم استلام طلب فيديو جديد ✅\nبدأ التشغيل السحابي، وسيصل رابط Internet Archive عند اكتماله للمراجعة.",
+          reply_markup: MAIN_KEYBOARD,
         });
       } else if (callback) {
         const separator = callback.data.indexOf(":");
@@ -70,17 +117,16 @@ export default {
           reject: "بدأ حذف الحلقة المرفوضة.",
           regenerate: "بدأت إعادة توليد الحلقة.",
         };
-        await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id, text: labels[action] });
-        await telegram(env, "sendMessage", { chat_id: chatId, text: labels[action] });
+        await tryTelegram(env, "answerCallbackQuery", { callback_query_id: callback.id, text: labels[action] });
+        await tryTelegram(env, "sendMessage", { chat_id: chatId, text: labels[action] });
       }
       return json({ ok: true });
     } catch (error) {
-      await telegram(env, "sendMessage", {
+      await tryTelegram(env, "sendMessage", {
         chat_id: chatId,
         text: "تعذر بدء الإجراء السحابي. لم يتم تنفيذ نشر أو حذف. سيبقى الفيديو في حالته الحالية.",
       });
-      return json({ ok: false, error: error.message }, 500);
+      return json({ ok: false, error: error.message });
     }
   },
 };
-

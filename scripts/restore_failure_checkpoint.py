@@ -18,28 +18,16 @@ API_VERSION = "2022-11-28"
 ARTIFACT_PREFIX = "sleep-history-failure-"
 
 
-def latest_unfinished_story(root: Path = ROOT) -> str | None:
+def latest_unfinished_story(root: Path = ROOT, state_episodes: dict | None = None) -> str | None:
+    """Story folder of the active episode, using the same rule as generate_daily."""
+    import episode_selection
+
     history_path = root / "config" / "topics_history.json"
     history = json.loads(history_path.read_text(encoding="utf-8"))
-    for item in reversed(history):
-        status = item.get("status")
-        archive_identifier = item.get("archive_identifier", "").strip()
-
-        if not item.get("story_path"):
-            continue
-
-        if status in {"REVIEW_PENDING", "APPROVED_FOR_PUBLISH", "PUBLISHING", "PUBLISHED", "REJECTED"}:
-            if archive_identifier:
-                continue
-
-        upload_incomplete = (
-            status == "pending_approval"
-            and not archive_identifier
-        )
-        review_incomplete = status == "READY_FOR_APPROVAL" and not archive_identifier
-        if (status in {"generating", "drafting", "FAILED_RETRYABLE"} or upload_incomplete or review_incomplete):
-            return PurePosixPath(str(item["story_path"]).replace("\\", "/")).as_posix()
-    return None
+    record = episode_selection.active_episode(history, root, state_episodes)
+    if not record or not record.get("story_path"):
+        return None
+    return PurePosixPath(str(record["story_path"]).replace("\\", "/")).as_posix()
 
 
 def github_json(url: str, token: str) -> dict:
@@ -131,7 +119,12 @@ def restore_latest_checkpoint(root: Path = ROOT) -> bool:
     if not token or not repository:
         print("Checkpoint restore skipped: GitHub runner credentials unavailable.")
         return False
-    story_path = latest_unfinished_story(root)
+    try:
+        import state_store
+        state_episodes = state_store._load_state().get("episodes", {})
+    except Exception:
+        state_episodes = {}
+    story_path = latest_unfinished_story(root, state_episodes)
     if not story_path:
         print("Checkpoint restore skipped: no unfinished story.")
         return False
@@ -164,6 +157,12 @@ def restore_latest_checkpoint(root: Path = ROOT) -> bool:
                 f"Restored {len(members)} checkpoint file(s) for {story_path} "
                 f"from {artifact['name']}."
             )
+            try:
+                import run_summary
+                run_summary.start(workflow="restore", action="restore")
+                run_summary.update(restored_from_checkpoint=True, story_path=story_path)
+            except Exception:
+                pass
             return True
     print(f"No saved failure checkpoint matched {story_path}.")
     return False
