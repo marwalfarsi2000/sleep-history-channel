@@ -988,18 +988,29 @@ def local_packaging_issues(package: dict, topic: dict, recent: list[dict]) -> li
         issues.append("title_suffix")
     forbidden_labels = {"قصة للنوم", "قصة تاريخية", "حكاية للنوم", "للنوم", "قبل النوم"}
     recent_labels = {str(item.get("thumbnail_text", "")).strip() for item in recent}
-    if not 2 <= len(label_words) <= 4 or label in forbidden_labels or "😴" in label or label in recent_labels:
+    if not 1 <= len(label_words) <= 4 or label in forbidden_labels or "😴" in label or label in recent_labels:
         issues.append("thumbnail_text")
     if len(prompt) > THUMBNAIL_PROMPT_MAX_CHARS:
         issues.append("thumbnail_prompt")
     forbidden_prompt_phrases = {"[topic_ar]", "[thumbnail_text]", "${", "{{", "}}"}
     if any(forbidden in prompt for forbidden in forbidden_prompt_phrases):
         issues.append("thumbnail_prompt")
+    has_no_logo_watermark = (
+        ("no logo" in prompt.lower() or "no watermark" in prompt.lower() or
+         "without logo" in prompt.lower() or "without watermark" in prompt.lower())
+        or ("logo" not in prompt.lower() and "watermark" not in prompt.lower())
+    )
+    has_text_restriction = (
+        "no text" in prompt.lower() or "no word" in prompt.lower() or
+        "no generated" in prompt.lower() or "no typography" in prompt.lower() or
+        "background only" in prompt.lower() or "without text" in prompt.lower() or
+        "no overlay" in prompt.lower()
+    )
     deterministic_checklist = [
         "16:9 YouTube thumbnail" in prompt,
-        prompt.lower().count("background") >= 1 or "scene" in prompt.lower(),
-        ("no text" in prompt.lower() or "no word" in prompt.lower() or "background only" in prompt.lower()),
-        "logo" not in prompt.lower() and "watermark" not in prompt.lower(),
+        "background" in prompt.lower() or "scene" in prompt.lower(),
+        has_text_restriction,
+        has_no_logo_watermark,
     ]
     if not all(deterministic_checklist):
         issues.append("thumbnail_prompt")

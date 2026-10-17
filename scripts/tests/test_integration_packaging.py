@@ -49,10 +49,14 @@ class PackagingIntegrationTests(unittest.TestCase):
             rules_path.write_text("original rules", encoding="utf-8")
             rules_hash = generate_daily.hashlib.sha256(b"original rules").hexdigest()
 
+            recent = []
+            topic_hash = generate_daily.hashlib.sha256(json.dumps(self.topic, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+            recent_hash = generate_daily.hashlib.sha256(json.dumps(recent, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
             cache_data = {
                 "status": "PASS",
-                "topic_sha256": "a" * 64,
-                "recent_packaging_sha256": "b" * 64,
+                "topic_sha256": topic_hash,
+                "recent_packaging_sha256": recent_hash,
                 "rules_sha256": rules_hash,
                 "package": self.valid_package,
             }
@@ -113,8 +117,8 @@ class PackagingIntegrationTests(unittest.TestCase):
             rules_path = Path(tmpdir) / "rules.md"
             rules_path.write_text("test rules", encoding="utf-8")
 
-            bad_package = dict(self.valid_package)
-            bad_package["thumbnail_prompt"] = "too short"
+            good_package = dict(self.valid_package)
+            validation_fail = {"status": "FAIL", "title": False, "thumbnail_text": False, "thumbnail_prompt": False, "failing_fields": ["thumbnail_prompt"], "issues": ["semantic issue"]}
 
             with mock.patch.object(generate_daily, "YOUTUBE_PACKAGING_RULES_PATH", rules_path), \
                     mock.patch.object(generate_daily, "ARCHIVE_INDEX_PATH", archive_path), \
@@ -122,9 +126,12 @@ class PackagingIntegrationTests(unittest.TestCase):
                     mock.patch.object(
                         generate_daily, "gemini",
                         side_effect=[
-                            (json.dumps(bad_package, ensure_ascii=False), []),
-                            (json.dumps(bad_package, ensure_ascii=False), []),
-                            (json.dumps(bad_package, ensure_ascii=False), []),
+                            (json.dumps(good_package, ensure_ascii=False), []),
+                            (json.dumps(validation_fail, ensure_ascii=False), []),
+                            (json.dumps(good_package, ensure_ascii=False), []),
+                            (json.dumps(validation_fail, ensure_ascii=False), []),
+                            (json.dumps(good_package, ensure_ascii=False), []),
+                            (json.dumps(validation_fail, ensure_ascii=False), []),
                         ]
                     ):
                 with self.assertRaises(RuntimeError) as ctx:

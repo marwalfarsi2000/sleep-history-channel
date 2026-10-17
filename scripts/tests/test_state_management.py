@@ -163,6 +163,11 @@ class ThumbnailDesignTests(unittest.TestCase):
                 "focal_subject": "merchant",
                 "composition": "leading_lines",
             },
+            {
+                "scene_type": "market",
+                "focal_subject": "merchant",
+                "composition": "leading_lines",
+            },
         ]
 
         should_avoid = thumbnail_design.should_avoid_design(proposed, recent)

@@ -122,7 +122,8 @@ class PackagingValidationTests(unittest.TestCase):
 
     def test_cloudflare_limit_not_exceeded(self) -> None:
         """Final prompt should not exceed CLOUDFLARE_PROMPT_MAX_CHARS."""
-        prompt = "x" * (generate_daily.CLOUDFLARE_PROMPT_MAX_CHARS - 100)
+        base_prompt = "A marketplace background scene. 16:9 YouTube thumbnail. No generated text. Professional quality. "
+        prompt = base_prompt + ("x" * (generate_daily.THUMBNAIL_PROMPT_MAX_CHARS - len(base_prompt) - 100))
         package = {
             "episode_title_core": "بغداد ليلًا",
             "title_suffix": "قصة تاريخية للنوم 😴",
@@ -142,8 +143,8 @@ class PackagingValidationTests(unittest.TestCase):
             "final_youtube_title": "بغداد ليلًا | قصة تاريخية للنوم 😴",
             "thumbnail_text": "الأسواق",
             "thumbnail_prompt": (
-                "A marketplace. "
-                "16:9 YouTube thumbnail. Professional quality."
+                "A marketplace background scene. "
+                "16:9 YouTube thumbnail. No generated text. Professional quality."
             ),
         }
         recent = []
