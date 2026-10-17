@@ -1,4 +1,12 @@
 {
   "version": 2,
-  "episodes": {}
+  "episodes": {
+    "lan-tukmil-alqissa-20261018-daily-life-in-palmyra-rom": {
+      "archive_identifier": "lan-tukmil-alqissa-20261018-daily-life-in-palmyra-rom",
+      "approval_status": "REVIEW_PENDING",
+      "story_path": "stories/2026-10-08_daily-life-in-palmyra-roman-era",
+      "title": "تفاصيل الحياة اليومية للتاجر في تدمر الرومانية وقوافل الحرير | رحلة تاريخية هادئة للنوم 😴",
+      "review_url": "https://archive.org/details/lan-tukmil-alqissa-20261018-daily-life-in-palmyra-rom"
+    }
+  }
 }
