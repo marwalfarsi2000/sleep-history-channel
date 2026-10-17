@@ -110,7 +110,11 @@ def story_files(story: Path) -> dict[str, str]:
     missing = [name for name in names if not (story / name).is_file()]
     if missing:
         raise RuntimeError("Archive upload is missing files: " + ", ".join(missing))
-    return {name: str(story / name) for name in names}
+    files = {name: str(story / name) for name in names}
+    optional_thumbnail_prompt = story / "08_thumbnail_prompt_en.txt"
+    if optional_thumbnail_prompt.is_file():
+        files[optional_thumbnail_prompt.name] = str(optional_thumbnail_prompt)
+    return files
 
 
 def public_file_url(identifier: str, filename: str) -> str:
@@ -254,6 +258,13 @@ def finalize_story(story: Path, identifier: str, verified: dict) -> dict:
         "identifier": identifier,
         "slug": metadata["slug"],
         "title": metadata["title"],
+        "episode_title_core": metadata.get("episode_title_core", ""),
+        "title_suffix": metadata.get("title_suffix", ""),
+        "final_youtube_title": metadata.get("final_youtube_title", metadata["title"]),
+        "thumbnail_text": metadata.get("thumbnail_text", ""),
+        "thumbnail_scene_type": metadata.get("thumbnail_scene_type", ""),
+        "thumbnail_prompt": metadata.get("thumbnail_prompt", ""),
+        "historical_setting": metadata.get("historical_setting", ""),
         "created_at": metadata.get("created_at"),
         "status": State.REVIEW_PENDING,
         "video_filename": "14_video_final.mp4",

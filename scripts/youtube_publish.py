@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import time
 import urllib.parse
@@ -159,6 +160,18 @@ def publish_archive_item(identifier: str) -> dict:
 
     title = read_text(identifier, "01_title.txt")
     description = read_text(identifier, "02_description.txt")
+    episode_metadata = json.loads(read_text(identifier, "15_metadata.json"))
+    if episode_metadata.get("youtube_packaging_status"):
+        expected_title = str(episode_metadata.get("final_youtube_title", "")).strip()
+        thumbnail_text = str(episode_metadata.get("thumbnail_text", "")).strip()
+        if episode_metadata.get("youtube_packaging_validation_status") != "passed":
+            raise RuntimeError("YOUTUBE_PUBLISH_BLOCKED: packaging validation did not pass")
+        if title != expected_title or title != str(episode_metadata.get("title", "")).strip():
+            raise RuntimeError("YOUTUBE_PUBLISH_BLOCKED: approved title fields do not match")
+        if not 2 <= len(re.findall(r"[\u0621-\u064A]+", thumbnail_text)) <= 4:
+            raise RuntimeError("YOUTUBE_PUBLISH_BLOCKED: thumbnail text is invalid")
+        if episode_metadata.get("thumbnail_text_render_status") != "passed":
+            raise RuntimeError("YOUTUBE_PUBLISH_BLOCKED: exact Arabic thumbnail text was not rendered")
 
     # Hard-crash recovery: search YouTube directly for an existing video uploaded with this exact title
     if not existing:

@@ -92,7 +92,7 @@ def safe_story_members(archive: zipfile.ZipFile, story_path: str) -> list[zipfil
         "15_metadata.json",
         "17_status.md",
         "01_title.txt", "02_description.txt", "03_sources.md", "04_research_notes.md",
-        "08_image_prompt_en.txt", "09_image_source.md", "10_background.png",
+        "08_image_prompt_en.txt", "08_thumbnail_prompt_en.txt", "09_image_source.md", "10_background.png",
         "11_thumbnail_base.jpg", "12_audio_narration.mp3", "12_audio_full.mp3",
         "13_audio_review.opus", "14_video_final.mp4", "16_fact_check.md", "00_package.html",
     }
