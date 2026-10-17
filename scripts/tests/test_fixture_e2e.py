@@ -70,6 +70,7 @@ def test_deterministic_mocked_orchestration_e2e(tmp_path, monkeypatch):
          patch("cloud_pipeline.notify_review"), \
          patch("cloud_pipeline.modify_remote"), \
          patch("cloud_pipeline.set_index_status"), \
+         patch("cloud_pipeline.advance_index_status"), \
          patch("cloud_pipeline.send_message"), \
          patch("cloud_pipeline.archive_metadata", return_value=fake_archive_metadata), \
          patch("archive_recovery.ensure_index_record"), \

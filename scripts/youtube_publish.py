@@ -86,13 +86,13 @@ def record_remote_upload(identifier: str, video_id: str, status: str) -> None:
     secret = os.environ.get("IAS3_SECRET_KEY", "")
     if not access or not secret:
         raise RuntimeError("Internet Archive credentials are required for atomic YouTube publishing")
-    from archive_storage import get_archive_item, set_index_status
+    from archive_storage import advance_index_status, get_archive_item
     from error_classifier import retry_transient
     from state_machine import State
 
     canonical_state = State.PUBLISHED if status == "verified" else State.PUBLISHING
     try:
-        set_index_status(identifier, canonical_state, youtube_video_id=video_id)
+        advance_index_status(identifier, canonical_state, youtube_video_id=video_id)
     except Exception as exc:
         print(f"Warning: local catalogue update for {identifier} failed: {exc}")
 
