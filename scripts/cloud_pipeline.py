@@ -242,27 +242,38 @@ def publish(identifier: str) -> dict:
     from state_machine import State, normalize_state
     from archive_recovery import ensure_index_record
 
-    # Preflight: recover index if missing (handles crashed/orphaned archives)
+    current_remote = normalize_state(remote_status(identifier))
+    allowed_states = {State.REVIEW_PENDING, State.APPROVED_FOR_PUBLISH, State.PUBLISHING, State.PUBLISHED}
+    if current_remote not in allowed_states:
+        raise RuntimeError(f"HUMAN_APPROVAL_GATE_FAILED: archive item status {current_remote!r} is not publishable")
+
     ensure_index_record(
         identifier,
         access_key=os.environ.get("IAS3_ACCESS_KEY", ""),
         secret_key=os.environ.get("IAS3_SECRET_KEY", "")
     )
 
-    current_remote = normalize_state(remote_status(identifier))
-    allowed_states = {State.REVIEW_PENDING, State.APPROVED_FOR_PUBLISH, State.PUBLISHING, State.PUBLISHED}
-    if current_remote not in allowed_states:
-        raise RuntimeError(f"HUMAN_APPROVAL_GATE_FAILED: archive item status {current_remote!r} is not publishable")
+    payload = archive_metadata(identifier)
+    metadata = payload.get("metadata") or {}
+
+    if normalize_state(str(metadata.get("approval_status") or "")) != current_remote:
+        raise RuntimeError("CONSISTENCY_CHECK_FAILED: local and remote approval status mismatch")
+
+    if current_remote == State.REVIEW_PENDING:
+        if not metadata.get("title"):
+            raise RuntimeError("PREFLIGHT_VALIDATION_FAILED: archive metadata missing title")
+        if metadata.get("youtube_packaging_status"):
+            if metadata.get("youtube_packaging_validation_status") != "passed":
+                raise RuntimeError("PREFLIGHT_VALIDATION_FAILED: YouTube packaging validation did not pass")
+            if metadata.get("thumbnail_text_render_status") != "passed":
+                raise RuntimeError("PREFLIGHT_VALIDATION_FAILED: thumbnail text render status is not passed")
 
     from youtube_publish import publish_archive_item
-    if current_remote == State.REVIEW_PENDING:
-        modify_remote(identifier, {
-            "approval_status": State.APPROVED_FOR_PUBLISH,
-            "approved_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-        })
-        set_index_status(identifier, State.APPROVED_FOR_PUBLISH)
-
     result = publish_archive_item(identifier)
+
+    if result.get("requires_owner_action"):
+        return result
+
     set_index_status(
         identifier,
         State.PUBLISHED,

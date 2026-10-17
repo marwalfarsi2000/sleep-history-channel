@@ -11,6 +11,7 @@ from pathlib import Path
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
 from archive_storage import archive_metadata
@@ -241,13 +242,27 @@ def publish_archive_item(identifier: str) -> dict:
             raise RuntimeError("YouTube upload processing failed or did not complete")
 
         # Step 4: Change to PUBLIC only after verification
-        youtube.videos().update(
-            part="status",
-            body={
-                "id": video_id,
-                "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": False},
-            },
-        ).execute()
-        record_remote_upload(identifier, video_id, "verified")
-    return {"video_id": video_id, "url": f"https://www.youtube.com/watch?v={video_id}", "already_published": False, "verified": verified}
+        try:
+            youtube.videos().update(
+                part="status",
+                body={
+                    "id": video_id,
+                    "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": False},
+                },
+            ).execute()
+            record_remote_upload(identifier, video_id, "verified")
+            return {"video_id": video_id, "url": f"https://www.youtube.com/watch?v={video_id}", "already_published": False, "verified": verified}
+        except HttpError as exc:
+            if exc.resp.status in (403, 401):
+                save_pending_youtube_id(identifier, video_id)
+                record_remote_upload(identifier, video_id, "processing")
+                return {
+                    "video_id": video_id,
+                    "requires_owner_action": True,
+                    "action": "CHANGE_PRIVACY_TO_PUBLIC",
+                    "reason": f"OAuth scope insufficient for privacy change: {exc.resp.reason}",
+                    "url": f"https://www.youtube.com/watch?v={video_id}",
+                    "status": "private_pending_owner",
+                }
+            raise
 

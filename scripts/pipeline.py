@@ -9,6 +9,7 @@ from pathlib import Path
 from PIL import Image
 import edge_tts
 from generate_daily import gemini, parse_json
+from stage_manifest import record_stage, can_reuse_stage, compute_config_hash, compute_file_hash
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -1461,6 +1462,23 @@ def prepare(story: Path):
 
 async def synthesize(story: Path):
     provider = SETTINGS.get("tts_provider", "edge").lower()
+    tts_config = {
+        "provider": provider,
+        "voice": SETTINGS.get("tts_voice"),
+        "rate": SETTINGS.get("tts_rate"),
+        "generation_speed": SETTINGS.get("tts_generation_speed"),
+        "post_tts_tempo": SETTINGS.get("post_tts_tempo"),
+        "diacritization": SETTINGS.get("arabic_diacritization"),
+    }
+    config_hash = compute_config_hash(tts_config)
+
+    adir = story / "audio_chunks"
+    if can_reuse_stage(story, "synthesize", config_hash):
+        print(f"Reusing existing valid TTS output for {story.name} (config hash {config_hash[:8]})")
+        if adir.exists() and list(adir.glob("*.mp3")):
+            validate_audio(story)
+            return
+
     if provider == "fish":
         # Fail before generating any paid/free-tier chunks if the credential
         # points at a different voice than the selected model.
@@ -1639,6 +1657,13 @@ async def synthesize(story: Path):
     validate_audio(story)
     print("Audio duration", duration(full))
 
+    output_hashes = {
+        "12_audio_narration.mp3": compute_file_hash(narration),
+        "12_audio_full.mp3": compute_file_hash(full),
+        "13_audio_review.opus": compute_file_hash(review),
+    }
+    record_stage(story, "synthesize", input_sha256=config_hash, output_hashes=output_hashes)
+
 
 def validate_audio(story: Path) -> dict:
     text_chunks = sorted((story / "tts_chunks").glob("*.txt"))
@@ -1803,6 +1828,11 @@ def background(story: Path, force: bool = False):
     prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest() if prompt else ""
     metadata_path = story / "15_metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.exists() else {}
+
+    if not force and can_reuse_stage(story, "background", prompt_hash):
+        print(f"Reusing existing valid background image and thumbnail for {story.name} (prompt hash {prompt_hash[:8]})")
+        return
+
     if (
         not force and output.exists() and thumbnail.exists() and output.stat().st_size > 250_000
         and (metadata.get("image_generation_status") == "passed" or not metadata_path.exists())
@@ -1812,6 +1842,12 @@ def background(story: Path, force: bool = False):
         return
     generator = ROOT / "scripts" / "image_generate.py"
     run([sys.executable, str(generator), str(story)])
+
+    output_hashes = {
+        "10_background.png": compute_file_hash(output),
+        "11_thumbnail_base.jpg": compute_file_hash(thumbnail),
+    }
+    record_stage(story, "background", input_sha256=prompt_hash, output_hashes=output_hashes)
 
 def video_codec() -> list[str]:
     # GitHub-hosted runners expose NVENC in FFmpeg's encoder list but do not
@@ -1832,12 +1868,29 @@ def render(story: Path):
     background(story, force=False)
     audio = story / "12_audio_full.mp3"
     out = story / "14_video_final.mp4"
+    bg = story / "10_background.png"
+
+    render_config = {
+        "bg_hash": compute_file_hash(bg),
+        "audio_hash": compute_file_hash(audio),
+    }
+    render_hash = compute_config_hash(render_config)
+
+    if can_reuse_stage(story, "render", render_hash):
+        print(f"Reusing existing valid video render for {story.name} (render hash {render_hash[:8]})")
+        return
+
     if out.exists() and out.stat().st_size > 1_000_000 and abs(duration(audio) - duration(out)) <= 2.5:
         print(f"Reusing existing valid video render for {story.name}")
         return
     exact_duration = duration(audio)
     codec = video_codec()
-    run([ffmpeg(),"-y","-loop","1","-framerate","1","-i",str(story/"10_background.png"),"-i",str(audio),"-vf","format=yuv420p","-r","2",*codec,"-c:a","aac","-b:a","128k","-t",f"{exact_duration:.3f}","-movflags","+faststart",str(out)])
+    run([ffmpeg(),"-y","-loop","1","-framerate","1","-i",str(bg),"-i",str(audio),"-vf","format=yuv420p","-r","2",*codec,"-c:a","aac","-b:a","128k","-t",f"{exact_duration:.3f}","-movflags","+faststart",str(out)])
+
+    output_hashes = {
+        "14_video_final.mp4": compute_file_hash(out),
+    }
+    record_stage(story, "render", input_sha256=render_hash, output_hashes=output_hashes)
 
 def validate(story: Path):
     required=["01_title.txt","02_description.txt","03_sources.md","04_research_notes.md","05_story_clean.md","05b_story_tts_normalized.md","06_story_tts_annotated.md","07_story_tts_api.md","10_background.png","11_thumbnail_base.jpg","12_audio_narration.mp3","12_audio_full.mp3","13_audio_review.opus","14_video_final.mp4","15_metadata.json","16_fact_check.md","17_status.md"]
