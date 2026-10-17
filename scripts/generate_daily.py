@@ -998,7 +998,7 @@ def local_packaging_issues(package: dict, topic: dict, recent: list[dict]) -> li
     deterministic_checklist = [
         "16:9 YouTube thumbnail" in prompt,
         prompt.lower().count("background") >= 1 or "scene" in prompt.lower(),
-        "no text" not in prompt.lower() and "no word" not in prompt.lower(),
+        ("no text" in prompt.lower() or "no word" in prompt.lower() or "background only" in prompt.lower()),
         "logo" not in prompt.lower() and "watermark" not in prompt.lower(),
     ]
     if not all(deterministic_checklist):
