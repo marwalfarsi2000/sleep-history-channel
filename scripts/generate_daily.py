@@ -13,6 +13,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import state_store
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SETTINGS = json.loads((ROOT / "config" / "settings.json").read_text(encoding="utf-8"))
@@ -953,6 +955,10 @@ def recent_published_packaging(limit: int = 10) -> list[dict]:
     return recent
 
 
+CLOUDFLARE_PROMPT_MAX_CHARS = 2048
+THUMBNAIL_PROMPT_MAX_CHARS = 1600
+
+
 def local_packaging_issues(package: dict, topic: dict, recent: list[dict]) -> list[str]:
     issues: list[str] = []
     required = (
@@ -984,29 +990,39 @@ def local_packaging_issues(package: dict, topic: dict, recent: list[dict]) -> li
     recent_labels = {str(item.get("thumbnail_text", "")).strip() for item in recent}
     if not 2 <= len(label_words) <= 4 or label in forbidden_labels or "😴" in label or label in recent_labels:
         issues.append("thumbnail_text")
-    prompt_checks = (
-        topic["topic_ar"], label, "16:9 YouTube thumbnail",
-        "one dominant focal", "NOT fantasy", "NOT glossy",
-    )
-    if any(value.casefold() not in prompt.casefold() for value in prompt_checks):
+    if len(prompt) > THUMBNAIL_PROMPT_MAX_CHARS:
+        issues.append("thumbnail_prompt")
+    forbidden_prompt_phrases = {"[topic_ar]", "[thumbnail_text]", "${", "{{", "}}"}
+    if any(forbidden in prompt for forbidden in forbidden_prompt_phrases):
+        issues.append("thumbnail_prompt")
+    deterministic_checklist = [
+        "16:9 YouTube thumbnail" in prompt,
+        prompt.lower().count("background") >= 1 or "scene" in prompt.lower(),
+        "no text" not in prompt.lower() and "no word" not in prompt.lower(),
+        "logo" not in prompt.lower() and "watermark" not in prompt.lower(),
+    ]
+    if not all(deterministic_checklist):
         issues.append("thumbnail_prompt")
     return sorted(set(issues))
 
 
 def generate_youtube_packaging(story: Path, topic: dict) -> dict:
     log_path = story / "logs" / "youtube_packaging.json"
+    attempt_log_path = story / "logs" / "youtube_packaging_attempts.json"
     topic_hash = hashlib.sha256(json.dumps(topic, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
     recent = recent_published_packaging(10)
     recent_hash = hashlib.sha256(json.dumps(recent, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+    rules = YOUTUBE_PACKAGING_RULES_PATH.read_text(encoding="utf-8")
+    rules_hash = hashlib.sha256(rules.encode("utf-8")).hexdigest()
     if log_path.exists():
         cached = json.loads(log_path.read_text(encoding="utf-8"))
         if (
             cached.get("status") == "PASS"
             and cached.get("topic_sha256") == topic_hash
             and cached.get("recent_packaging_sha256") == recent_hash
+            and cached.get("rules_sha256") == rules_hash
         ):
             return cached["package"]
-    rules = YOUTUBE_PACKAGING_RULES_PATH.read_text(encoding="utf-8")
     setting = f"{topic.get('location_ar', '')} — {topic.get('period_ar', '')}".strip(" —")
     package: dict = {}
     failing = list((
@@ -1066,7 +1082,7 @@ Return JSON only with exactly these five keys:
         ):
             write(log_path, json.dumps({
                 "status": "PASS", "topic_sha256": topic_hash,
-                "recent_packaging_sha256": recent_hash,
+                "recent_packaging_sha256": recent_hash, "rules_sha256": rules_hash,
                 "historical_setting": setting, "recent_records_checked": len(recent),
                 "package": package, "validation": validation,
             }, ensure_ascii=False, indent=2))
@@ -1075,7 +1091,25 @@ Return JSON only with exactly these five keys:
             "episode_title_core", "title_suffix", "final_youtube_title",
             "thumbnail_text", "thumbnail_prompt",
         ])
-    raise RuntimeError("YOUTUBE_PACKAGING_VALIDATION_FAILED: " + json.dumps(failing, ensure_ascii=False))
+        diagnostics = {
+            "attempt": attempt + 1,
+            "deterministic_failures": failing,
+            "semantic_validation": validation.get("issues", []),
+        }
+        if len(package.get("thumbnail_prompt", "")) > THUMBNAIL_PROMPT_MAX_CHARS:
+            diagnostics["prompt_length_error"] = f"prompt length {len(package.get('thumbnail_prompt', ''))} exceeds {THUMBNAIL_PROMPT_MAX_CHARS}"
+        if attempt_log_path.parent.exists():
+            existing = []
+            if attempt_log_path.exists():
+                existing = json.loads(attempt_log_path.read_text(encoding="utf-8"))
+            existing.append(diagnostics)
+            write(attempt_log_path, json.dumps(existing, ensure_ascii=False, indent=2))
+    error_detail = failing[0] if failing else "unknown"
+    if error_detail == "thumbnail_prompt" and package.get("thumbnail_prompt"):
+        prompt_len = len(package.get("thumbnail_prompt", ""))
+        if prompt_len > THUMBNAIL_PROMPT_MAX_CHARS:
+            error_detail = f"thumbnail_prompt: length {prompt_len} exceeds {THUMBNAIL_PROMPT_MAX_CHARS}"
+    raise RuntimeError(f"YOUTUBE_PACKAGING_VALIDATION_FAILED: {error_detail}")
 
 
 def build_metadata_files(story: Path, topic: dict, research: str, sources: list[dict], story_text: str,
