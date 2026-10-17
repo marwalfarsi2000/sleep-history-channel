@@ -75,7 +75,7 @@
     "thumbnail_prompt": "Calm illustrated realism of a Roman-era Palmyra marketplace at dusk with subtle painterly texture and premium storybook quality; low-key night lighting with dim oil lanterns casting a warm glow on stone arches and pottery jars; palette of deep midnight navy, charcoal, muted warm gold, and aged ivory; one simple memorable scene focusing on a quiet colonnaded street; large simple elegant typography in soft ivory reading أسواق تدمر القديمة occupying a clean dark area at the top; mobile-first strong silhouette, no people, no modern objects, no text overlaying most of the image. 16:9 YouTube thumbnail. Original composition. Professional quality.",
     "historical_setting": "المكان المذكور في الموضوع — الفترة التاريخية المذكورة في الموضوع",
     "created_at": "2026-10-18T02:27:40.579119+04:00",
-    "status": "REVIEW_PENDING",
+    "status": "PUBLISHED",
     "video_filename": "14_video_final.mp4",
     "item_url": "https://archive.org/details/lan-tukmil-alqissa-20261018-daily-life-in-palmyra-rom",
     "video_url": "https://archive.org/download/lan-tukmil-alqissa-20261018-daily-life-in-palmyra-rom/14_video_final.mp4",
@@ -83,6 +83,9 @@
     "video_size": 92863119,
     "video_sha256": "294ac7d60eef9a0869fe5ca55fd8e12643dc532c9b9a2b03550fd5e177a69b7d",
     "audio_duration_seconds": 5291.9,
-    "video_duration_seconds": 5292.0
+    "video_duration_seconds": 5292.0,
+    "youtube_video_id": "4zJFXMkzvMA",
+    "youtube_url": "https://www.youtube.com/watch?v=4zJFXMkzvMA",
+    "published_at": "2026-10-18T03:15:20.686638+04:00"
   }
 ]
