@@ -1,5 +1,5 @@
 {
-  "channel_name": "لن تُكمل هذه القصة",
+  "channel_name": "لن تكمل القصة",
   "timezone": "Asia/Dubai",
   "daily_cron": "30 12 * * *",
   "tts_provider": "gemini",
@@ -94,7 +94,7 @@
   "background_audio_file": "assets\\audio\\pink-noise.m4a",
   "background_audio_volume": 0.15,
   "archive_identifier_prefix": "lan-tukmil-alqissa",
-  "archive_creator": "لن تُكمل هذه القصة",
+  "archive_creator": "لن تكمل القصة",
   "archive_collection": "opensource_movies",
   "archive_license_url": "https://creativecommons.org/licenses/by-nc-nd/4.0/",
   "target_min_seconds": 3480,

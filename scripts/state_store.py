@@ -18,6 +18,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
+import episode_id as episode_ids
+
 
 ROOT = Path(__file__).resolve().parents[1]
 AUTOMATION_STATE_BRANCH = "automation-state"
@@ -224,9 +226,188 @@ def _load_state() -> dict:
     return state if isinstance(state, dict) else _empty_state()
 
 
+STATUS_RANK = {
+    "GENERATING": 1, "FAILED_RETRYABLE": 1, "MEDIA_READY": 2, "REVIEW_PENDING": 3,
+    "APPROVED_FOR_PUBLISH": 4, "PUBLISHING": 5, "PUBLISHED": 6, "REJECTED": 6,
+}
+
+
+def _story_name(record: dict) -> str:
+    raw = str(record.get("story_path") or "").replace("\\", "/")
+    return Path(raw).name if raw else ""
+
+
+def _identities(key: str, record: dict) -> set[str]:
+    identities = {f"k:{key}"}
+    for field in ("archive_identifier", "identifier"):
+        if record.get(field):
+            identities.add(f"a:{record[field]}")
+    if _story_name(record):
+        identities.add(f"p:{_story_name(record)}")
+    derived = record.get("episode_id") or episode_ids.extract_episode_id_from_path(record.get("story_path") or "")
+    if derived:
+        identities.add(f"e:{derived}")
+    for legacy in record.get("legacy_keys") or []:
+        identities.add(f"k:{legacy}")
+    return identities
+
+
+def _rank(record: dict) -> int:
+    return STATUS_RANK.get(str(record.get("approval_status") or "").upper(), 0)
+
+
+def _merge_records(records: list[dict]) -> dict:
+    """Merge duplicate records of one episode without dropping useful fields."""
+    merged: dict = {}
+    for record in sorted(records, key=_rank):
+        for field, value in record.items():
+            if value in (None, "", [], {}) and field in merged:
+                continue
+            merged[field] = value
+    return merged
+
+
+def _canonical_for(group: dict[str, dict], context: list[dict]) -> str:
+    for key, record in group.items():
+        if episode_ids.is_episode_id(record.get("episode_id")):
+            return record["episode_id"]
+    for key in group:
+        if episode_ids.is_episode_id(key):
+            return key
+    members = list(group.values())
+    resolved = episode_ids.resolve_episode_id(
+        records=[*members, *context],
+        story_path=next((r.get("story_path") for r in members if r.get("story_path")), None),
+        slug=next((r.get("slug") for r in members if r.get("slug")), None),
+        archive_identifier=next((r.get("archive_identifier") for r in members if r.get("archive_identifier")), None),
+    )
+    if resolved:
+        return resolved
+    named = next((k for k in group if k != INCOMING), None)
+    return named or (group[INCOMING].get("legacy_keys") or [INCOMING])[0]
+
+
+def _normalize_episodes(episodes: dict, context: list[dict]) -> dict:
+    """Collapse records that describe one episode into a single record keyed by episode_id."""
+    parents = {key: key for key in episodes}
+
+    def find(key: str) -> str:
+        while parents[key] != key:
+            parents[key] = parents[parents[key]]
+            key = parents[key]
+        return key
+
+    owner: dict[str, str] = {}
+    for key, record in episodes.items():
+        for identity in _identities(key, record):
+            if identity in owner:
+                parents[find(key)] = find(owner[identity])
+            else:
+                owner[identity] = key
+    groups: dict[str, dict[str, dict]] = {}
+    for key, record in episodes.items():
+        groups.setdefault(find(key), {})[key] = record
+    result: dict = {}
+    for group in groups.values():
+        canonical = _canonical_for(group, context)
+        merged = _merge_records(list(group.values()))
+        if episode_ids.is_episode_id(canonical):
+            merged["episode_id"] = canonical
+        else:
+            merged.pop("episode_id", None)
+        legacy = sorted({k for k in group if k != canonical} | set(merged.get("legacy_keys") or []))
+        if legacy:
+            merged["legacy_keys"] = [k for k in legacy if k != canonical]
+        if canonical in result:
+            merged = _merge_records([result[canonical], merged])
+            if episode_ids.is_episode_id(canonical):
+                merged["episode_id"] = canonical
+        result[canonical] = merged
+    return result
+
+
+def _context_records(read) -> list[dict]:
+    """Archive index and topic history records used to resolve legacy identities."""
+    records: list[dict] = []
+    for name in (ARCHIVE_INDEX_FILE, TOPICS_HISTORY_FILE):
+        content = read(name)
+        if content is None:
+            legacy = _legacy_path(name)
+            content = legacy.read_text(encoding="utf-8") if legacy.exists() else None
+        value = _loads(content, [])
+        records += [r for r in value if isinstance(r, dict)] if isinstance(value, list) else []
+    return records
+
+
+INCOMING = "\u0000incoming"
+
+
+def _apply_episode_update(read, key_hint: str, archive_identifier: str | None, state: dict) -> dict:
+    current = _loads(read(STATE_FILE), None)
+    current = current if isinstance(current, dict) else _empty_state()
+    return _apply_to(current, _context_records(read), key_hint, archive_identifier, state)
+
+
+def _apply_to(current: dict, context: list[dict], key_hint: str, archive_identifier: str | None, state: dict) -> dict:
+    incoming = dict(state)
+    if archive_identifier:
+        incoming["archive_identifier"] = archive_identifier
+    if episode_ids.is_episode_id(key_hint):
+        incoming["episode_id"] = key_hint
+    elif key_hint or archive_identifier:
+        incoming["legacy_keys"] = [key_hint or archive_identifier]
+    if not incoming.get("episode_id"):
+        resolved = episode_ids.resolve_episode_id(
+            records=context,
+            story_path=incoming.get("story_path"),
+            slug=incoming.get("slug"),
+            archive_identifier=incoming.get("archive_identifier"),
+        )
+        if resolved:
+            incoming["episode_id"] = resolved
+    pool = {**current.get("episodes", {}), INCOMING: incoming}
+    normalized = _normalize_episodes(pool, context)
+    target = next(key for key, record in normalized.items() if INCOMING in (record.get("legacy_keys") or []))
+    record = normalized[target]
+    record["legacy_keys"] = [k for k in record["legacy_keys"] if k != INCOMING]
+    if not record["legacy_keys"]:
+        del record["legacy_keys"]
+    stored_rank = _rank(record)
+    for field, value in incoming.items():
+        if field == "legacy_keys":
+            continue
+        if field == "approval_status" and STATUS_RANK.get(str(value or "").upper(), 0) < stored_rank:
+            continue
+        record[field] = value
+    current["episodes"] = normalized
+    return current
+
+
+def resolve_episode_for_archive(archive_identifier: str) -> str | None:
+    """archive_identifier -> canonical episode_id using state, archive index and metadata."""
+    state = _load_state()
+    episodes = _normalize_episodes(state.get("episodes", {}), [])
+    for key, record in episodes.items():
+        if record.get("archive_identifier") == archive_identifier or archive_identifier in (record.get("legacy_keys") or []):
+            return key
+    for name in (ARCHIVE_INDEX_FILE, TOPICS_HISTORY_FILE):
+        remote = _loads(_read_remote(name), None)
+        records = remote if isinstance(remote, list) else _loads(
+            _legacy_path(name).read_text(encoding="utf-8") if _legacy_path(name).exists() else "[]", [])
+        for record in records:
+            if archive_identifier in (record.get("identifier"), record.get("archive_identifier")) and record.get("episode_id"):
+                return record["episode_id"]
+    return None
+
+
 def load_episode_state(episode_id: str) -> dict:
     try:
-        episode = _load_state().get("episodes", {}).get(episode_id)
+        episodes = _normalize_episodes(_load_state().get("episodes", {}), [])
+        episode = episodes.get(episode_id) or next(
+            (r for k, r in episodes.items()
+             if episode_id in (r.get("legacy_keys") or []) or episode_id in (r.get("archive_identifier"), _story_name(r))),
+            None,
+        )
         if episode:
             return episode
     except Exception as exc:
@@ -239,19 +420,22 @@ def load_episode_state(episode_id: str) -> dict:
     return {}
 
 
-def save_episode_state(episode_id: str, state: dict) -> bool:
-    """Merge ``state`` into the episode record on automation-state."""
+def _save_episode(key_hint: str, archive_identifier: str | None, state: dict, message: str) -> bool:
     def mutate(read):
-        current = _loads(read(STATE_FILE), None)
-        current = current if isinstance(current, dict) else _empty_state()
-        episodes = current.setdefault("episodes", {})
-        episodes[episode_id] = {**episodes.get(episode_id, {}), **state}
-        return {STATE_FILE: _dump(current)}
+        return {STATE_FILE: _dump(_apply_episode_update(read, key_hint, archive_identifier, state))}
 
     try:
-        return _update_remote(mutate, f"Save episode state for {episode_id}")
+        return _update_remote(mutate, message)
     except Exception as exc:
-        print(f"Warning: could not save episode state for {episode_id}: {exc}", file=sys.stderr)
+        print(f"Warning: could not save episode state for {key_hint or archive_identifier}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return False
+
+
+def save_episode_state(episode_id: str, state: dict) -> bool:
+    """Merge ``state`` into the one canonical record of the episode on automation-state."""
+    saved = _save_episode(episode_id, state.get("archive_identifier"), state, f"Save episode state for {episode_id}")
+    if saved:
+        return True
     legacy = _legacy_path(TOPICS_HISTORY_FILE)
     if legacy.exists():
         try:
@@ -267,26 +451,8 @@ def save_episode_state(episode_id: str, state: dict) -> bool:
 
 
 def save_episode_for_archive(archive_identifier: str, state: dict) -> bool:
-    """Merge ``state`` into the episode whose archive_identifier matches.
-
-    Falls back to using the archive identifier as the episode key.
-    """
-    def mutate(read):
-        current = _loads(read(STATE_FILE), None)
-        current = current if isinstance(current, dict) else _empty_state()
-        episodes = current.setdefault("episodes", {})
-        key = next(
-            (k for k, v in episodes.items() if v.get("archive_identifier") == archive_identifier),
-            archive_identifier,
-        )
-        episodes[key] = {**episodes.get(key, {}), "archive_identifier": archive_identifier, **state}
-        return {STATE_FILE: _dump(current)}
-
-    try:
-        return _update_remote(mutate, f"Save episode state for {archive_identifier}")
-    except Exception as exc:
-        print(f"Warning: could not save episode state for {archive_identifier}: {exc}", file=sys.stderr)
-        return False
+    """Same canonical record as save_episode_state, addressed by archive identifier."""
+    return _save_episode(state.get("episode_id") or "", archive_identifier, state, f"Save episode state for {archive_identifier}")
 
 
 def _load_list(name: str) -> list:
@@ -342,6 +508,21 @@ def hydrate_runtime_files() -> list[str]:
     return hydrated
 
 
+def ensure_hydrated() -> bool:
+    """Hydrate runtime catalogues once per runner; safe to call from every entry point."""
+    marker = ROOT / ".runtime" / "hydrated.json"
+    if marker.exists():
+        return True
+    try:
+        hydrated = hydrate_runtime_files()
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"hydrated": hydrated}), encoding="utf-8")
+        return True
+    except Exception as exc:
+        print(f"Warning: runtime state hydration skipped: {exc}", file=sys.stderr)
+        return False
+
+
 def _story_episode_states(root: Path) -> dict[str, dict]:
     states: dict[str, dict] = {}
     for meta_file in sorted(root.glob("stories/*/15_metadata.json")):
@@ -349,11 +530,17 @@ def _story_episode_states(root: Path) -> dict[str, dict]:
             metadata = json.loads(meta_file.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        episode_id = metadata.get("episode_id") or meta_file.parent.name
+        story_path = meta_file.parent.relative_to(root).as_posix()
+        episode_id = (
+            metadata.get("episode_id")
+            or episode_ids.extract_episode_id_from_path(story_path)
+            or meta_file.parent.name
+        )
         states[episode_id] = {
             "approval_status": metadata.get("approval_status"),
             "youtube_video_id": metadata.get("youtube_video_id"),
-            "story_path": meta_file.parent.relative_to(root).as_posix(),
+            "story_path": story_path,
+            "slug": metadata.get("slug"),
         }
     return states
 
@@ -369,13 +556,14 @@ def persist_all() -> bool:
 
     def mutate(read):
         changes = dict(local_files)
-        if episodes:
-            current = _loads(read(STATE_FILE), None)
-            current = current if isinstance(current, dict) else _empty_state()
-            records = current.setdefault("episodes", {})
-            for episode_id, state in episodes.items():
-                records[episode_id] = {**records.get(episode_id, {}), **state}
-            changes[STATE_FILE] = _dump(current)
+        current = _loads(read(STATE_FILE), None)
+        current = current if isinstance(current, dict) else _empty_state()
+        context = _context_records(read)
+        for episode_id, state in episodes.items():
+            current = _apply_to(current, context, episode_id, state.get("archive_identifier"), {
+                k: v for k, v in state.items() if v is not None})
+        current["episodes"] = _normalize_episodes(current.get("episodes", {}), context)
+        changes[STATE_FILE] = _dump(current)
         return changes
 
     return _update_remote(mutate, "Persist runtime state")

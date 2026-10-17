@@ -1087,21 +1087,27 @@ CTR لا يتقدم على الحقيقة.
 
 لا تنشر الحلقة تلقائيًا.
 
-بعد نجاح كل المراحل:
+بعد نجاح كل المراحل تصبح الحالة:
 
-ضع الحالة:
+`MEDIA_READY`
 
-`READY_FOR_APPROVAL`
+ثم تُرفع نسخة المراجعة المتحققة إلى Internet Archive (هذه هي نسخة المراجعة الحالية، وتُنشأ قبل الموافقة)، وبعد التحقق من وصول الملفات فعليًا تصبح الحالة:
 
-وانتظر موافقة OWNER.
+`REVIEW_PENDING`
 
-فقط بعد الموافقة:
+وتنتظر الحلقة قرار OWNER الصريح.
+
+بوابة OWNER تمنع إتمام النشر على YouTube فقط؛ ولا تمنع إنشاء نسخة المراجعة على Internet Archive.
+
+فقط بعد قرار النشر الصريح من OWNER:
 
 يسمح بالانتقال إلى:
 
 `APPROVED_FOR_PUBLISH`
 
-ثم النشر أو الأرشفة حسب النظام.
+ثم `PUBLISHING` أثناء مسار النشر الآمن على YouTube، وبعد التحقق النهائي `PUBLISHED`.
+
+الرفض الصريح من OWNER ينقل الحلقة إلى `REJECTED` ويحذف عنصر المراجعة من Internet Archive. الفشل القابل لإعادة المحاولة يضع `FAILED_RETRYABLE` دون فقدان الأعمال المنجزة.
 
 يمكن تغيير هذا مستقبلًا إذا قررت OWNER السماح بالنشر التلقائي.
 
@@ -1280,9 +1286,9 @@ Always repair the smallest affected scope.
 
 # 57. COMPLETION MUST BE ATOMIC
 
-لا تعتبر الحلقة `COMPLETED` بمجرد وجود الفيديو.
+لا تعتبر الحلقة `PUBLISHED` بمجرد وجود الفيديو.
 
-الحالة `COMPLETED` لا تستخدم إلا بعد نجاح جميع المراحل المطلوبة.
+الحالة `PUBLISHED` لا تستخدم إلا بعد نجاح جميع المراحل المطلوبة والتحقق من المخرج النهائي.
 
 يجب أن يكون لدينا:
 
@@ -1366,9 +1372,17 @@ Metadata Validation PASS
 
 ↓
 
-READY_FOR_APPROVAL
+MEDIA_READY
 
-ثم بعد موافقة OWNER:
+↓
+
+Review Copy Uploaded and Verified on Internet Archive
+
+↓
+
+REVIEW_PENDING
+
+ثم بعد قرار النشر الصريح من OWNER:
 
 ↓
 
@@ -1376,7 +1390,7 @@ APPROVED_FOR_PUBLISH
 
 ↓
 
-Publish / Archive
+PUBLISHING (YouTube safe publish flow)
 
 ↓
 
@@ -1384,7 +1398,9 @@ Output Verification
 
 ↓
 
-COMPLETED
+PUBLISHED
+
+الحالات الطرفية والاستثنائية: `REJECTED` عند الرفض، و`FAILED_RETRYABLE` عند فشل قابل لإعادة المحاولة.
 
 ---
 
@@ -1453,7 +1469,7 @@ COMPLETED
 
 **No new cost without OWNER approval.**
 
-**Nothing is COMPLETED until the final artifact itself has been verified.**
+**Nothing is PUBLISHED until the final artifact itself has been verified.**
 
 ---
 
