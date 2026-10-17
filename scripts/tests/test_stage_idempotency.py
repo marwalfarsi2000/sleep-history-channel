@@ -54,6 +54,7 @@ def test_completed_artifacts_are_current_skips_rerunning_expensive_stages(tmp_pa
         "07_story_tts_api.md": b"api story",
         "12_audio_full.mp3": b"X" * 5000,
         "10_background.png": b"X" * 5000,
+        "11_thumbnail_base.jpg": b"X" * 5000,
         "14_video_final.mp4": b"X" * 5000,
     }
     for name, content in files.items():
@@ -77,6 +78,7 @@ def test_completed_artifacts_are_current_skips_rerunning_expensive_stages(tmp_pa
         "tts_api_sha256": hashlib.sha256(b"api story").hexdigest(),
         "audio_sha256": hashlib.sha256(b"X" * 5000).hexdigest(),
         "image_sha256": hashlib.sha256(b"X" * 5000).hexdigest(),
+        "thumbnail_sha256": hashlib.sha256(b"X" * 5000).hexdigest(),
         "video_sha256": hashlib.sha256(b"X" * 5000).hexdigest(),
     }
     (story_dir / "15_metadata.json").write_text(json.dumps(meta), encoding="utf-8")

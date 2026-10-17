@@ -31,6 +31,12 @@ jobs:
     timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
+      - name: Ensure automation-state branch and hydrate runtime state
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/state_store.py ensure
+          python3 scripts/state_store.py hydrate
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -107,6 +113,6 @@ jobs:
             !stories/**/*.m4a
           if-no-files-found: warn
           retention-days: 7
-      - name: Persist topic and archive catalogues
+      - name: Persist runtime and episode state to automation-state branch
         if: always()
         run: python scripts/git_sync.py

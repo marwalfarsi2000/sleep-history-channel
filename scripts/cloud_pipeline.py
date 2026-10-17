@@ -19,6 +19,9 @@ from archive_storage import (
 )
 
 
+import state_store
+
+
 ROOT = Path(__file__).resolve().parents[1]
 SETTINGS = json.loads((ROOT / "config" / "settings.json").read_text(encoding="utf-8"))
 
@@ -162,6 +165,13 @@ def resume_review() -> dict:
     return record
 
 
+def persist_state(archive_identifier: str, **fields: object) -> bool:
+    ok = state_store.save_episode_for_archive(archive_identifier, fields)
+    if not ok:
+        print(f"WARNING: episode state for {archive_identifier} was not persisted to automation-state", file=sys.stderr)
+    return ok
+
+
 def review_record(story: Path, archive_record: dict) -> dict:
     from state_machine import State
     metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
@@ -176,6 +186,13 @@ def review_record(story: Path, archive_record: dict) -> dict:
     runtime = ROOT / ".runtime"
     runtime.mkdir(exist_ok=True)
     atomic_json(runtime / "review_record.json", record)
+    persist_state(
+        record["identifier"],
+        approval_status=State.REVIEW_PENDING,
+        story_path=record["story_path"],
+        title=record["title"],
+        review_url=record["review_url"],
+    )
     return record
 
 
@@ -240,20 +257,47 @@ def download_file(identifier: str, filename: str, destination: Path) -> None:
 
 def publish(identifier: str) -> dict:
     from state_machine import State, normalize_state
+    from archive_recovery import ensure_index_record
+
     current_remote = normalize_state(remote_status(identifier))
     allowed_states = {State.REVIEW_PENDING, State.APPROVED_FOR_PUBLISH, State.PUBLISHING, State.PUBLISHED}
     if current_remote not in allowed_states:
         raise RuntimeError(f"HUMAN_APPROVAL_GATE_FAILED: archive item status {current_remote!r} is not publishable")
 
-    from youtube_publish import publish_archive_item
-    if current_remote == State.REVIEW_PENDING:
-        modify_remote(identifier, {
-            "approval_status": State.APPROVED_FOR_PUBLISH,
-            "approved_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-        })
-        set_index_status(identifier, State.APPROVED_FOR_PUBLISH)
+    ensure_index_record(
+        identifier,
+        access_key=os.environ.get("IAS3_ACCESS_KEY", ""),
+        secret_key=os.environ.get("IAS3_SECRET_KEY", "")
+    )
 
+    payload = archive_metadata(identifier)
+    metadata = payload.get("metadata") or {}
+
+    if normalize_state(str(metadata.get("approval_status") or "")) != current_remote:
+        raise RuntimeError("CONSISTENCY_CHECK_FAILED: local and remote approval status mismatch")
+
+    if current_remote == State.REVIEW_PENDING:
+        if not metadata.get("title"):
+            raise RuntimeError("PREFLIGHT_VALIDATION_FAILED: archive metadata missing title")
+        if metadata.get("youtube_packaging_status"):
+            if metadata.get("youtube_packaging_validation_status") != "passed":
+                raise RuntimeError("PREFLIGHT_VALIDATION_FAILED: YouTube packaging validation did not pass")
+            if metadata.get("thumbnail_text_render_status") != "passed":
+                raise RuntimeError("PREFLIGHT_VALIDATION_FAILED: thumbnail text render status is not passed")
+
+    from youtube_publish import publish_archive_item
     result = publish_archive_item(identifier)
+
+    if result.get("requires_owner_action"):
+        persist_state(
+            identifier,
+            approval_status=current_remote,
+            publish_blocked=result.get("status", "OWNER_ACTION_REQUIRED"),
+            publish_blocked_action=result.get("action"),
+            youtube_video_id=result.get("video_id"),
+        )
+        return result
+
     set_index_status(
         identifier,
         State.PUBLISHED,
@@ -267,6 +311,13 @@ def publish(identifier: str) -> dict:
         "youtube_video_id": result["video_id"],
         "youtube_url": result["url"],
     })
+    persist_state(
+        identifier,
+        approval_status=State.PUBLISHED,
+        publish_blocked=None,
+        youtube_video_id=result["video_id"],
+        youtube_url=result["url"],
+    )
     send_message(
         "<b>تم اعتماد الحلقة ونشرها ✅</b>\n"
         f"<a href=\"{result['url']}\">▶️ مشاهدة الفيديو على YouTube</a>\n"
@@ -281,6 +332,7 @@ def reject(identifier: str) -> dict:
         raise RuntimeError("Only REVIEW_PENDING archive items can be rejected and deleted")
     delete_rejected(identifier)
     set_index_status(identifier, State.REJECTED)
+    persist_state(identifier, approval_status=State.REJECTED)
     send_message(f"تم رفض الحلقة وحذف عنصرها من Internet Archive. لم تُنشر على YouTube.\n<code>{identifier}</code>")
     return {"identifier": identifier, "status": State.REJECTED}
 

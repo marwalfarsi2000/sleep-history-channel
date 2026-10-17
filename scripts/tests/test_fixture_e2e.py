@@ -56,6 +56,14 @@ def test_deterministic_mocked_orchestration_e2e(tmp_path, monkeypatch):
     }
 
     # Mock all external network calls (Internet Archive, Telegram, YouTube)
+    fake_archive_metadata = {
+        "metadata": {
+            "title": "عنوان القصة",
+            "approval_status": state_machine.State.REVIEW_PENDING,
+            "youtube_packaging_status": None,
+        }
+    }
+
     with patch("cloud_pipeline.ensure_background_audio"), \
          patch("cloud_pipeline.run", return_value=json.dumps({"story_path": str(story_dir)})), \
          patch("cloud_pipeline.upload_story", return_value=fake_archive_record), \
@@ -63,6 +71,8 @@ def test_deterministic_mocked_orchestration_e2e(tmp_path, monkeypatch):
          patch("cloud_pipeline.modify_remote"), \
          patch("cloud_pipeline.set_index_status"), \
          patch("cloud_pipeline.send_message"), \
+         patch("cloud_pipeline.archive_metadata", return_value=fake_archive_metadata), \
+         patch("archive_recovery.ensure_index_record"), \
          patch("youtube_publish.publish_archive_item", return_value=fake_yt_result), \
          patch.dict("os.environ", {"IAS3_ACCESS_KEY": "acc", "IAS3_SECRET_KEY": "sec", "TELEGRAM_CHAT_ID": "123"}):
 
