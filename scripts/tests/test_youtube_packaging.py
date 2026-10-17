@@ -30,9 +30,8 @@ class YoutubePackagingTests(unittest.TestCase):
             "final_youtube_title": "ليلة هادئة في بغداد العباسية | رحلة هادئة إلى الماضي 😴",
             "thumbnail_text": "بغداد ليلًا",
             "thumbnail_prompt": (
-                "Create a premium scene for الحياة اليومية في بغداد العباسية with the exact Arabic text "
-                "بغداد ليلًا, one dominant focal subject, NOT fantasy, NOT glossy. "
-                "16:9 YouTube thumbnail. Original composition. Professional quality."
+                "A night scene of Baghdad marketplace with warm lanterns and historic architecture. "
+                "Background only, no text overlay. 16:9 YouTube thumbnail. Professional quality."
             ),
         }
         validation = {

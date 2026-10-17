@@ -66,12 +66,24 @@ def test_publish_recovery_after_failure_post_youtube_insert(tmp_path, monkeypatc
     def mock_download(identifier, filename, path):
         path.write_bytes(b"X" * 2000)
 
+    def mock_read_text(identifier, filename):
+        if filename == "15_metadata.json":
+            return json.dumps({
+                "youtube_packaging_status": "passed",
+                "final_youtube_title": "title",
+                "title": "title",
+                "thumbnail_text": "بغداد ليلًا",
+                "youtube_packaging_validation_status": "passed",
+                "thumbnail_text_render_status": "passed"
+            })
+        return "title"
+
     # 1. Attempt 1: Upload succeeds, but record_remote_upload (IA metadata update) fails
     with patch("youtube_publish.archive_metadata", return_value=mock_payload), \
          patch("youtube_publish.build", return_value=mock_youtube), \
          patch("youtube_publish.credentials", return_value=MagicMock()), \
          patch("youtube_publish.download", side_effect=mock_download), \
-         patch("youtube_publish.read_text", return_value="title"), \
+         patch("youtube_publish.read_text", side_effect=mock_read_text), \
          patch("youtube_publish.record_remote_upload", side_effect=RuntimeError("IA update failed")):
 
         with pytest.raises(RuntimeError):
@@ -88,7 +100,7 @@ def test_publish_recovery_after_failure_post_youtube_insert(tmp_path, monkeypatc
          patch("youtube_publish.build", return_value=mock_youtube), \
          patch("youtube_publish.credentials", return_value=MagicMock()), \
          patch("youtube_publish.download", side_effect=mock_download), \
-         patch("youtube_publish.read_text", return_value="title"), \
+         patch("youtube_publish.read_text", side_effect=mock_read_text), \
          patch("youtube_publish.record_remote_upload"):
 
         res = youtube_publish.publish_archive_item("item-failure-test")
