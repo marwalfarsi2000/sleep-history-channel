@@ -366,6 +366,27 @@ def set_index_status(identifier: str, status: str, **updates: object) -> None:
     atomic_json(history_path, history)
 
 
+def advance_index_status(identifier: str, status: str, **updates: object) -> None:
+    """Move a catalogue record along REVIEW_PENDING -> APPROVED_FOR_PUBLISH -> PUBLISHING -> PUBLISHED.
+
+    set_index_status enforces single legal transitions; a publish that follows the
+    owner's approval has to pass through the intermediate states.
+    """
+    from state_machine import State, normalize_state
+    path = [State.APPROVED_FOR_PUBLISH, State.PUBLISHING, State.PUBLISHED]
+    target = normalize_state(status)
+    if target not in path:
+        return set_index_status(identifier, status, **updates)
+    records = json.loads(ARCHIVE_INDEX.read_text(encoding="utf-8")) if ARCHIVE_INDEX.exists() else []
+    current = next((normalize_state(r.get("status", "")) for r in records if r.get("identifier") == identifier), "")
+    first = path.index(current) + 1 if current in path else 0
+    steps = path[first:path.index(target) + 1]
+    if not steps:
+        return set_index_status(identifier, target, **updates)
+    for index, step in enumerate(steps):
+        set_index_status(identifier, step, **(updates if index == len(steps) - 1 else {}))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)

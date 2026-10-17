@@ -100,5 +100,5 @@
   "target_min_seconds": 3480,
   "target_max_seconds": 5400,
   "publish_requires": "APPROVE_AND_PUBLISH",
-  "youtube_publish_mode": "private_verify_public"
+  "youtube_publish_mode": "approved_direct_public"
 }

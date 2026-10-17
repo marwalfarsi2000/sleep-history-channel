@@ -11,6 +11,7 @@ import datetime as dt
 from pathlib import Path
 
 from archive_storage import (
+    advance_index_status,
     archive_metadata,
     delete_rejected,
     finalize_existing_upload,
@@ -298,7 +299,7 @@ def publish(identifier: str) -> dict:
         )
         return result
 
-    set_index_status(
+    advance_index_status(
         identifier,
         State.PUBLISHED,
         youtube_video_id=result["video_id"],

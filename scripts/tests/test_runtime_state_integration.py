@@ -177,6 +177,7 @@ def review_env(repos, monkeypatch):
     sent = []
     monkeypatch.setattr(cloud_pipeline, "send_message", lambda *a, **k: sent.append(a))
     monkeypatch.setattr(cloud_pipeline, "set_index_status", lambda *a, **k: None)
+    monkeypatch.setattr(cloud_pipeline, "advance_index_status", lambda *a, **k: None)
     monkeypatch.setattr(cloud_pipeline, "modify_remote", lambda *a, **k: None)
     monkeypatch.setattr(cloud_pipeline, "remote_status", lambda identifier: "REVIEW_PENDING")
     monkeypatch.setattr(cloud_pipeline, "archive_metadata", lambda identifier: {
