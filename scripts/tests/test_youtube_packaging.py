@@ -54,8 +54,12 @@ class YoutubePackagingTests(unittest.TestCase):
                     ) as gemini:
                 result = generate_daily.generate_youtube_packaging(story, topic)
                 cached = generate_daily.generate_youtube_packaging(story, topic)
-            self.assertEqual(result, package)
-            self.assertEqual(cached, package)
+            # The suffix and joined title are chosen by code, never by the model.
+            suffix = generate_daily.choose_title_suffix(topic, [])
+            expected = dict(package, title_suffix=suffix,
+                            final_youtube_title=f"{package['episode_title_core']} | {suffix}")
+            self.assertEqual(result, expected)
+            self.assertEqual(cached, expected)
             self.assertEqual(gemini.call_count, 2)
 
     def test_thumbnail_renders_exact_arabic_label_at_mobile_size(self) -> None:

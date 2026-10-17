@@ -1,0 +1,196 @@
+name: Deploy Telegram Worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: list = print Worker script names only; deploy = upload cloudflare/telegram-worker.js
+        required: true
+        type: choice
+        options: [list, deploy]
+        default: list
+      worker_name:
+        description: Existing Worker script name (required for deploy)
+        required: false
+        type: string
+        default: ""
+      send_keyboard:
+        description: After deploy, send one Telegram message that shows the persistent keyboard
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-telegram-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: List or deploy the Worker
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACTION: ${{ inputs.action }}
+          WORKER_NAME: ${{ inputs.worker_name }}
+        run: |
+          set +x
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          import uuid
+          from pathlib import Path
+
+          account = os.environ["CLOUDFLARE_ACCOUNT_ID"]
+          token = os.environ["CLOUDFLARE_API_TOKEN"]
+          action = os.environ["ACTION"]
+          name = os.environ.get("WORKER_NAME", "").strip()
+          base = f"https://api.cloudflare.com/client/v4/accounts/{urllib.parse.quote(account, safe='')}"
+          MIN_PERMISSION = "The Cloudflare token cannot manage Workers. The owner must provide a token with 'Workers Scripts: Edit'."
+
+          def call(method, path, data=None, content_type=None):
+              request = urllib.request.Request(
+                  base + path, data=data, method=method,
+                  headers={"Authorization": f"Bearer {token}", **({"Content-Type": content_type} if content_type else {})},
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=60) as response:
+                      return json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as error:
+                  body = error.read().decode("utf-8", errors="replace")
+                  try:
+                      codes = [item.get("code") for item in json.loads(body).get("errors", [])]
+                  except Exception:
+                      codes = []
+                  if error.code in (401, 403) or 10000 in codes:
+                      print(f"::error::HTTP {error.code} codes={codes}. {MIN_PERMISSION}")
+                  else:
+                      print(f"::error::Cloudflare {method} {path.split('?')[0]} failed: HTTP {error.code} codes={codes}")
+                  sys.exit(1)
+
+          def settings(script):
+              result = call("GET", f"/workers/scripts/{urllib.parse.quote(script, safe='')}/settings").get("result", {})
+              names = sorted(str(item.get("name")) for item in result.get("bindings", []) or [])
+              return result, names
+
+          if action == "list":
+              scripts = call("GET", "/workers/scripts").get("result", [])
+              print("Worker scripts:")
+              for item in scripts:
+                  print(" -", item.get("id"))
+              sys.exit(0)
+
+          if not name:
+              print("::error::worker_name is required for deploy. Run action=list first to read the existing name.")
+              sys.exit(1)
+          known = {item.get("id") for item in call("GET", "/workers/scripts").get("result", [])}
+          if name not in known:
+              print(f"::error::Worker '{name}' does not exist; refusing to create a new Worker (webhook URL must not change).")
+              sys.exit(1)
+
+          before, before_names = settings(name)
+          print("Existing binding names:", ", ".join(before_names) or "(none)")
+          metadata = {
+              "main_module": "telegram-worker.js",
+              "compatibility_date": before.get("compatibility_date") or "2024-09-23",
+              "keep_bindings": ["secret_text", "plain_text", "json", "kv_namespace"],
+          }
+          if before.get("compatibility_flags"):
+              metadata["compatibility_flags"] = before["compatibility_flags"]
+          source = Path("cloudflare/telegram-worker.js").read_bytes()
+          boundary = uuid.uuid4().hex
+
+          def part(field, filename, content_type, payload):
+              head = (
+                  f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\""
+                  + (f"; filename=\"{filename}\"" if filename else "")
+                  + f"\r\nContent-Type: {content_type}\r\n\r\n"
+              ).encode()
+              return head + payload + b"\r\n"
+
+          body = (
+              part("metadata", None, "application/json", json.dumps(metadata).encode())
+              + part("telegram-worker.js", "telegram-worker.js", "application/javascript+module", source)
+              + f"--{boundary}--\r\n".encode()
+          )
+          call("PUT", f"/workers/scripts/{urllib.parse.quote(name, safe='')}", body, f"multipart/form-data; boundary={boundary}")
+          print("Uploaded cloudflare/telegram-worker.js to the existing Worker.")
+
+          after, after_names = settings(name)
+          print("Binding names after deploy:", ", ".join(after_names) or "(none)")
+          missing = sorted(set(before_names) - set(after_names))
+          if missing:
+              print(f"::error::Bindings were lost by the upload: {missing}")
+              sys.exit(1)
+
+          url = None
+          try:
+              enabled = call("GET", f"/workers/scripts/{urllib.parse.quote(name, safe='')}/subdomain").get("result", {})
+              account_sub = call("GET", "/workers/subdomain").get("result", {}).get("subdomain")
+              if enabled.get("enabled") and account_sub:
+                  url = f"https://{name}.{account_sub}.workers.dev/"
+          except SystemExit:
+              url = None
+          if not url:
+              print("workers.dev URL could not be derived; skipping the health check.")
+              sys.exit(0)
+          with urllib.request.urlopen(url, timeout=30) as response:
+              health = json.loads(response.read().decode("utf-8"))
+          if health != {"ok": True, "service": "sleep-history-telegram"}:
+              print(f"::error::Health check returned an unexpected body: {health}")
+              sys.exit(1)
+          print("Health check OK:", url)
+          PY
+      - name: Show the persistent keyboard in Telegram
+        if: inputs.action == 'deploy' && inputs.send_keyboard
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set +x
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          payload = {
+              "chat_id": os.environ["TELEGRAM_CHAT_ID"],
+              "text": "لوحة الأزرار جاهزة. اضغطي 🎬 فيديو جديد لبدء حلقة.",
+              "reply_markup": {
+                  "keyboard": [[{"text": "🎬 فيديو جديد"}]],
+                  "resize_keyboard": True,
+                  "is_persistent": True,
+              },
+          }
+          request = urllib.request.Request(
+              f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendMessage",
+              data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  result = json.loads(response.read().decode("utf-8"))
+          except urllib.error.HTTPError as error:
+              print(f"::error::Telegram sendMessage failed: HTTP {error.code}")
+              sys.exit(1)
+          if result.get("ok") is not True:
+              print("::error::Telegram did not accept the keyboard message")
+              sys.exit(1)
+          print("Telegram accepted the persistent keyboard message.")
+          PY

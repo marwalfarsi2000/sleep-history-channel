@@ -1100,7 +1100,12 @@ def _google_cloud_voices() -> list[dict]:
     config = _google_cloud_config()
     if not config.get("enabled") or not SECRETS.get("GOOGLE_CLOUD_TTS_API_KEY"):
         return []
-    return [voice for voice in config.get("voices") or [] if voice.get("name") and voice.get("tier")]
+    voices = [voice for voice in config.get("voices") or [] if voice.get("name") and voice.get("tier")]
+    approved = set(SETTINGS.get("approved_tts_models") or [])
+    unapproved = [v["name"] for v in voices if GOOGLE_CLOUD_PREFIX + v["name"] not in approved]
+    if SETTINGS.get("cost_policy") != "free_or_preapproved_only" or unapproved:
+        raise RuntimeError(f"BLOCKED_COST: unapproved Google Cloud TTS voices {unapproved or '(cost policy)'}")
+    return voices
 
 
 def _usage_month() -> str:

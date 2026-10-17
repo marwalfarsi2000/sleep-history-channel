@@ -77,19 +77,20 @@ class GeminiFallbackTests(unittest.TestCase):
             {"thinkingLevel": "minimal"},
         )
 
-    def test_search_quota_fails_closed_without_model_memory_fallback(self):
+    def test_search_rate_limit_is_not_hammered_and_fails_closed_without_model_memory_fallback(self):
         responses = [_http_error(429, '{"error":{"status":"RESOURCE_EXHAUSTED"}}') for _ in range(4)]
         with mock.patch.object(generate_daily, "load_secrets", return_value={"GEMINI_API_KEY": "test"}), \
              mock.patch.object(generate_daily, "GEMINI_RETRY_DELAYS", (0, 0, 0)), \
              mock.patch.object(generate_daily.urllib.request, "urlopen", side_effect=responses) as urlopen, \
-             mock.patch.object(generate_daily.time, "sleep"):
+             mock.patch.object(generate_daily.time, "sleep") as sleep:
             with self.assertRaisesRegex(RuntimeError, "GROUNDED_RESEARCH_UNAVAILABLE"):
                 generate_daily._gemini_one("model", "prompt", search=True)
 
-        self.assertEqual(urlopen.call_count, 4)
-        for call in urlopen.call_args_list:
-            payload = json.loads(call.args[0].data.decode("utf-8"))
-            self.assertIn("tools", payload)
+        # A 429 is classified once and left to the router; it is never retried in place.
+        self.assertEqual(urlopen.call_count, 1)
+        sleep.assert_not_called()
+        payload = json.loads(urlopen.call_args_list[0].args[0].data.decode("utf-8"))
+        self.assertIn("tools", payload)
 
     def test_daily_quota_stops_without_sleeping(self):
         errors = [
