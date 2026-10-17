@@ -12,6 +12,7 @@ Tests validate:
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -51,6 +52,56 @@ class StateStoreTests(unittest.TestCase):
 
         eid3 = episode_id.generate_episode_id(date, slug, "Different Title")
         self.assertNotEqual(eid1, eid3)
+
+    def test_automation_state_branch_creation_logic(self) -> None:
+        """automation-state branch can be initialized safely using git plumbing."""
+        with mock.patch("subprocess.run") as mock_run:
+            # Mock successful remote branch check (branch doesn't exist yet)
+            def run_side_effect(cmd, **kwargs):
+                if cmd[0:3] == ["git", "rev-parse", "origin/automation-state"]:
+                    result = mock.MagicMock()
+                    result.returncode = 128  # Branch doesn't exist
+                    return result
+                elif cmd[0:3] == ["git", "rev-parse", "automation-state"]:
+                    result = mock.MagicMock()
+                    result.returncode = 128  # Local branch doesn't exist
+                    return result
+                elif cmd[0:2] == ["git", "hash-object"]:
+                    result = mock.MagicMock()
+                    result.returncode = 0
+                    result.stdout = "abc123def456" + "\n"
+                    return result
+                elif cmd[0:2] == ["git", "mktree"]:
+                    result = mock.MagicMock()
+                    result.returncode = 0
+                    result.stdout = "tree123abc456" + "\n"
+                    return result
+                elif cmd[0:2] == ["git", "commit-tree"]:
+                    result = mock.MagicMock()
+                    result.returncode = 0
+                    result.stdout = "commit123abc" + "\n"
+                    return result
+                elif cmd[0:2] == ["git", "update-ref"]:
+                    result = mock.MagicMock()
+                    result.returncode = 0
+                    return result
+                elif cmd[0:2] == ["git", "push"]:
+                    result = mock.MagicMock()
+                    result.returncode = 0
+                    return result
+                elif cmd[0:2] == ["git", "config"]:
+                    result = mock.MagicMock()
+                    result.returncode = 0
+                    return result
+                else:
+                    result = mock.MagicMock()
+                    result.returncode = 0
+                    return result
+
+            mock_run.side_effect = run_side_effect
+
+            result = state_store._ensure_automation_branch()
+            self.assertTrue(result, "automation-state branch creation should succeed")
 
     def test_stage_manifest_creation(self) -> None:
         """Stage manifest can track completion."""
