@@ -1,0 +1,94 @@
+[
+  {
+    "slug": "ur-daily-life-2000-bce",
+    "topic": "الحياة اليومية في أور نحو 2000–1800 ق.م.",
+    "status": "rejected",
+    "story_path": "stories/2026-10-07_ur-daily-life-2000-bce"
+  },
+  {
+    "slug": "dhofar-incense-network",
+    "topic": "من شجرة اللبان في ظفار إلى القوافل والموانئ القديمة",
+    "status": "pending_approval",
+    "story_path": "stories/2026-10-07_dhofar-incense-network"
+  },
+  {
+    "slug": "a-day-in-the-life-of-a-scribe-in-ancient-thebes",
+    "topic": "يوم في حياة كاتب في طيبة القديمة",
+    "angle": "روتين كاتب مصري قديم بين أدوات الكتابة والسجلات والحياة اليومية في طيبة خلال الدولة الحديثة",
+    "status": "published",
+    "story_path": "stories/2026-10-08_a-day-in-the-life-of-a-scribe-in-ancient-thebes",
+    "created_at": "2026-10-08T22:04:28.332155+04:00",
+    "youtube_video_id": "OoPOEiWb7zc"
+  },
+  {
+    "slug": "daily-life-in-palmyra-roman-era",
+    "topic": "الحياة اليومية في مدينة تدمر خلال العصر الروماني",
+    "angle": "تتبع يوم في حياة تاجر تدمرِي بين الأسواق المزدحمة، طقوس المعابد، وتجهيز القوافل المتجهة نحو طريق الحرير",
+    "status": "REVIEW_PENDING",
+    "created_at": "2026-10-08T22:10:57.869140+04:00",
+    "topic_ar": "الحياة اليومية في مدينة تدمر خلال العصر الروماني",
+    "angle_ar": "تتبع يوم في حياة تاجر تدمرِي بين الأسواق المزدحمة، طقوس المعابد، وتجهيز القوافل المتجهة نحو طريق الحرير",
+    "search_query_en": "daily life in palmyra roman era",
+    "period_ar": "الفترة التاريخية المذكورة في الموضوع",
+    "location_ar": "المكان المذكور في الموضوع",
+    "archive_identifier": "lan-tukmil-alqissa-20261018-daily-life-in-palmyra-rom",
+    "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261018-daily-life-in-palmyra-rom"
+  },
+  {
+    "slug": "daily-life-in-kairouan-aghlabid-era",
+    "topic": "الحياة اليومية في مدينة القيروان خلال العصر الأغلبي",
+    "angle": "استعراض تفاصيل الحياة في حاضرة العلم والتجارة، من أصوات الأسواق المزدحمة في القيروان إلى طقوس العبادة في جامع عقبة بن نافع، مع التركيز على نمط معيشة العلماء والحرفيين في القرن التاسع الميلادي.",
+    "status": "REVIEW_PENDING",
+    "created_at": "2026-10-10T02:32:42.371498+04:00",
+    "topic_ar": "الحياة اليومية في مدينة القيروان خلال العصر الأغلبي",
+    "angle_ar": "استعراض تفاصيل الحياة في حاضرة العلم والتجارة، من أصوات الأسواق المزدحمة في القيروان إلى طقوس العبادة في جامع عقبة بن نافع، مع التركيز على نمط معيشة العلماء والحرفيين في القرن التاسع الميلادي.",
+    "search_query_en": "daily life in kairouan aghlabid era",
+    "period_ar": "الفترة التاريخية المذكورة في الموضوع",
+    "location_ar": "المكان المذكور في الموضوع",
+    "archive_identifier": "lan-tukmil-alqissa-20261016-daily-life-in-kairouan-ag",
+    "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261016-daily-life-in-kairouan-ag"
+  },
+  {
+    "slug": "daily-life-in-caliphate-cordoba",
+    "topic": "الحياة اليومية في مدينة قرطبة خلال العصر الأموي",
+    "angle": "رحلة في أزقة قرطبة المزدهرة، من هندسة المياه والحدائق إلى روتين طلبة العلم في مكتبة الحكم المستنصر، مع التركيز على التعايش الثقافي والابتكارات العلمية في القرن العاشر الميلادي.",
+    "status": "READY_FOR_APPROVAL",
+    "created_at": "2026-10-12T00:51:49.531998+04:00",
+    "topic_ar": "الحياة اليومية في مدينة قرطبة خلال العصر الأموي",
+    "angle_ar": "رحلة في أزقة قرطبة المزدهرة، من هندسة المياه والحدائق إلى روتين طلبة العلم في مكتبة الحكم المستنصر، مع التركيز على التعايش الثقافي والابتكارات العلمية في القرن العاشر الميلادي.",
+    "search_query_en": "daily life in caliphate cordoba",
+    "period_ar": "الفترة التاريخية المذكورة في الموضوع",
+    "location_ar": "المكان المذكور في الموضوع",
+    "archive_identifier": "lan-tukmil-alqissa-20261015-daily-life-in-caliphate-c",
+    "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261015-daily-life-in-caliphate-c",
+    "story_path": "stories/daily-life-in-caliphate-cordoba"
+  },
+  {
+    "slug": "daily-life-in-venice-spice-trade-era",
+    "topic": "الحياة اليومية في مدينة البندقية خلال ذروة تجارة التوابل والحرير",
+    "angle": "رحلة في أزقة البندقية المائية في القرن الخامس عشر، تتبع يوم في حياة تاجر وسيط بين الشرق والغرب، مع وصف دقيق لبناء السفن في الترسانة (الأرسنال)، حركة الموانئ، وتأثير السلع الشرقية على نمط الحياة المنزلي والاجتماعي.",
+    "created_at": "2026-10-12T15:57:56.801827+04:00",
+    "status": "published",
+    "topic_ar": "الحياة اليومية في مدينة البندقية خلال ذروة تجارة التوابل والحرير",
+    "angle_ar": "رحلة في أزقة البندقية المائية في القرن الخامس عشر، تتبع يوم في حياة تاجر وسيط بين الشرق والغرب، مع وصف دقيق لبناء السفن في الترسانة (الأرسنال)، حركة الموانئ، وتأثير السلع الشرقية على نمط الحياة المنزلي والاجتماعي.",
+    "search_query_en": "daily life in venice spice trade era",
+    "period_ar": "الفترة التاريخية المذكورة في الموضوع",
+    "archive_identifier": "lan-tukmil-alqissa-20261015-daily-life-in-venice-spic",
+    "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261015-daily-life-in-venice-spic",
+    "youtube_video_id": "Cg7H1Z1tXTM"
+  },
+  {
+    "slug": "daily-life-in-ancient-merv",
+    "topic": "الحياة اليومية في مدينة مرو القديمة على طريق الحرير",
+    "angle": "تتبع يوم في حياة مراقب للقوافل في مدينة مرو (واحة مرو) خلال العصر السلجوقي، مع التركيز على تقنيات الري، روتين الحياة في المدارس، وتجارة المنسوجات والورق.",
+    "created_at": "2026-10-13T13:48:51.900841+04:00",
+    "status": "published",
+    "topic_ar": "الحياة اليومية في مدينة مرو القديمة على طريق الحرير",
+    "angle_ar": "تتبع يوم في حياة مراقب للقوافل في مدينة مرو (واحة مرو) خلال العصر السلجوقي، مع التركيز على تقنيات الري، روتين الحياة في المدارس، وتجارة المنسوجات والورق.",
+    "search_query_en": "daily life in ancient merv",
+    "period_ar": "الفترة التاريخية المذكورة في الموضوع",
+    "archive_identifier": "lan-tukmil-alqissa-20261014-daily-life-in-ancient-mer",
+    "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261014-daily-life-in-ancient-mer",
+    "youtube_video_id": "n0IDJVsOM1o"
+  }
+]
