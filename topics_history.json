@@ -90,5 +90,78 @@
     "archive_identifier": "lan-tukmil-alqissa-20261014-daily-life-in-ancient-mer",
     "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261014-daily-life-in-ancient-mer",
     "youtube_video_id": "n0IDJVsOM1o"
+  },
+  {
+    "slug": "oasis-life-gulf-falaj-palm",
+    "topic": "الحياة اليومية في واحة الموتس عبر طريق اللؤلؤ والتمور في الخليج العربي",
+    "angle": "تتبع يوم في حياة مزارع نخيل ونظام العيون والأفلاج في واحة قديمة بالخليج العربي خلال القرن الثامن عشر، مع التركيز على توزيع الحصص المائية وظل النخيل.",
+    "story_path": "stories/2026-10-17_oasis-life-gulf-falaj-palm",
+    "created_at": "2026-10-18T03:08:00.751353+04:00",
+    "status": "GENERATING",
+    "topic_ar": "الحياة اليومية في واحة الموتس عبر طريق اللؤلؤ والتمور في الخليج العربي",
+    "angle_ar": "تتبع يوم في حياة مزارع نخيل ونظام العيون والأفلاج في واحة قديمة بالخليج العربي خلال القرن الثامن عشر، مع التركيز على توزيع الحصص المائية وظل النخيل.",
+    "search_query_en": "traditional oasis life persian gulf falaj irrigation palm groves history",
+    "period_ar": "القرن الثامن عشر الميلادي",
+    "location_ar": "شبه الجزيرة العربية والخليج",
+    "family": "الطبيعة التاريخية والبيئة",
+    "key_elements": [
+      "نظام الأفلاج والري",
+      "ظل النخيل وجني التمور",
+      "الهندسة المعمارية الطينية",
+      "حركة النسيم بين السعف",
+      "التعاون المجتمعي في الواحة"
+    ],
+    "reason_ar": "يوفر إيقاعاً بطيئاً جداً ومناسباً للنوم، مستوحى من البيئة المحلية للخليج وبدون توتر.",
+    "narrative_follow": "تتبع حركة الظل بين صفوف النخيل مع تقدم ساعات النهار وتغير حصص الماء",
+    "soft_narrative_spine": "دورة الماء اليومية من قناة الأفلاج تحت الأرض إلى جذوع النخيل العالية",
+    "gentle_curiosity": "كيف كانت تُقاس حصص المياه بدقة بين المزارعين في الواحة الصحراوية؟",
+    "attentional_anchor": "صوت حفيف سعف النخيل في مهب الريح",
+    "sensory_potential_notes": "حرارة الشمس اللطيفة بعد الصباح، برودة الماء الجاري، رائحة الرطب والتراب الندّي",
+    "tension_risks": [
+      "وصف حرارة الصحراء يجب أن يكون معتدلاً وغير مزعج للنوم"
+    ],
+    "reentry_plan": "العودة بالتركيز على مشهد النخيل وصوت جريان الماء الهادئ",
+    "long_form_capacity": "طبيعة الواحات تتيح ساعات من التفاصيل البيئية والاجتماعية المتنوعة والهادئة",
+    "difference_from_recent": "يختلف تماماً عن طابع المدن الكبرى (قرطبة، تدمر، البندقية) بالتركيز على بيئة الواحات الصامتة",
+    "scores": {
+      "gentle_engagement": 5,
+      "low_cognitive_arousal": 5,
+      "narrative_flow": 5,
+      "sensory_potential": 5,
+      "reentry_tolerance": 5,
+      "low_stakes": 5,
+      "gradual_unwind_potential": 5,
+      "novelty_variety": 5
+    },
+    "selection_gate": {
+      "status": "PASS",
+      "language": true,
+      "religion": true,
+      "sleep": true,
+      "quality": true,
+      "universality": true,
+      "non_duplicate": true,
+      "soft_narrative_spine": true,
+      "gentle_curiosity": true,
+      "attentional_anchoring": true,
+      "reentry_tolerance": true,
+      "gradual_unwind": true,
+      "long_form_without_filler": true,
+      "scores": {
+        "gentle_engagement": 5,
+        "low_cognitive_arousal": 5,
+        "narrative_flow": 5,
+        "sensory_potential": 5,
+        "reentry_tolerance": 5,
+        "low_stakes": 5,
+        "gradual_unwind_potential": 5,
+        "novelty_variety": 5
+      },
+      "reasons": [
+        "الموضوع مستوحى من البيئة المحلية للخليج العربي ويقدم إيقاعاً هادئاً ومناسباً جداً للنوم بعيداً عن الصراعات أو التوتر.",
+        "الزاوية المختارة (نظام الأفلاج وتوزيع المياه وظل النخيل) فريدة ولم تتكرر في السجل السابق الذي تركز بمعظمه على المدن الكبرى وطرق التجارة الدولية.",
+        "بنية القصة تعتمد على محور ناعم وعناصر حسية واضحة تضمن الاسترخاء وسهولة العودة للمستمع بعد السرحان."
+      ]
+    }
   }
 ]
