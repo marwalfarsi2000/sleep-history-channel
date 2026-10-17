@@ -23,12 +23,21 @@ def latest_unfinished_story(root: Path = ROOT) -> str | None:
     history = json.loads(history_path.read_text(encoding="utf-8"))
     for item in reversed(history):
         status = item.get("status")
+        archive_identifier = item.get("archive_identifier", "").strip()
+
+        if not item.get("story_path"):
+            continue
+
+        if status in {"REVIEW_PENDING", "APPROVED_FOR_PUBLISH", "PUBLISHING", "PUBLISHED", "REJECTED"}:
+            if archive_identifier:
+                continue
+
         upload_incomplete = (
             status == "pending_approval"
-            and not item.get("archive_identifier")
+            and not archive_identifier
         )
-        review_incomplete = status == "READY_FOR_APPROVAL" and not item.get("archive_identifier")
-        if (status in {"generating", "drafting"} or upload_incomplete or review_incomplete) and item.get("story_path"):
+        review_incomplete = status == "READY_FOR_APPROVAL" and not archive_identifier
+        if (status in {"generating", "drafting", "FAILED_RETRYABLE"} or upload_incomplete or review_incomplete):
             return PurePosixPath(str(item["story_path"]).replace("\\", "/")).as_posix()
     return None
 
@@ -87,6 +96,7 @@ def safe_story_members(archive: zipfile.ZipFile, story_path: str) -> list[zipfil
     story_prefix = PurePosixPath(story_path).as_posix().rstrip("/") + "/"
     allowed_root_files = {
         "05_story_clean.md",
+        "05b_story_tts_normalized.md",
         "06_story_tts_annotated.md",
         "07_story_tts_api.md",
         "15_metadata.json",
