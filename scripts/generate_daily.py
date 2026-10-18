@@ -40,6 +40,9 @@ SLEEP_SCORE_NAMES = (
     "sensory_potential", "reentry_tolerance", "low_stakes",
     "gradual_unwind_potential", "novelty_variety",
 )
+PREFERRED_CANDIDATES = 6
+MIN_VALID_CANDIDATES = 4
+MIN_NARRATIVE_FAMILIES = 4
 SECRETS_FILE = Path(os.environ.get(
     "SLEEP_HISTORY_SECRETS_FILE",
     SETTINGS.get(
@@ -460,6 +463,16 @@ def save_topic_candidate_bank(
     write(TOPIC_CANDIDATE_BANK_PATH, json.dumps(ordered, ensure_ascii=False, indent=2))
 
 
+def is_valid_topic_candidate(item: dict) -> bool:
+    scores = item.get("scores") or {}
+    if not (str(item.get("slug", "")).strip() and str(item.get("story_format", "")).strip()):
+        return False
+    if not all(isinstance(scores.get(name), int) and 0 <= scores[name] <= 5 for name in SLEEP_SCORE_NAMES):
+        return False
+    item["story_format"] = str(item["story_format"]).strip().upper().replace(" ", "_")
+    return True
+
+
 def choose_topic(history: list[dict]) -> dict:
     prior = "\n".join(
         f"- {item.get('topic', item.get('slug', ''))} | {item.get('angle', '')} | "
@@ -499,25 +512,28 @@ def choose_topic(history: list[dict]) -> dict:
     text, _ = gemini(prompt, json_mode=True, max_tokens=7000, temperature=0.7)
     discovery = parse_json(text)
     candidates = discovery.get("candidates") or []
-    if len(candidates) < 6:
-        raise RuntimeError("TOPIC_DISCOVERY_FAILED: fewer than 6 candidates")
-    families = {str(item.get("family", "")).strip().casefold() for item in candidates if item.get("family")}
-    if len(families) < 4:
-        raise RuntimeError("TOPIC_DISCOVERY_FAILED: fewer than 4 narrative families")
-    for candidate in candidates:
-        if not str(candidate.get("story_format", "")).strip():
-            raise RuntimeError("TOPIC_DISCOVERY_FAILED: candidate is missing story_format")
-        candidate["story_format"] = str(candidate["story_format"]).strip().upper().replace(" ", "_")
-        scores = candidate.get("scores") or {}
-        if not all(isinstance(scores.get(name), int) and 0 <= scores[name] <= 5 for name in SLEEP_SCORE_NAMES):
-            raise RuntimeError("TOPIC_DISCOVERY_FAILED: invalid sleep-suitability scores")
-    save_topic_candidate_bank(candidates)
-    combined = {str(item.get("slug", "")): item for item in saved_ideas}
-    combined.update({str(item.get("slug", "")): item for item in candidates})
-    eligible = [
-        item for item in combined.values()
-        if item.get("scores") and str(item.get("story_format", "")).strip()
+    # Gemini may return fewer than the preferred six; what matters is enough
+    # valid, unused, varied candidates once the saved bank is merged in.
+    blocked = used_slugs | {
+        str(item.get("slug", "")) for item in bank
+        if item.get("bank_status") in {"selected", "rejected"}
+    }
+    fresh = [
+        item for item in candidates
+        if is_valid_topic_candidate(item) and safe_slug(str(item["slug"])) not in blocked
     ]
+    save_topic_candidate_bank(fresh)
+    combined = {str(item.get("slug", "")): item for item in saved_ideas if is_valid_topic_candidate(item)}
+    combined.update({str(item.get("slug", "")): item for item in fresh})
+    eligible = list(combined.values())
+    if len(eligible) < MIN_VALID_CANDIDATES:
+        raise RuntimeError(
+            f"TOPIC_DISCOVERY_FAILED: fewer than {MIN_VALID_CANDIDATES} valid candidates "
+            f"({len(fresh)} new + {len(eligible) - len(fresh)} saved)"
+        )
+    families = {str(item.get("family", "")).strip().casefold() for item in eligible if item.get("family")}
+    if len(families) < MIN_NARRATIVE_FAMILIES:
+        raise RuntimeError(f"TOPIC_DISCOVERY_FAILED: fewer than {MIN_NARRATIVE_FAMILIES} narrative families")
     topic = pick_topic_by_format(eligible, history)
     topic["slug"] = safe_slug(str(topic.get("slug", "")))
     required = (
