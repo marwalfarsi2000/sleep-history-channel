@@ -1137,6 +1137,37 @@ def choose_title_suffix(topic: dict, recent: list[dict], rejected: tuple[str, ..
     return sorted(balanced, key=rank)[0]
 
 
+_NEGATION = re.compile(r"\b(?:no|not|never|without|avoid|don't|do not|zero)\b")
+_POSITIVE_TEXT_INSTRUCTIONS = (
+    re.compile(
+        r"\b(?:include|add|write|render|draw|display|show|print|place|put|insert|overlay|with|in)\s+"
+        r"(?:the\s+|an?\s+)?(?:exact\s+|large\s+|simple\s+|elegant\s+|arabic\s+|thumbnail\s+)*"
+        r"(?:text|title|label|words?|letters?|typography|lettering|caption|phrase|inscription)\b"
+    ),
+    re.compile(r"\b(?:typography|lettering|caption|text|label|title)\s+(?:reading|saying|that\s+(?:reads|says)|which\s+(?:reads|says))\b"),
+    re.compile(r"\b(?:reading|saying|text\s+reads|that\s+(?:reads|says)|the\s+words?)\s*[:\"'“«]*\s*[ء-ي]"),
+    re.compile(r"\b(?:large|simple|elegant|bold|ivory|off-white)\b[^.;]{0,40}\btypography\b"),
+)
+
+
+def thumbnail_prompt_text_conflicts(prompt: str, label: str) -> list[str]:
+    """Reasons a thumbnail prompt asks the image model to draw text (empty = background-only)."""
+    reasons: list[str] = []
+    if label and label in prompt:
+        reasons.append("contains the exact thumbnail_text")
+    if re.search(r"[ء-ي]", prompt):
+        reasons.append("contains Arabic text")
+    lowered = prompt.lower()
+    for pattern in _POSITIVE_TEXT_INSTRUCTIONS:
+        for match in pattern.finditer(lowered):
+            clause_start = max(lowered.rfind(mark, 0, match.start()) for mark in ".;!?\n") + 1
+            if _NEGATION.search(lowered[clause_start:match.start()]):
+                continue  # e.g. "Do not render letters" is the allowed negative form
+            reasons.append(f"asks the image model to render text ('{match.group(0).strip()}')")
+            break
+    return reasons
+
+
 def packaging_field_issues(package: dict, topic: dict, recent: list[dict]) -> dict[str, str]:
     """Deterministic content checks: field -> exact reason. Empty dict means valid."""
     issues: dict[str, str] = {}
@@ -1197,6 +1228,13 @@ def packaging_field_issues(package: dict, topic: dict, recent: list[dict]) -> di
     ]
     if missing_parts and "thumbnail_prompt" not in issues:
         issues["thumbnail_prompt"] = "is missing " + ", ".join(missing_parts)
+    conflicts = thumbnail_prompt_text_conflicts(prompt, label)
+    if conflicts:
+        # A positive text request is invalid even when "no text" also appears:
+        # the Arabic label is drawn later by the deterministic renderer.
+        issues["thumbnail_prompt"] = (
+            "must be a background-only prompt with a reserved dark area; it " + "; ".join(conflicts)
+        )
     return issues
 
 
@@ -1401,6 +1439,8 @@ def build_metadata_files(story: Path, topic: dict, research: str, sources: list[
     annotated = story_text
     api_text = story_text
     thumbnail_prompt = packaging["thumbnail_prompt"]
+    if thumbnail_prompt_text_conflicts(thumbnail_prompt, str(packaging.get("thumbnail_text", "")).strip()):
+        raise RuntimeError("Thumbnail prompt must be background-only: it asks the image model to render text")
     image_prompt = thumbnail_prompt + """
 
 PIPELINE SCENE RENDER: Generate the historical scene and reserved dark text area only. Do not render letters, words, typography, logos, or watermarks; the exact Arabic label will be overlaid deterministically after generation."""
