@@ -265,6 +265,75 @@ def word_count(text: str) -> int:
     return len(re.findall(r"[\u0600-\u06FF]+", text))
 
 
+STORY_FORMATS = (
+    "JOURNEY", "DAY_IN_THE_LIFE", "PLACE_IMMERSION", "HOW_IT_WORKED",
+    "EVERYDAY_HABITS", "CLEAR_HISTORICAL_ARC",
+)
+STORY_PHASES = ("CALM_HOOK", "EXPLORATION", "SETTLE", "UNWIND", "SOFT_FADE")
+MIN_MACRO_SECTIONS, MAX_MACRO_SECTIONS = 7, 10
+MAX_SAME_FORMAT_IN_A_ROW = 2
+
+
+def recent_story_formats(history: list[dict], limit: int = 2) -> list[str]:
+    formats = [str(item.get("story_format", "")).strip() for item in history]
+    return [value for value in formats if value][-limit:]
+
+
+def story_format_allowed(candidate_format: str, history: list[dict]) -> bool:
+    """Reject a format that already ran twice in a row (never three in a row)."""
+    recent = recent_story_formats(history, MAX_SAME_FORMAT_IN_A_ROW)
+    return not (
+        len(recent) == MAX_SAME_FORMAT_IN_A_ROW
+        and all(value == candidate_format for value in recent)
+    )
+
+
+def pick_topic_by_format(eligible: list[dict], history: list[dict], *, clear_margin: int = 3) -> dict:
+    """Highest sleep score wins, but variety breaks near-ties.
+
+    A format used twice in a row is excluded; a format absent from the last two
+    episodes is preferred when its score is within ``clear_margin`` of the best.
+    Quality wins whenever another option is clearly better.
+    """
+    def score(item: dict) -> int:
+        return sum(item["scores"][name] for name in SLEEP_SCORE_NAMES)
+
+    allowed = [item for item in eligible if story_format_allowed(str(item.get("story_format", "")), history)]
+    pool = allowed or eligible
+    best = max(pool, key=score)
+    recent = recent_story_formats(history)
+    if str(best.get("story_format", "")) in recent:
+        fresh = [item for item in pool if str(item.get("story_format", "")) not in recent]
+        if fresh:
+            alternative = max(fresh, key=score)
+            if score(best) - score(alternative) < clear_margin:
+                return alternative
+    return best
+
+
+def validate_outline_sections(sections: list[dict]) -> list[dict]:
+    if not isinstance(sections, list) or not MIN_MACRO_SECTIONS <= len(sections) <= MAX_MACRO_SECTIONS:
+        raise RuntimeError(
+            f"Outline must contain {MIN_MACRO_SECTIONS}-{MAX_MACRO_SECTIONS} macro sections"
+        )
+    phases = [str(section.get("phase", "")).strip() for section in sections]
+    if phases[0] != "CALM_HOOK" or phases[-1] != "SOFT_FADE":
+        raise RuntimeError("Outline must start with CALM_HOOK and end with SOFT_FADE")
+    if any(phase not in STORY_PHASES for phase in phases):
+        raise RuntimeError("Outline contains an unknown phase")
+    indexes = [STORY_PHASES.index(phase) for phase in phases]
+    if indexes != sorted(indexes) or set(phases) != set(STORY_PHASES):
+        raise RuntimeError("Outline must cover all five phases in order")
+    for section in sections:
+        scenes = section.get("scenes")
+        if not isinstance(scenes, list) or not 2 <= len(scenes) <= 4:
+            raise RuntimeError("Every outline section needs 2-4 scenes")
+        for scene in scenes:
+            if not all(str(scene.get(key, "")).strip() for key in ("place_or_anchor", "main_idea", "transition")):
+                raise RuntimeError("Every scene needs place_or_anchor, main_idea and transition")
+    return sections
+
+
 def write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
@@ -315,7 +384,7 @@ def upsert_history_checkpoint(history_path: Path, story: Path, topic: dict, stat
     # runner disappears after persisting only the catalogue checkpoint.
     for key in (
         "topic_ar", "angle_ar", "search_query_en", "period_ar", "location_ar",
-        "family", "key_elements", "reason_ar", "narrative_follow",
+        "family", "story_format", "key_elements", "reason_ar", "narrative_follow",
         "soft_narrative_spine", "gentle_curiosity", "attentional_anchor",
         "sensory_potential_notes", "tension_risks", "reentry_plan",
         "long_form_capacity", "difference_from_recent", "scores", "selection_gate",
@@ -404,7 +473,7 @@ def choose_topic(history: list[dict]) -> dict:
         if item.get("bank_status") == "queued" and item.get("slug") not in used_slugs
     ]
     saved_summary = json.dumps(saved_ideas[:20], ensure_ascii=False)
-    rules = production_rules(*range(2, 17), 62)
+    rules = production_rules(*range(2, 17), 62, 64)
     prompt = f"""أنت محرر قناة عربية اسمها «لن تُكمل هذه القصة» تقدم سردًا تاريخيًا حقيقيًا هادئًا للنوم.
 التزم بالقواعد التالية التزامًا إلزاميًا:
 {rules}
@@ -419,11 +488,13 @@ def choose_topic(history: list[dict]) -> dict:
 
 أعد JSON فقط:
 {{"candidates":[{{
-"topic_ar":"...","angle_ar":"...","slug":"lowercase-hyphenated","search_query_en":"...","period_ar":"...","location_ar":"...","family":"...","key_elements":["..."],"reason_ar":"...",
+"topic_ar":"...","angle_ar":"...","slug":"lowercase-hyphenated","search_query_en":"...","period_ar":"...","location_ar":"...","family":"...","story_format":"واحد من: {' | '.join(STORY_FORMATS)} (أو صيغة جديدة مناسبة للنوم)","key_elements":["..."],"reason_ar":"...",
 "narrative_follow":"ما الذي سيتبعه المستمع","soft_narrative_spine":"...","gentle_curiosity":"...","attentional_anchor":"...","sensory_potential_notes":"...","tension_risks":["..."],"reentry_plan":"...","long_form_capacity":"...","difference_from_recent":"...",
 "scores":{{"gentle_engagement":0,"low_cognitive_arousal":0,"narrative_flow":0,"sensory_potential":0,"reentry_tolerance":0,"low_stakes":0,"gradual_unwind_potential":0,"novelty_variety":0}}
 }}]}}
 كل درجة عدد صحيح من صفر إلى خمسة. لا تُرجع مرشحًا واحدًا فقط.
+صيغ الحلقات الأخيرة في السجل: {recent_story_formats(history) or 'لا يوجد'}؛ لا تكرر صيغة استُخدمت في آخر حلقتين إلا إذا كانت أفضل بوضوح، ولا تُنشئ مرشحين كلهم بالصيغة نفسها.
+كل مرشح يجب أن يملك خيطًا سرديًا واضحًا وافتتاحًا بمشهد واضح، ويقبل التقسيم إلى مشاهد صغيرة مترابطة، ويُفهم دون معرفة تاريخية مسبقة، ويمكن تهدئته تدريجيًا، وألا يكون قائمة حقائق. لا بطل خياليًا مخترعًا.
 """
     text, _ = gemini(prompt, json_mode=True, max_tokens=7000, temperature=0.7)
     discovery = parse_json(text)
@@ -434,21 +505,24 @@ def choose_topic(history: list[dict]) -> dict:
     if len(families) < 4:
         raise RuntimeError("TOPIC_DISCOVERY_FAILED: fewer than 4 narrative families")
     for candidate in candidates:
+        if not str(candidate.get("story_format", "")).strip():
+            raise RuntimeError("TOPIC_DISCOVERY_FAILED: candidate is missing story_format")
+        candidate["story_format"] = str(candidate["story_format"]).strip().upper().replace(" ", "_")
         scores = candidate.get("scores") or {}
         if not all(isinstance(scores.get(name), int) and 0 <= scores[name] <= 5 for name in SLEEP_SCORE_NAMES):
             raise RuntimeError("TOPIC_DISCOVERY_FAILED: invalid sleep-suitability scores")
     save_topic_candidate_bank(candidates)
     combined = {str(item.get("slug", "")): item for item in saved_ideas}
     combined.update({str(item.get("slug", "")): item for item in candidates})
-    eligible = [item for item in combined.values() if item.get("scores")]
-    topic = max(
-        eligible,
-        key=lambda item: sum(item["scores"][name] for name in SLEEP_SCORE_NAMES),
-    )
+    eligible = [
+        item for item in combined.values()
+        if item.get("scores") and str(item.get("story_format", "")).strip()
+    ]
+    topic = pick_topic_by_format(eligible, history)
     topic["slug"] = safe_slug(str(topic.get("slug", "")))
     required = (
         "topic_ar", "angle_ar", "slug", "search_query_en", "period_ar",
-        "location_ar", "family", "reason_ar", "narrative_follow",
+        "location_ar", "family", "story_format", "reason_ar", "narrative_follow",
         "soft_narrative_spine", "gentle_curiosity", "attentional_anchor",
         "sensory_potential_notes", "reentry_plan", "long_form_capacity",
         "difference_from_recent",
@@ -456,14 +530,14 @@ def choose_topic(history: list[dict]) -> dict:
     missing = [key for key in required if not str(topic.get(key, "")).strip()]
     if missing:
         raise RuntimeError(f"Topic selection is missing required fields: {missing}")
-    validation_prompt = f"""{production_rules(*range(2, 17), 62)}
+    validation_prompt = f"""{production_rules(*range(2, 17), 62, 64)}
 
 أنت بوابة مستقلة لاختيار الموضوع. قيّم المرشح مقارنة بالسجل السابق، ولا تحاول إصلاحه.
 المرشح: {json.dumps(topic, ensure_ascii=False)}
 السجل: {prior}
 
 أعد JSON فقط بالشكل:
-{{"status":"PASS أو REJECT","language":true,"religion":true,"sleep":true,"quality":true,"universality":true,"non_duplicate":true,"soft_narrative_spine":true,"gentle_curiosity":true,"attentional_anchoring":true,"reentry_tolerance":true,"gradual_unwind":true,"long_form_without_filler":true,"scores":{{"gentle_engagement":0,"low_cognitive_arousal":0,"narrative_flow":0,"sensory_potential":0,"reentry_tolerance":0,"low_stakes":0,"gradual_unwind_potential":0,"novelty_variety":0}},"reasons":["..."]}}
+{{"status":"PASS أو REJECT","language":true,"religion":true,"sleep":true,"quality":true,"universality":true,"non_duplicate":true,"soft_narrative_spine":true,"gentle_curiosity":true,"attentional_anchoring":true,"reentry_tolerance":true,"gradual_unwind":true,"long_form_without_filler":true,"clear_narrative_thread":true,"scene_openable":true,"divisible_into_scenes":true,"understandable_without_prior_knowledge":true,"gradually_calmable":true,"not_a_fact_list":true,"scores":{{"gentle_engagement":0,"low_cognitive_arousal":0,"narrative_flow":0,"sensory_potential":0,"reentry_tolerance":0,"low_stakes":0,"gradual_unwind_potential":0,"novelty_variety":0}},"reasons":["..."]}}
 كل قيمة true تعني أن البوابة نجحت. ارفض عند الشك الجوهري أو نقص المادة والمصادر.
 """
     validation_text, _ = gemini(
@@ -474,6 +548,8 @@ def choose_topic(history: list[dict]) -> dict:
         "language", "religion", "sleep", "quality", "universality", "non_duplicate",
         "soft_narrative_spine", "gentle_curiosity", "attentional_anchoring",
         "reentry_tolerance", "gradual_unwind", "long_form_without_filler",
+        "clear_narrative_thread", "scene_openable", "divisible_into_scenes",
+        "understandable_without_prior_knowledge", "gradually_calmable", "not_a_fact_list",
     )
     verified_scores = validation.get("scores") or {}
     valid_scores = all(
@@ -484,6 +560,9 @@ def choose_topic(history: list[dict]) -> dict:
         sum(verified_scores[name] for name in SLEEP_SCORE_NAMES) / len(SLEEP_SCORE_NAMES)
         if valid_scores else 0
     )
+    if not story_format_allowed(str(topic.get("story_format", "")), history):
+        save_topic_candidate_bank([], rejected_slug=topic["slug"])
+        raise RuntimeError("TOPIC_GATE_REJECTED: story_format repeated three episodes in a row")
     if (
         validation.get("status") != "PASS"
         or not all(validation.get(name) is True for name in gate_names)
@@ -694,26 +773,35 @@ def research_topic(topic: dict, story: Path | None = None) -> tuple[str, list[di
     return research, valid_sources
 
 
+STORY_QUALITY_ENGAGEMENT_GATES = (
+    "first_listen_comprehension", "teen_first_listen_comprehension", "calm_hook",
+    "clear_narrative_thread", "scene_based_storytelling", "one_main_idea_per_scene",
+    "terms_explained", "name_date_density", "clear_transitions", "adult_not_childish",
+    "historical_grounding", "no_fictionalized_history", "not_boring", "not_overstimulating",
+)
+
+
 def validate_story_quality(topic: dict, story_text: str) -> dict:
-    prompt = f"""{production_rules(2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 23, 62)}
+    prompt = f"""{production_rules(2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 23, 62, 64)}
 
 أنت بوابة جودة مستقلة. افحص النص النهائي دون إعادة كتابته.
 الموضوع: {topic['topic_ar']} — {topic['angle_ar']}
 
 أعد JSON فقط:
-{{"status":"PASS أو REJECT","language":true,"adult_audience":true,"religion":true,"sleep":true,"historical_style":true,"no_dangerous_drift":true,"soft_narrative_spine":true,"gentle_curiosity":true,"attentional_anchoring":true,"sensory_imagery":true,"low_stakes":true,"gradual_unwind":true,"reentry_tolerance":true,"not_boring_or_overstimulating":true,"flexible_composition":true,"issues":["..."]}}
-كل قيمة true تعني نجاح البوابة. ارفض إذا كانت اللغة ثقيلة أو طفولية، أو أصبح المحتوى دينيًا بحتًا، أو صادمًا وغير مناسب للنوم.
+{{"status":"PASS أو REJECT","language":true,"adult_audience":true,"religion":true,"sleep":true,"historical_style":true,"no_dangerous_drift":true,"soft_narrative_spine":true,"gentle_curiosity":true,"attentional_anchoring":true,"sensory_imagery":true,"low_stakes":true,"gradual_unwind":true,"reentry_tolerance":true,"not_boring_or_overstimulating":true,"flexible_composition":true,"first_listen_comprehension":true,"teen_first_listen_comprehension":true,"calm_hook":true,"clear_narrative_thread":true,"scene_based_storytelling":true,"one_main_idea_per_scene":true,"terms_explained":true,"name_date_density":true,"clear_transitions":true,"adult_not_childish":true,"historical_grounding":true,"no_fictionalized_history":true,"not_boring":true,"not_overstimulating":true,"issues":["..."]}}
+كل قيمة true تعني نجاح البوابة. الهدف CALM ENGAGEMENT: ارفض النص الممل (معلومات بلا حركة، وصف ساكن، موسوعي، قوائم، بطء شديد من البداية، بلا خيط أو فضول) وارفض النص المحفز (حماس، تشويق، خطر، cliffhanger، صراع مستمر، شخصيات كثيرة، معلومات معقدة، ذروة). teen_first_listen_comprehension: هل يفهمه مستمع عربي عمره 15–16 بلا معرفة سابقة من أول استماع بنبرة بالغة؟ calm_hook: هل تتضمن أول 500–700 كلمة مكانًا وزمنًا مبسطًا وحركة جارية وما نتبعه وفضولًا صغيرًا بلا مقدمة موسوعية؟ no_fictionalized_history: لا شخصية رئيسية مخترعة ولا حوار ولا أفكار داخلية ولا أحداث شخصية. gentle_curiosity وreentry_tolerance وgradual_unwind تُفحص عبر أثلاث النص. ارفض إذا كانت اللغة ثقيلة أو طفولية، أو أصبح المحتوى دينيًا بحتًا، أو صادمًا وغير مناسب للنوم.
 
 النص:
 {story_text[:90000]}
 """
-    text, _ = gemini(prompt, json_mode=True, max_tokens=2200, temperature=0.0)
+    text, _ = gemini(prompt, json_mode=True, max_tokens=3000, temperature=0.0)
     result = parse_json(text)
     gates = (
         "language", "adult_audience", "religion", "sleep", "historical_style",
         "no_dangerous_drift", "soft_narrative_spine", "gentle_curiosity",
         "attentional_anchoring", "sensory_imagery", "low_stakes", "gradual_unwind",
         "reentry_tolerance", "not_boring_or_overstimulating", "flexible_composition",
+        *STORY_QUALITY_ENGAGEMENT_GATES,
     )
     if result.get("status") != "PASS" or not all(result.get(name) is True for name in gates):
         raise RuntimeError("STORY_QUALITY_GATE_REJECTED: " + json.dumps(result, ensure_ascii=False))
@@ -811,30 +899,29 @@ def finalize_story_text(story: Path, topic: dict, research: str, draft: str) -> 
 
 
 def make_outline(topic: dict, research: str) -> list[dict]:
-    rules = production_rules(17, 22, 62)
+    rules = production_rules(17, 22, 62, 64)
     prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
 {rules}
 
-أنشئ مخططًا من 9 أقسام لسرد تاريخي عربي هادئ مخصص للنوم عن:
+أنشئ مخططًا من 7 إلى 10 أقسام كبرى (اختر العدد المناسب للموضوع، لا عددًا ثابتًا) لسرد تاريخي عربي هادئ يجذب الانتباه أولًا ثم يهدأ تدريجيًا حتى النوم، عن:
 {topic['topic_ar']} — {topic['angle_ar']}
+صيغة الحلقة: {topic.get('story_format', '')}
 
 ملاحظات البحث:
 {research[:45000]}
 
-اختر بنية مرنة تناسب هذا الموضوع؛ لا تستخدم نسبًا ثابتة للمكونات. ابنِ عمودًا سرديًا ناعمًا ومراسي انتباه واضحة، ثم خفّض التنبيه تدريجيًا حتى نهاية بلا ذروة أو كشف. البداية تدخل مباشرة في المكان والزمن بلا ترحيب أو تعليمات استرخاء. لا clickbait ولا خيال.
-أعد JSON فقط: {{"sections":[{{"title":"...","brief":"...","target_words":700}}]}}.
-اجعل الأقسام غير متكررة ومجموع target_words قرابة 6300 كلمة عربية.
+اختر بنية مرنة تناسب الموضوع بلا نسب ثابتة. ابنِ خيطًا سرديًا واحدًا واضحًا يجيب عن «ماذا نتبع الآن؟»، من دون شخصية خيالية مخترعة ولا حوار ولا أفكار داخلية؛ الأدوار العامة الموثقة فقط. كل قسم كبير يحوي من 2 إلى 4 مشاهد صغيرة مترابطة، في كل مشهد فكرة رئيسية واحدة: مكان أو مرساة ← فعل ← تفصيل ← فضول صغير ← انتقال. الأقسام تغطي المراحل الخمس بهذا الترتيب: CALM_HOOK (أول قسم) ثم EXPLORATION ثم SETTLE ثم UNWIND ثم SOFT_FADE (آخر قسم). البداية: مكان واضح وزمن مبسط وحركة جارية وما نتبعه وفضول صغير يُجاب قريبًا، بلا مقدمة موسوعية. فضول لطيف كل دقيقتين إلى أربع في الثلث الأول فقط، بلا cliffhanger. لا ذروة ولا ملخص مدرسي ولا شكر في النهاية. لا clickbait ولا خيال.
+أعد JSON فقط:
+{{"sections":[{{"title":"...","phase":"CALM_HOOK","brief":"...","scenes":[{{"place_or_anchor":"...","action":"...","main_idea":"...","gentle_question":"...","transition":"..."}}],"target_words":700}}]}}
+اجعل الأقسام غير متكررة، ومجموع target_words لا يقل عن 5500 كلمة عربية بلا حشو.
 """
-    text, _ = gemini(prompt, json_mode=True, max_tokens=3000, temperature=0.3)
+    text, _ = gemini(prompt, json_mode=True, max_tokens=6000, temperature=0.3)
     result = parse_json(text)
-    sections = result.get("sections") or []
-    if len(sections) < 7:
-        raise RuntimeError("Outline contains too few sections")
-    return sections
+    return validate_outline_sections(result.get("sections") or [])
 
 
 def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path) -> str:
-    rules = production_rules(2, 3, 4, 5, 6, 7, 17, 23, 61, 62)
+    rules = production_rules(2, 3, 4, 5, 6, 7, 17, 23, 61, 62, 64)
     chapters: list[str] = []
     for index, section in enumerate(sections, 1):
         previous = chapters[-1][-2500:] if chapters else "هذه بداية السرد."
@@ -847,7 +934,10 @@ def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path)
 الموضوع: {topic['topic_ar']}
 الزاوية: {topic['angle_ar']}
 عنوان القسم: {section.get('title', '')}
+المرحلة: {section.get('phase', '')}
 المطلوب: {section.get('brief', '')}
+المشاهد (اكتبها بالترتيب؛ مشهد أولًا ثم المعلومة، وفكرة رئيسية واحدة لكل مشهد، ولا تحوّل الـ brief إلى مقال):
+{json.dumps(section.get('scenes', []), ensure_ascii=False, indent=1)}
 الهدف: بين {target_words} و{target_words + 150} كلمة عربية.
 
 المصدر المعرفي:
@@ -856,7 +946,7 @@ def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path)
 نهاية القسم السابق للسياق فقط:
 {previous}
 
-اكتب السرد وحده بلا عنوان وبلا ملاحظات تحريرية. فصحى سهلة، دافئة وبطيئة ومتصلة. لا تبدأ بترحيب أو «في هذا الوثائقي» أو تعليمات تنفس. لا تخترع تفاصيل. صِغ المسائل المختلف عليها بحذر. تجنب الإثارة والدموية والخاتمة من نوع «شكرًا على الاستماع».
+اكتب السرد وحده بلا عنوان للقسم داخل القصة وبلا ملاحظات تحريرية. فصحى سهلة بجمل منطوقة قصيرة وواضحة، بنبرة بالغة غير طفولية، دافئة ومتصلة، وتزداد هدوءًا بحسب المرحلة. حافظ على الخيط السردي الواحد، وقلّل الأسماء والتواريخ، واشرح كل مصطلح جديد فورًا بجملة قصيرة أو احذفه، واربط المشاهد بانتقالات واضحة مع إعادة سياق خفيفة. استخدم الكاميرا السردية («نقترب من…») باعتدال ولا تبدأ كل فقرة بـ«نحن» أو «تخيّل». لا تخترع شخصية أو اسمًا أو حوارًا أو أفكارًا داخلية، ولا تضف حقائق حسية غير مدعومة. لا تبدأ بترحيب أو «في هذا الوثائقي» أو تعليمات تنفس. لا تخترع تفاصيل. صِغ المسائل المختلف عليها بحذر. تجنب الإثارة والدموية والخاتمة من نوع «شكرًا على الاستماع».
 """
         if chapter_path.exists():
             chapter = chapter_path.read_text(encoding="utf-8").strip()
@@ -1297,6 +1387,7 @@ PIPELINE SCENE RENDER: Generate the historical scene and reserved dark text area
         "final_youtube_title": title,
         "thumbnail_text": packaging["thumbnail_text"],
         "thumbnail_prompt": thumbnail_prompt,
+        "story_format": topic.get("story_format", ""),
         "thumbnail_scene_type": topic.get("family") or "historical-place-immersion",
         "historical_setting": f"{topic.get('location_ar', '')} — {topic.get('period_ar', '')}".strip(" —"),
         "youtube_packaging_status": "passed",

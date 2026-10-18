@@ -19,7 +19,7 @@ SCORE_NAMES = (
 )
 
 
-def candidate(index: int, family: str, score: int) -> dict:
+def candidate(index: int, family: str, score: int, story_format: str = "JOURNEY") -> dict:
     return {
         "topic_ar": f"موضوع {index}",
         "angle_ar": f"زاوية {index}",
@@ -28,6 +28,7 @@ def candidate(index: int, family: str, score: int) -> dict:
         "period_ar": "فترة تاريخية",
         "location_ar": "مدينة تاريخية",
         "family": family,
+        "story_format": story_format,
         "key_elements": ["السوق", "الحرفة"],
         "reason_ar": "مناسب للنوم",
         "narrative_follow": "مسار يوم هادئ",
@@ -67,6 +68,12 @@ class SleepFirstSelectionTests(unittest.TestCase):
             "reentry_tolerance": True,
             "gradual_unwind": True,
             "long_form_without_filler": True,
+            "clear_narrative_thread": True,
+            "scene_openable": True,
+            "divisible_into_scenes": True,
+            "understandable_without_prior_knowledge": True,
+            "gradually_calmable": True,
+            "not_a_fact_list": True,
             "scores": {name: 5 for name in SCORE_NAMES},
             "reasons": [],
         }
