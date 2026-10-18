@@ -9,6 +9,9 @@ import urllib.error
 from pathlib import Path
 from unittest import mock
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import image_generate
 from PIL import Image
 
@@ -38,7 +41,7 @@ class ImageCostGuardTests(unittest.TestCase):
                 image_generate.generate_with_accuracy_retries(story, seed=100)
                 self.assertEqual(image_generate.SETTINGS["image_provider"], "cloudflare_workers_ai")
             self.assertIn("no electricity", prompt.read_text(encoding="utf-8"))
-        self.assertEqual(providers, ["cloudflare_workers_ai", "pollinations"])
+        self.assertEqual(providers, ["cloudflare_workers_ai", "cloudflare_workers_ai"])
         self.assertEqual(generate.call_args_list[0].args[1], 100)
         self.assertEqual(generate.call_args_list[1].args[1], 101)
 
@@ -333,6 +336,119 @@ class ImageCostGuardTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "BLOCKED_COST"):
                 image_generate.enforce_free_model("microsoft/mai-image-2.6", "test-key")
+
+
+REJECTED = 'IMAGE_ACCURACY_GATE_FAILED: {"status": "FAIL", "issues": ["modern wires"]}'
+CLOUDFLARE_SETTINGS = {
+    "image_accuracy_retry_attempts": 4,
+    "image_provider": "cloudflare_workers_ai",
+    "image_fallback_provider": "pollinations",
+    "image_model": "@cf/black-forest-labs/flux-1-schnell",
+    "pollinations_image_model": "microsoft/mai-image-2.6",
+    "image_cost_mode": "free_allocation_only",
+    "pollinations_cost_mode": "quest_pollen_only",
+}
+
+
+class AccuracyRetryRoutingTests(unittest.TestCase):
+    def make_story(self, directory: str) -> Path:
+        story = Path(directory)
+        (story / "08_image_prompt_en.txt").write_text("A paper workshop in Samarkand", encoding="utf-8")
+        (story / "15_metadata.json").write_text(json.dumps({"thumbnail_text": ""}), encoding="utf-8")
+        return story
+
+    def run_retries(self, story, *, cloudflare, pollinations=None, gate=None):
+        """Run the real retry loop and generate() with every network call mocked."""
+        gate = gate or (lambda *_a: {"status": "PASS"})
+        pollinations = pollinations or mock.Mock(side_effect=AssertionError("Pollinations must not be called"))
+        image = Image.new("RGB", (64, 64), "brown")
+        with mock.patch.dict(image_generate.SETTINGS, CLOUDFLARE_SETTINGS), \
+             mock.patch.object(image_generate, "load_secrets", return_value={
+                 "CLOUDFLARE_ACCOUNT_ID": "a", "CLOUDFLARE_API_TOKEN": "t", "POLLINATIONS_API_KEY": "k",
+             }), \
+             mock.patch.object(image_generate, "generate_cloudflare", cloudflare), \
+             mock.patch.object(image_generate, "generate_pollinations", pollinations), \
+             mock.patch.object(image_generate, "prepare_image", return_value=image), \
+             mock.patch.object(image_generate, "historical_accuracy_gate", side_effect=gate):
+            image_generate.generate_with_accuracy_retries(story, seed=1)
+        return pollinations
+
+    def test_pass_first_try_uses_one_cloudflare_call_and_no_pollinations(self):
+        cloudflare = mock.Mock(return_value=(b"x", {}))
+        with tempfile.TemporaryDirectory() as directory:
+            pollinations = self.run_retries(self.make_story(directory), cloudflare=cloudflare)
+        self.assertEqual(cloudflare.call_count, 1)
+        pollinations.assert_not_called()
+
+    def test_quality_rejections_stay_on_cloudflare_until_pass(self):
+        cloudflare = mock.Mock(return_value=(b"x", {}))
+        outcomes = [RuntimeError(REJECTED), RuntimeError(REJECTED), {"status": "PASS"}]
+
+        def gate(*_a):
+            result = outcomes.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            story = self.make_story(directory)
+            pollinations = self.run_retries(story, cloudflare=cloudflare, gate=gate)
+            prompts = [call.args[0] for call in cloudflare.call_args_list]
+        self.assertEqual(cloudflare.call_count, 3)
+        pollinations.assert_not_called()
+        self.assertNotIn("STRICT HISTORICAL EXCLUSION", prompts[0])
+        self.assertIn("STRICT HISTORICAL EXCLUSION", prompts[1])
+        self.assertIn("STRICT HISTORICAL EXCLUSION", prompts[2])
+
+    def test_quality_rejection_is_not_a_provider_failure(self):
+        cloudflare = mock.Mock(return_value=(b"x", {}))
+
+        def gate(*_a):
+            raise RuntimeError(REJECTED)
+
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(RuntimeError, "IMAGE_ACCURACY_GATE_FAILED"):
+                self.run_retries(self.make_story(directory), cloudflare=cloudflare, gate=gate)
+        self.assertEqual(cloudflare.call_count, 4)  # image_accuracy_retry_attempts, all on Cloudflare
+
+    def test_max_attempts_is_four_from_settings(self):
+        import json as js
+        settings = js.loads((Path(__file__).resolve().parents[2] / "config" / "settings.json").read_text(encoding="utf-8"))
+        self.assertEqual(settings["image_accuracy_retry_attempts"], 4)
+
+    def test_genuine_cloudflare_provider_failure_may_use_pollinations(self):
+        cloudflare = mock.Mock(side_effect=RuntimeError("CLOUDFLARE_NETWORK_ERROR: timeout"))
+        pollinations = mock.Mock(return_value=(b"y", {"free": True}))
+        with tempfile.TemporaryDirectory() as directory:
+            self.run_retries(self.make_story(directory), cloudflare=cloudflare, pollinations=pollinations)
+        self.assertEqual(cloudflare.call_count, 1)
+        self.assertEqual(pollinations.call_count, 1)
+
+    def test_pollinations_402_fails_closed_without_retry(self):
+        http_402 = urllib.error.HTTPError("https://gen.pollinations.ai", 402, "Payment Required", {}, None)
+        with mock.patch.dict(image_generate.SETTINGS, CLOUDFLARE_SETTINGS), \
+             mock.patch.object(image_generate, "enforce_free_model", return_value={}), \
+             mock.patch("urllib.request.urlopen", side_effect=http_402) as urlopen:
+            with self.assertRaisesRegex(RuntimeError, "BLOCKED_COST_OR_FREE_LIMIT: Pollinations free/Quest Pollen capacity unavailable"):
+                image_generate.generate_pollinations("prompt", "key", 1)
+        self.assertEqual(urlopen.call_count, 1)
+
+    def test_cloudflare_exhausted_then_pollinations_402_is_free_capacity_exhausted(self):
+        cloudflare = mock.Mock(side_effect=RuntimeError("BLOCKED_COST[3036]: Workers AI free allocation exhausted"))
+        http_402 = urllib.error.HTTPError("https://gen.pollinations.ai", 402, "Payment Required", {}, None)
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(image_generate, "enforce_free_model", return_value={}), \
+             mock.patch("urllib.request.urlopen", side_effect=http_402) as urlopen:
+            with self.assertRaisesRegex(RuntimeError, "IMAGE_FREE_CAPACITY_EXHAUSTED: BLOCKED_COST_OR_FREE_LIMIT"):
+                self.run_retries(self.make_story(directory), cloudflare=cloudflare, pollinations=image_generate.generate_pollinations)
+        self.assertEqual(cloudflare.call_count, 1)
+        self.assertEqual(urlopen.call_count, 1)  # no repeated attempts after 402
+
+    def test_historical_accuracy_gate_source_unchanged(self):
+        import inspect
+        source = inspect.getsource(image_generate.historical_accuracy_gate)
+        self.assertIn("IMAGE_ACCURACY_GATE_FAILED", source)
+        self.assertIn("BLOCKED_COST: unapproved image accuracy model", source)
 
 
 if __name__ == "__main__":
