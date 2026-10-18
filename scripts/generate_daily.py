@@ -4,6 +4,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -275,6 +276,14 @@ STORY_FORMATS = (
 STORY_PHASES = ("CALM_HOOK", "EXPLORATION", "SETTLE", "UNWIND", "SOFT_FADE")
 MIN_MACRO_SECTIONS, MAX_MACRO_SECTIONS = 7, 10
 MAX_SAME_FORMAT_IN_A_ROW = 2
+OUTLINE_RETRY_MAX = 3
+MIN_OUTLINE_TARGET_WORDS = 5500
+CHAPTER_EXPANSION_ATTEMPTS = 3
+
+
+def chapter_minimum_words(target_words: int) -> int:
+    """Smallest acceptable chapter: 90% of its target, never under 750 words."""
+    return max(750, math.ceil(target_words * 0.90))
 
 
 def recent_story_formats(history: list[dict], limit: int = 2) -> list[str]:
@@ -314,26 +323,41 @@ def pick_topic_by_format(eligible: list[dict], history: list[dict], *, clear_mar
     return best
 
 
+class OutlineValidationError(RuntimeError):
+    """The outline parsed but violates the required schema."""
+
+
 def validate_outline_sections(sections: list[dict]) -> list[dict]:
     if not isinstance(sections, list) or not MIN_MACRO_SECTIONS <= len(sections) <= MAX_MACRO_SECTIONS:
-        raise RuntimeError(
+        raise OutlineValidationError(
             f"Outline must contain {MIN_MACRO_SECTIONS}-{MAX_MACRO_SECTIONS} macro sections"
         )
+    if not all(isinstance(section, dict) for section in sections):
+        raise OutlineValidationError("Every outline section must be an object")
     phases = [str(section.get("phase", "")).strip() for section in sections]
     if phases[0] != "CALM_HOOK" or phases[-1] != "SOFT_FADE":
-        raise RuntimeError("Outline must start with CALM_HOOK and end with SOFT_FADE")
+        raise OutlineValidationError("Outline must start with CALM_HOOK and end with SOFT_FADE")
     if any(phase not in STORY_PHASES for phase in phases):
-        raise RuntimeError("Outline contains an unknown phase")
+        raise OutlineValidationError("Outline contains an unknown phase")
     indexes = [STORY_PHASES.index(phase) for phase in phases]
     if indexes != sorted(indexes) or set(phases) != set(STORY_PHASES):
-        raise RuntimeError("Outline must cover all five phases in order")
+        raise OutlineValidationError("Outline must cover all five phases in order")
     for section in sections:
         scenes = section.get("scenes")
         if not isinstance(scenes, list) or not 2 <= len(scenes) <= 4:
-            raise RuntimeError("Every outline section needs 2-4 scenes")
+            raise OutlineValidationError("Every outline section needs 2-4 scenes")
         for scene in scenes:
+            if not isinstance(scene, dict):
+                raise OutlineValidationError("Every scene must be an object")
             if not all(str(scene.get(key, "")).strip() for key in ("place_or_anchor", "main_idea", "transition")):
-                raise RuntimeError("Every scene needs place_or_anchor, main_idea and transition")
+                raise OutlineValidationError("Every scene needs place_or_anchor, main_idea and transition")
+    targets = [section.get("target_words") for section in sections]
+    if not all(isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in targets):
+        raise OutlineValidationError("Every outline section needs a positive integer target_words")
+    if sum(targets) < MIN_OUTLINE_TARGET_WORDS:
+        raise OutlineValidationError(
+            f"Outline target_words total is {sum(targets)}; minimum is {MIN_OUTLINE_TARGET_WORDS}"
+        )
     return sections
 
 
@@ -931,9 +955,37 @@ def make_outline(topic: dict, research: str) -> list[dict]:
 {{"sections":[{{"title":"...","phase":"CALM_HOOK","brief":"...","scenes":[{{"place_or_anchor":"...","action":"...","main_idea":"...","gentle_question":"...","transition":"..."}}],"target_words":700}}]}}
 اجعل الأقسام غير متكررة، ومجموع target_words لا يقل عن 5500 كلمة عربية بلا حشو.
 """
-    text, _ = gemini(prompt, json_mode=True, max_tokens=6000, temperature=0.3)
-    result = parse_json(text)
-    return validate_outline_sections(result.get("sections") or [])
+    feedback = ""
+    last_error = ""
+    for attempt in range(1, OUTLINE_RETRY_MAX + 1):
+        # Every retry asks for a complete new outline; only the short error
+        # reason is added, never the previous raw response.
+        text, _ = gemini(prompt + feedback, json_mode=True, max_tokens=6000, temperature=0.3)
+        try:
+            result = parse_json(text)
+        except ValueError as exc:  # json.JSONDecodeError is a ValueError
+            last_error = f"{type(exc).__name__}: {exc}"[:300]
+            print(f"OUTLINE_ATTEMPT={attempt} PARSE=FAIL VALIDATION=NOT_RUN ERROR={last_error}", file=sys.stderr, flush=True)
+            feedback = (
+                f"\n\nPrevious outline response was invalid JSON: {last_error}. Return one complete valid "
+                "JSON object only. Do not use Markdown, code fences, commentary, or text outside the JSON object."
+            )
+            continue
+        try:
+            if not isinstance(result, dict):
+                raise OutlineValidationError("Outline response must be a JSON object with a sections list")
+            sections = validate_outline_sections(result.get("sections") or [])
+        except OutlineValidationError as exc:
+            last_error = str(exc)[:300]
+            print(f"OUTLINE_ATTEMPT={attempt} PARSE=PASS VALIDATION=FAIL ERROR={last_error}", file=sys.stderr, flush=True)
+            feedback = (
+                f"\n\nPrevious outline failed validation: {last_error}. Return one complete corrected "
+                "outline matching the required schema exactly."
+            )
+            continue
+        print(f"OUTLINE_ATTEMPT={attempt} PARSE=PASS VALIDATION=PASS ERROR=", file=sys.stderr, flush=True)
+        return sections
+    raise RuntimeError(f"OUTLINE_GENERATION_FAILED_AFTER_RETRIES: {last_error}")
 
 
 def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path) -> str:
@@ -943,6 +995,7 @@ def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path)
         previous = chapters[-1][-2500:] if chapters else "هذه بداية السرد."
         chapter_path = log_dir / f"chapter_{index:02d}.md"
         target_words = max(850, int(section.get("target_words", 700)))
+        minimum_words = chapter_minimum_words(target_words)
         prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
 {rules}
 
@@ -972,39 +1025,22 @@ def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path)
             # hosted runner can then restore and expand it after a transient
             # provider failure instead of generating the chapter again.
             write(chapter_path, chapter)
-        if word_count(chapter) < 600:
-            expansion_prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
-{rules}
-
-أعد كتابة المسودة التالية ووسّعها إلى ما بين {target_words} و{target_words + 150} كلمة عربية.
-حافظ على الحقائق والنبرة الهادئة وتسلسل الفقرة، وأضف فقط تفاصيل يومية وتاريخية يدعمها المصدر المعرفي. لا تضف عنوانًا ولا مقدمة للمستمع ولا خاتمة شكر.
-
-الموضوع: {topic['topic_ar']}
-القسم: {section.get('title', '')}
-المصدر المعرفي:
-{research[:36000]}
-
-المسودة:
-{chapter}
-"""
-            expanded, _ = gemini(expansion_prompt, max_tokens=8000, temperature=0.35)
-            if word_count(expanded) > word_count(chapter):
-                chapter = expanded
-                write(chapter_path, chapter)
-        # Rewrites tend to compress, so a still-short chapter is extended by
-        # appending continuation paragraphs, checkpointing each improvement.
-        for _attempt in range(3):
-            if word_count(chapter) >= 600:
+        # A chapter below its minimum is only extended with new paragraphs
+        # appended to the saved text; it is never regenerated or replaced.
+        for _attempt in range(CHAPTER_EXPANSION_ATTEMPTS):
+            if word_count(chapter) >= minimum_words:
                 break
-            missing = max(250, target_words - word_count(chapter))
+            missing = minimum_words - word_count(chapter)
+            request_words = missing + max(100, missing // 5)
             continuation_prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
 {rules}
 
-أكمل القسم التالي من قصة تاريخية للنوم بفقرات جديدة تأتي بعد نهايته مباشرة، بنحو {missing} كلمة عربية.
-لا تكرر ما سبق ولا تلخصه، ولا تضف عنوانًا أو خاتمة شكر. أضف فقط تفاصيل يومية وتاريخية يدعمها المصدر المعرفي، بنفس النبرة الهادئة.
+أكمل القسم التالي من قصة تاريخية للنوم بفقرات جديدة تأتي بعد نهايته مباشرة، بنحو {request_words} كلمة عربية.
+أكمل من نهاية النص مباشرة؛ لا تلخص ولا تكرر ما سبق ولا تضف عنوانًا ولا خاتمة ولا شكرًا. أضف فقط تفاصيل يدعمها المصدر المعرفي، دون حشو ودون أسماء أو تواريخ لمجرد زيادة الكلمات. حافظ على المرحلة {section.get('phase', '')} وعلى الخيط السردي نفسه ونبرة هادئة بالغة، ولا تخترع شخصية أو حوارًا.
 
 الموضوع: {topic['topic_ar']}
 القسم: {section.get('title', '')} — {section.get('brief', '')}
+المشاهد: {json.dumps(section.get('scenes', []), ensure_ascii=False)}
 المصدر المعرفي:
 {research[:36000]}
 
@@ -1015,9 +1051,11 @@ def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path)
             if word_count(continuation) > 0:
                 chapter = f"{chapter.rstrip()}\n\n{continuation.strip()}"
                 write(chapter_path, chapter)
-        if word_count(chapter) < 600:
-            raise RuntimeError(f"Chapter {index} is too short after expansion: {word_count(chapter)} words")
-        write(chapter_path, chapter)
+        if word_count(chapter) < minimum_words:
+            raise RuntimeError(
+                f"CHAPTER_LENGTH_TARGET_FAILED: chapter {index} has {word_count(chapter)} words; "
+                f"minimum acceptable is {minimum_words}"
+            )
         chapters.append(chapter)
     return "\n\n".join(chapters)
 
@@ -1115,6 +1153,37 @@ def choose_title_suffix(topic: dict, recent: list[dict], rejected: tuple[str, ..
     return sorted(balanced, key=rank)[0]
 
 
+_NEGATION = re.compile(r"\b(?:no|not|never|without|avoid|don't|do not|zero)\b")
+_POSITIVE_TEXT_INSTRUCTIONS = (
+    re.compile(
+        r"\b(?:include|add|write|render|draw|display|show|print|place|put|insert|overlay|with|in)\s+"
+        r"(?:the\s+|an?\s+)?(?:exact\s+|large\s+|simple\s+|elegant\s+|arabic\s+|thumbnail\s+)*"
+        r"(?:text|title|label|words?|letters?|typography|lettering|caption|phrase|inscription)\b"
+    ),
+    re.compile(r"\b(?:typography|lettering|caption|text|label|title)\s+(?:reading|saying|that\s+(?:reads|says)|which\s+(?:reads|says))\b"),
+    re.compile(r"\b(?:reading|saying|text\s+reads|that\s+(?:reads|says)|the\s+words?)\s*[:\"'“«]*\s*[ء-ي]"),
+    re.compile(r"\b(?:large|simple|elegant|bold|ivory|off-white)\b[^.;]{0,40}\btypography\b"),
+)
+
+
+def thumbnail_prompt_text_conflicts(prompt: str, label: str) -> list[str]:
+    """Reasons a thumbnail prompt asks the image model to draw text (empty = background-only)."""
+    reasons: list[str] = []
+    if label and label in prompt:
+        reasons.append("contains the exact thumbnail_text")
+    if re.search(r"[ء-ي]", prompt):
+        reasons.append("contains Arabic text")
+    lowered = prompt.lower()
+    for pattern in _POSITIVE_TEXT_INSTRUCTIONS:
+        for match in pattern.finditer(lowered):
+            clause_start = max(lowered.rfind(mark, 0, match.start()) for mark in ".;!?\n") + 1
+            if _NEGATION.search(lowered[clause_start:match.start()]):
+                continue  # e.g. "Do not render letters" is the allowed negative form
+            reasons.append(f"asks the image model to render text ('{match.group(0).strip()}')")
+            break
+    return reasons
+
+
 def packaging_field_issues(package: dict, topic: dict, recent: list[dict]) -> dict[str, str]:
     """Deterministic content checks: field -> exact reason. Empty dict means valid."""
     issues: dict[str, str] = {}
@@ -1175,6 +1244,13 @@ def packaging_field_issues(package: dict, topic: dict, recent: list[dict]) -> di
     ]
     if missing_parts and "thumbnail_prompt" not in issues:
         issues["thumbnail_prompt"] = "is missing " + ", ".join(missing_parts)
+    conflicts = thumbnail_prompt_text_conflicts(prompt, label)
+    if conflicts:
+        # A positive text request is invalid even when "no text" also appears:
+        # the Arabic label is drawn later by the deterministic renderer.
+        issues["thumbnail_prompt"] = (
+            "must be a background-only prompt with a reserved dark area; it " + "; ".join(conflicts)
+        )
     return issues
 
 
@@ -1379,6 +1455,8 @@ def build_metadata_files(story: Path, topic: dict, research: str, sources: list[
     annotated = story_text
     api_text = story_text
     thumbnail_prompt = packaging["thumbnail_prompt"]
+    if thumbnail_prompt_text_conflicts(thumbnail_prompt, str(packaging.get("thumbnail_text", "")).strip()):
+        raise RuntimeError("Thumbnail prompt must be background-only: it asks the image model to render text")
     image_prompt = thumbnail_prompt + """
 
 PIPELINE SCENE RENDER: Generate the historical scene and reserved dark text area only. Do not render letters, words, typography, logos, or watermarks; the exact Arabic label will be overlaid deterministically after generation."""
