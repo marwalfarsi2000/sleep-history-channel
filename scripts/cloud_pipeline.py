@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import subprocess
+import time
 import sys
 import urllib.parse
 import urllib.request
@@ -74,21 +75,8 @@ def run(command: list[str], log_name: str) -> str:
 
 
 def ensure_background_audio() -> None:
-    target = ROOT / SETTINGS.get("background_audio_file", "assets/audio/pink-noise.m4a")
-    if target.exists() and target.stat().st_size > 1024:
-        return
-    url = os.environ.get("PINK_NOISE_URL", "").strip()
-    if not url:
-        raise RuntimeError("PINK_NOISE_URL is missing and the background audio is not bundled")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_suffix(target.suffix + ".part")
-    with urllib.request.urlopen(url, timeout=300) as response, temporary.open("wb") as output:
-        while block := response.read(1024 * 1024):
-            output.write(block)
-    if temporary.stat().st_size <= 1024:
-        temporary.unlink(missing_ok=True)
-        raise RuntimeError("Downloaded pink-noise asset is empty")
-    temporary.replace(target)
+    import background_audio
+    background_audio.ensure_background_audio(ROOT, SETTINGS.get("background_audio_file"))
 
 
 def telegram(method: str, payload: dict) -> dict:
@@ -254,7 +242,88 @@ def produce() -> dict:
     return review_record(story, upload_story(story))
 
 
+SKIP_MARKER = ROOT / ".runtime" / "produce_skipped.json"
+MAX_AUTORECOVERY_ATTEMPTS = 2           # automatic re-runs per job, in addition to the first attempt
+AUTORECOVERY_BACKOFF_SECONDS = (30, 90)
+AUTORECOVERY_DEADLINE_SECONDS = 4 * 3600  # never retry late in the 355-minute job
+RETRY_EXIT_CODES_NEVER = ("WAITING_FOR_LLM_QUOTA", "TTS_WAITING_FOR_QUOTA")
+
+
+def recovery_decision(summary: dict, attempts: int, elapsed: float) -> tuple[bool, int]:
+    """Should this job re-run ``produce`` itself? Returns ``(retry, wait_seconds)``.
+
+    Only failures the registry marks AUTO_RECOVERABLE and worth an immediate retry, with a
+    saved checkpoint (or a stage with nothing to lose), within hard attempt and time limits.
+    Quota waits, cost blocks, owner actions and code defects are never retried here.
+    """
+    if summary.get("status") != "failed" or summary.get("recovery_policy") != "AUTO_RECOVERABLE":
+        return False, 0
+    if not summary.get("immediate_retry") or summary.get("waiting_for_quota") or summary.get("cost_blocked"):
+        return False, 0
+    if summary.get("owner_action_required"):
+        return False, 0
+    limit = min(MAX_AUTORECOVERY_ATTEMPTS, int(summary.get("max_attempts") or MAX_AUTORECOVERY_ATTEMPTS))
+    if attempts >= limit or elapsed > AUTORECOVERY_DEADLINE_SECONDS:
+        return False, 0
+    stage = summary.get("failed_stage") or summary.get("current_stage")
+    if not summary.get("checkpoint_saved") and stage not in ("topic_selection", "produce", None):
+        return False, 0
+    repeats = [entry for entry in summary.get("auto_recovery_log", []) if entry.get("error_code") == summary.get("error_code")]
+    if len(repeats) >= limit:
+        return False, 0
+    return True, AUTORECOVERY_BACKOFF_SECONDS[min(attempts, len(AUTORECOVERY_BACKOFF_SECONDS) - 1)]
+
+
+def produce_with_recovery() -> dict:
+    """``produce`` with bounded, checkpoint-reusing automatic recovery; never an unbounded loop."""
+    started = time.monotonic()
+    attempts = 0
+    while True:
+        try:
+            return produce()
+        except Exception:
+            summary = run_summary.load()
+            retry, wait = recovery_decision(summary, attempts, time.monotonic() - started)
+            if not retry:
+                raise
+            attempts += 1
+            print(
+                f"AUTO_RECOVERY attempt {attempts}: {summary.get('error_code')} at {summary.get('failed_stage')}; "
+                f"resuming from the saved checkpoint in {wait}s", file=sys.stderr, flush=True,
+            )
+            run_summary.begin_recovery(attempts, summary.get("error_code"), summary.get("failed_stage"), wait)
+            time.sleep(wait)
+
+
+def resume_only() -> dict:
+    """Extra scheduled runs only finish an unfinished episode; they never start a new topic."""
+    try:
+        history = json.loads((ROOT / "config" / "topics_history.json").read_text(encoding="utf-8"))
+        state_episodes = state_store._load_state().get("episodes", {})
+    except Exception:
+        history, state_episodes = [], {}
+    active = episode_selection.active_episode(history, ROOT, state_episodes)
+    reason = ""
+    if not active:
+        reason = "no unfinished episode"
+    else:
+        blocked_until = str(active.get("blocked_until") or "")
+        try:
+            if blocked_until and dt.datetime.fromisoformat(blocked_until) > dt.datetime.now(dt.timezone.utc):
+                reason = f"episode is waiting for quota until {blocked_until}"
+        except ValueError:
+            pass
+    if reason:
+        SKIP_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        SKIP_MARKER.write_text(json.dumps({"skipped": True, "reason": reason}), encoding="utf-8")
+        print(f"RESUME_ONLY skipped: {reason}", flush=True)
+        return {"ok": True, "skipped": reason}
+    return produce_with_recovery()
+
+
 def notify_saved_review() -> dict:
+    if SKIP_MARKER.exists():
+        return {"ok": True, "skipped": "resume-only run had nothing to resume"}
     record_path = ROOT / ".runtime" / "review_record.json"
     if not record_path.exists():
         raise RuntimeError("Review record is missing")
@@ -412,6 +481,7 @@ def main() -> None:
         "publish", "reject", "regenerate",
     ])
     parser.add_argument("--identifier")
+    parser.add_argument("--resume-only", action="store_true", help="produce: only finish an unfinished episode")
     args = parser.parse_args()
     state_store.ensure_hydrated()
     run_summary.start(workflow="cloud_pipeline", action=args.command, archive_identifier=args.identifier or "")
@@ -426,7 +496,7 @@ def main() -> None:
 
 def dispatch_command(args, parser) -> dict:
     if args.command == "produce":
-        result = produce()
+        result = resume_only() if args.resume_only else produce_with_recovery()
     elif args.command == "notify-review":
         result = notify_saved_review()
     elif args.command == "resume-review":

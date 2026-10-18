@@ -1104,6 +1104,8 @@ def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path)
 
 def resume_partial_story(story: Path) -> Path:
     _remember_story(story)
+    if (story / "logs/topic.json").exists():
+        run_summary.update(checkpoint_saved=True)  # the saved topic is already a resumable checkpoint
     topic_path = story / "logs/topic.json"
     outline_path = story / "logs/outline.json"
     if not topic_path.exists():
@@ -1130,13 +1132,16 @@ def resume_partial_story(story: Path) -> Path:
         run_summary.stage("outline")
         sections = make_outline(topic, research)
         write(outline_path, json.dumps({"sections": sections}, ensure_ascii=False, indent=2))
+        durable_checkpoint(story, "outline", "chapters")
     run_summary.stage("chapters")
     draft = draft_story(topic, research, sections, story / "logs")
     if word_count(draft) < 5000:
         raise RuntimeError(f"Generated story is too short: {word_count(draft)} Arabic words")
     write(story / "logs/assembled_story.md", draft)
+    durable_checkpoint(story, "chapters", "quality_gates")
     run_summary.stage("quality_gates")
     story_text, quality_gate, fact_check = finalize_story_text(story, topic, research, draft)
+    durable_checkpoint(story, "quality_gates", "packaging")
     build_metadata_files(story, topic, research, sources, story_text, quality_gate, fact_check)
     history_path = ROOT / "config/topics_history.json"
     from state_machine import State
@@ -1569,6 +1574,20 @@ PIPELINE SCENE RENDER: Generate the historical scene and reserved dark text area
     write(story / "15_metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2))
 
 
+def durable_checkpoint(story: Path, completed: str, next_stage: str | None) -> None:
+    """Record a real checkpoint in the run summary and copy its small text state to automation-state.
+
+    Best effort: a persistence problem is a warning, never a production failure.
+    """
+    relative = story.relative_to(ROOT).as_posix() if story.is_relative_to(ROOT) else str(story)
+    run_summary.mark_checkpoint(relative, completed, next_stage)
+    if os.environ.get("SLEEP_HISTORY_DURABLE_CHECKPOINTS") == "1":
+        try:
+            state_store.save_story_checkpoint(story)
+        except Exception as exc:
+            print(f"Warning: durable checkpoint not saved: {exc}", file=sys.stderr, flush=True)
+
+
 ALIGNMENT_DOWNSTREAM = ("outline.json", "assembled_story.md", "content_gates.json", "final_story_after_gates.md")
 
 
@@ -1612,7 +1631,7 @@ def ensure_research_alignment(
     if history_path.exists():
         from state_machine import State
         upsert_history_checkpoint(history_path, story, new_topic, State.GENERATING)
-    run_summary.update(checkpoint_saved=True, last_completed_stage="research_alignment")
+    durable_checkpoint(story, "research_alignment", "outline")
     return new_topic, new_research, sources
 
 
@@ -1620,6 +1639,11 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
     history_path = ROOT / "config/topics_history.json"
     history = json.loads(history_path.read_text(encoding="utf-8"))
     if not dry_run:
+        migrated = episode_selection.migrate_zombie_records(history, ROOT)
+        if migrated:
+            write(history_path, json.dumps(history, ensure_ascii=False, indent=2))
+            print(f"Retired zombie history record(s) as ABANDONED_LEGACY: {migrated}", file=sys.stderr, flush=True)
+
         def checkpoint_path(item: dict) -> Path | None:
             return episode_selection.story_dir(item, ROOT)
 
@@ -1668,6 +1692,7 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
     # its saved chapters instead of selecting a different topic.
     from state_machine import State
     upsert_history_checkpoint(history_path, story, topic, State.GENERATING)
+    durable_checkpoint(story, "topic_selection", "research")
     run_summary.stage("research")
     research, sources = research_topic(topic, story)
     write(story / "logs/research_notes_draft.md", research)
@@ -1676,13 +1701,16 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
     run_summary.stage("outline")
     outline = make_outline(topic, research)
     write(story / "logs/outline.json", json.dumps({"sections": outline}, ensure_ascii=False, indent=2))
+    durable_checkpoint(story, "outline", "chapters")
     run_summary.stage("chapters")
     draft = draft_story(topic, research, outline, story / "logs")
     if word_count(draft) < 5000:
         raise RuntimeError(f"Generated story is too short: {word_count(draft)} Arabic words")
     write(story / "logs/assembled_story.md", draft)
+    durable_checkpoint(story, "chapters", "quality_gates")
     run_summary.stage("quality_gates")
     story_text, quality_gate, fact_check = finalize_story_text(story, topic, research, draft)
+    durable_checkpoint(story, "quality_gates", "packaging")
     build_metadata_files(story, topic, research, sources, story_text, quality_gate, fact_check)
     from state_machine import State
     upsert_history_checkpoint(history_path, story, topic, State.GENERATING)

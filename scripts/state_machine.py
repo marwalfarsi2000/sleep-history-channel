@@ -13,6 +13,7 @@ class State:
     REJECTED = "REJECTED"
     FAILED_RETRYABLE = "FAILED_RETRYABLE"
     WAITING_FOR_LLM_QUOTA = "WAITING_FOR_LLM_QUOTA"
+    ABANDONED_LEGACY = "ABANDONED_LEGACY"  # a migrated zombie record: terminal, kept for history
 
 
 LEGACY_STATE_MAP = {
@@ -41,6 +42,7 @@ ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     State.PUBLISHING: {State.PUBLISHED, State.FAILED_RETRYABLE, State.APPROVED_FOR_PUBLISH},
     State.PUBLISHED: set(),
     State.REJECTED: set(),
+    State.ABANDONED_LEGACY: set(),
     State.FAILED_RETRYABLE: {State.GENERATING, State.REVIEW_PENDING, State.APPROVED_FOR_PUBLISH, State.PUBLISHING, State.WAITING_FOR_LLM_QUOTA},
 }
 

@@ -151,6 +151,15 @@ def _failure_message(summary: dict, stage: str, resume: str, error: str, run_url
         lines.append(f"السبب: <code>{error}</code>")
     if summary.get("cost_blocked"):
         lines.append("🚫 محظور بسياسة التكلفة: لم يُستخدم أي مزود مدفوع.")
+    if summary.get("checkpoint_saved"):
+        done = STAGE_LABELS.get(str(summary.get("last_completed_stage") or ""), "")
+        lines.append(f"✅ محفوظ: {html.escape(done)}" if done else "✅ العمل المنجز محفوظ")
+        upcoming = STAGE_LABELS.get(str(summary.get("resume_stage") or ""), "")
+        if upcoming:
+            lines.append(f"▶️ سيكمل من: {html.escape(upcoming)}")
+    attempts = len(summary.get("auto_recovery_log") or [])
+    if summary.get("auto_recovery_attempted") and attempts:
+        lines.append(f"🔁 حاول النظام الاستئناف تلقائيًا {attempts} مرة دون نجاح.")
     policy = summary.get("recovery_policy") if "recovery_policy" in summary else "LEGACY"
     if policy == failure_registry.AUTO_RECOVERABLE:
         lines.append("🔄 يستطيع النظام معالجة هذا تلقائيًا." + (
