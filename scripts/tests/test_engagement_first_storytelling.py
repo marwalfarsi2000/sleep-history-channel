@@ -37,7 +37,7 @@ def outline(phases=generate_daily.STORY_PHASES, count: int = 7) -> list[dict]:
     chosen = [phases[min(i * len(phases) // count, len(phases) - 1)] for i in range(count)]
     chosen[0], chosen[-1] = phases[0], phases[-1]
     return [
-        {"title": f"قسم {i}", "phase": phase, "brief": "x", "scenes": [scene(1), scene(2)], "target_words": 750}
+        {"title": f"قسم {i}", "phase": phase, "brief": "x", "scenes": [scene(1), scene(2)], "target_words": 800}
         for i, phase in enumerate(chosen)
     ]
 
