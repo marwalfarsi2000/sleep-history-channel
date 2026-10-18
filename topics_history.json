@@ -248,5 +248,86 @@
     "archive_identifier": "lan-tukmil-alqissa-20261018-samarkand-paper-making-da",
     "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261018-samarkand-paper-making-da",
     "youtube_video_id": "lpOl9d4Ynhk"
+  },
+  {
+    "slug": "tripoli-lybia-karamanli-daily-life",
+    "topic": "الحياة اليومية في مدينة طرابلس الغرب خلال العصر القره مانلي",
+    "angle": "استعراض روتين الحياة في البلدة القديمة والأسواق المطلة على البحر الأبيض المتوسط، مع التركيز على تحضير الزيوت العطرية وصناعة السجاد التقليدي في القرن الثامن عشر.",
+    "story_path": "stories/2026-10-18_tripoli-lybia-karamanli-daily-life",
+    "created_at": "2026-10-19T02:15:34.562525+04:00",
+    "status": "GENERATING",
+    "topic_ar": "الحياة اليومية في مدينة طرابلس الغرب خلال العصر القره مانلي",
+    "angle_ar": "استعراض روتين الحياة في البلدة القديمة والأسواق المطلة على البحر الأبيض المتوسط، مع التركيز على تحضير الزيوت العطرية وصناعة السجاد التقليدي في القرن الثامن عشر.",
+    "search_query_en": "tripoli libya daily life old town 18th century history",
+    "period_ar": "القرن الثامن عشر الميلادي",
+    "location_ar": "طرابلس، ليبيا",
+    "family": "الحياة اليومية والأسواق",
+    "story_format": "PLACE_IMMERSION",
+    "key_elements": [
+      "المدينة القديمة والبيوت المطلة على البحر",
+      "حرفة النسيج وصناعة الصوف",
+      "شوارع البلدة البيضاء",
+      "أصوات الصيادين",
+      "أواني الفخار والمخازن الهادئة"
+    ],
+    "reason_ar": "يقدم زاوية متوسطية عربية جديدة تماماً لم تظهر في السجل السابق، بإيقاع هادئ ومنخفض الاستثارة.",
+    "narrative_follow": "مسار عائلة تحضّر خيوط الصوف وتجهزها للنسيج في باحة منزل تقليدي",
+    "soft_narrative_spine": "تدرج ضوء الشمس على الجدران البيضاء للمدينة القديمة منذ الصباح حتى المساء",
+    "gentle_curiosity": "كيف كانت تُصبغ خيوط الصوف بالنباتات البرية المحلية؟",
+    "attentional_anchor": "صوت أنوال النسيج الإيقاعي الهادئ",
+    "sensory_potential_notes": "رائحة صابون الزيتون المحلي، ملمس الصوف الناعم، انعكاس ضوء البحر الأبيض المتوسط",
+    "tension_risks": [
+      "لا توجد توترات سياسية؛ التركيز منصب على المنزل والحرف"
+    ],
+    "reentry_plan": "العودة عبر وصف الساحات البيضاء وانعكاس الضوء الهادئ",
+    "long_form_capacity": "كافٍ لاستعراض روتين الحياة المنزلية والهندسة المعمارية الساحلية",
+    "difference_from_recent": "تختلف عن مدن المشرق والأندلس بتقديم بيئة البحر المتوسط المغاربية الشرقية",
+    "scores": {
+      "gentle_engagement": 5,
+      "low_cognitive_arousal": 5,
+      "narrative_flow": 5,
+      "sensory_potential": 5,
+      "reentry_tolerance": 5,
+      "low_stakes": 5,
+      "gradual_unwind_potential": 5,
+      "novelty_variety": 5
+    },
+    "selection_gate": {
+      "status": "PASS",
+      "language": true,
+      "religion": true,
+      "sleep": true,
+      "quality": true,
+      "universality": true,
+      "non_duplicate": true,
+      "soft_narrative_spine": true,
+      "gentle_curiosity": true,
+      "attentional_anchoring": true,
+      "reentry_tolerance": true,
+      "gradual_unwind": true,
+      "long_form_without_filler": true,
+      "clear_narrative_thread": true,
+      "scene_openable": true,
+      "divisible_into_scenes": true,
+      "understandable_without_prior_knowledge": true,
+      "gradually_calmable": true,
+      "not_a_fact_list": true,
+      "scores": {
+        "gentle_engagement": 5,
+        "low_cognitive_arousal": 5,
+        "narrative_flow": 5,
+        "sensory_potential": 5,
+        "reentry_tolerance": 5,
+        "low_stakes": 5,
+        "gradual_unwind_potential": 5,
+        "novelty_variety": 5
+      },
+      "reasons": [
+        "الموضوع يقدم بيئة مغاربية متوسطية جديدة تماماً غير مكررة في السجل السابق.",
+        "مستوى الاستثارة منخفض جداً والتركيز منصب على الحياة اليومية والحرف الهادئة كصناعة الصوف والأصباغ الطبيعية.",
+        "الهيكل السردي ناعم وقابل للتهدئة تدريجياً نحو النوم دون صراعات أو أحداث دموية.",
+        "العناصر الحسية واضحة (ضوء البحر الأبيض المتوسط، أصوات الأنوال، روائح الزيتون والصوف) مما يعزز الانشغال الهادئ."
+      ]
+    }
   }
 ]
