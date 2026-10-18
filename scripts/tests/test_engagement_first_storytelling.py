@@ -65,10 +65,13 @@ class StoryFormatTests(unittest.TestCase):
             {"JOURNEY", "DAY_IN_THE_LIFE", "PLACE_IMMERSION", "HOW_IT_WORKED", "EVERYDAY_HABITS", "CLEAR_HISTORICAL_ARC"},
         )
 
-    def test_candidate_without_story_format_is_rejected(self) -> None:
-        items = six(["JOURNEY"] * 6, [4] * 6)
-        items[2]["story_format"] = ""
-        with self.assertRaisesRegex(RuntimeError, "story_format"):
+    def test_candidate_without_story_format_is_excluded_not_fatal(self) -> None:
+        items = six(["JOURNEY"] * 6, [4, 4, 4, 4, 4, 5])
+        items[5]["story_format"] = ""
+        self.assertNotEqual(run_choose(items, [])["slug"], "topic-6")
+        for item in items[:3]:
+            item["story_format"] = ""
+        with self.assertRaisesRegex(RuntimeError, "TOPIC_DISCOVERY_FAILED"):
             run_choose(items, [])
 
     def test_selected_topic_keeps_story_format_and_it_is_persisted(self) -> None:
