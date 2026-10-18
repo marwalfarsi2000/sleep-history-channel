@@ -12,9 +12,11 @@ class State:
     PUBLISHED = "PUBLISHED"
     REJECTED = "REJECTED"
     FAILED_RETRYABLE = "FAILED_RETRYABLE"
+    WAITING_FOR_LLM_QUOTA = "WAITING_FOR_LLM_QUOTA"
 
 
 LEGACY_STATE_MAP = {
+    "waiting_for_llm_quota": State.WAITING_FOR_LLM_QUOTA,
     "drafting": State.GENERATING,
     "generating": State.GENERATING,
     "regenerating": State.GENERATING,
@@ -31,14 +33,15 @@ LEGACY_STATE_MAP = {
 }
 
 ALLOWED_TRANSITIONS: dict[str, set[str]] = {
-    State.GENERATING: {State.MEDIA_READY, State.FAILED_RETRYABLE, State.GENERATING},
+    State.GENERATING: {State.MEDIA_READY, State.FAILED_RETRYABLE, State.GENERATING, State.WAITING_FOR_LLM_QUOTA},
+    State.WAITING_FOR_LLM_QUOTA: {State.GENERATING, State.MEDIA_READY, State.FAILED_RETRYABLE},
     State.MEDIA_READY: {State.REVIEW_PENDING, State.GENERATING, State.FAILED_RETRYABLE},
     State.REVIEW_PENDING: {State.APPROVED_FOR_PUBLISH, State.REJECTED, State.GENERATING, State.FAILED_RETRYABLE},
     State.APPROVED_FOR_PUBLISH: {State.PUBLISHING, State.PUBLISHED, State.FAILED_RETRYABLE},
     State.PUBLISHING: {State.PUBLISHED, State.FAILED_RETRYABLE, State.APPROVED_FOR_PUBLISH},
     State.PUBLISHED: set(),
     State.REJECTED: set(),
-    State.FAILED_RETRYABLE: {State.GENERATING, State.REVIEW_PENDING, State.APPROVED_FOR_PUBLISH, State.PUBLISHING},
+    State.FAILED_RETRYABLE: {State.GENERATING, State.REVIEW_PENDING, State.APPROVED_FOR_PUBLISH, State.PUBLISHING, State.WAITING_FOR_LLM_QUOTA},
 }
 
 
@@ -63,3 +66,9 @@ def transition_state(from_state: str, to_state: str) -> str:
     if not validate_transition(from_state, to_state):
         raise ValueError(f"Invalid state transition from {from_state!r} to {to_state!r}")
     return target
+
+
+# Episodes in these states own the production slot: a new topic must never start while one exists.
+ACTIVE_STATES = frozenset({
+    State.GENERATING, State.FAILED_RETRYABLE, State.WAITING_FOR_LLM_QUOTA,
+})

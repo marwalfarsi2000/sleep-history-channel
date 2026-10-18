@@ -1,3 +1,4 @@
+import datetime as dt
 import io
 import json
 import tempfile
@@ -11,6 +12,9 @@ import restore_failure_checkpoint
 from restore_failure_checkpoint import latest_unfinished_story, safe_story_members
 
 
+NOW = dt.datetime.now(dt.timezone.utc).isoformat()
+
+
 class RestoreFailureCheckpointTests(unittest.TestCase):
     def test_latest_unfinished_story_prefers_newest_checkpoint(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -18,9 +22,9 @@ class RestoreFailureCheckpointTests(unittest.TestCase):
             (root / "config").mkdir()
             (root / "config" / "topics_history.json").write_text(
                 json.dumps([
-                    {"status": "drafting", "story_path": "stories/old"},
-                    {"status": "pending_approval", "story_path": "stories/done"},
-                    {"status": "generating", "story_path": "stories/current"},
+                    {"status": "drafting", "story_path": "stories/old", "created_at": NOW},
+                    {"status": "pending_approval", "story_path": "stories/done", "created_at": NOW},
+                    {"status": "generating", "story_path": "stories/current", "created_at": NOW},
                 ]),
                 encoding="utf-8",
             )
@@ -40,11 +44,36 @@ class RestoreFailureCheckpointTests(unittest.TestCase):
                     {
                         "status": "pending_approval",
                         "story_path": "stories/upload-failed",
+                        "created_at": NOW,
                     },
                 ]),
                 encoding="utf-8",
             )
             self.assertEqual(latest_unfinished_story(root), "stories/upload-failed")
+
+    def test_stale_zombie_entry_never_shadows_the_active_episode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "config").mkdir()
+            (root / "config" / "topics_history.json").write_text(
+                json.dumps([
+                    {"slug": "oasis-life", "status": "GENERATING", "story_path": "stories/2026-10-17_oasis-life", "created_at": NOW},
+                    # Run #49 situation: an abandoned legacy record appended AFTER the active one.
+                    {"slug": "dhofar", "status": "pending_approval", "story_path": "stories/2026-10-07_dhofar"},
+                ]),
+                encoding="utf-8",
+            )
+            self.assertEqual(latest_unfinished_story(root), "stories/2026-10-17_oasis-life")
+
+    def test_waiting_for_llm_quota_episode_is_restored_like_any_active_episode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "config").mkdir()
+            (root / "config" / "topics_history.json").write_text(
+                json.dumps([{"slug": "x", "status": "WAITING_FOR_LLM_QUOTA", "story_path": "stories/x", "created_at": NOW}]),
+                encoding="utf-8",
+            )
+            self.assertEqual(latest_unfinished_story(root), "stories/x")
 
     def test_only_matching_story_checkpoint_files_are_restored(self):
         payload = io.BytesIO()
