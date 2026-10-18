@@ -4,6 +4,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -273,6 +274,13 @@ STORY_PHASES = ("CALM_HOOK", "EXPLORATION", "SETTLE", "UNWIND", "SOFT_FADE")
 MIN_MACRO_SECTIONS, MAX_MACRO_SECTIONS = 7, 10
 MAX_SAME_FORMAT_IN_A_ROW = 2
 OUTLINE_RETRY_MAX = 3
+MIN_OUTLINE_TARGET_WORDS = 5500
+CHAPTER_EXPANSION_ATTEMPTS = 3
+
+
+def chapter_minimum_words(target_words: int) -> int:
+    """Smallest acceptable chapter: 90% of its target, never under 750 words."""
+    return max(750, math.ceil(target_words * 0.90))
 
 
 def recent_story_formats(history: list[dict], limit: int = 2) -> list[str]:
@@ -340,6 +348,13 @@ def validate_outline_sections(sections: list[dict]) -> list[dict]:
                 raise OutlineValidationError("Every scene must be an object")
             if not all(str(scene.get(key, "")).strip() for key in ("place_or_anchor", "main_idea", "transition")):
                 raise OutlineValidationError("Every scene needs place_or_anchor, main_idea and transition")
+    targets = [section.get("target_words") for section in sections]
+    if not all(isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in targets):
+        raise OutlineValidationError("Every outline section needs a positive integer target_words")
+    if sum(targets) < MIN_OUTLINE_TARGET_WORDS:
+        raise OutlineValidationError(
+            f"Outline target_words total is {sum(targets)}; minimum is {MIN_OUTLINE_TARGET_WORDS}"
+        )
     return sections
 
 
@@ -964,6 +979,7 @@ def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path)
         previous = chapters[-1][-2500:] if chapters else "هذه بداية السرد."
         chapter_path = log_dir / f"chapter_{index:02d}.md"
         target_words = max(850, int(section.get("target_words", 700)))
+        minimum_words = chapter_minimum_words(target_words)
         prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
 {rules}
 
@@ -993,39 +1009,22 @@ def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path)
             # hosted runner can then restore and expand it after a transient
             # provider failure instead of generating the chapter again.
             write(chapter_path, chapter)
-        if word_count(chapter) < 600:
-            expansion_prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
-{rules}
-
-أعد كتابة المسودة التالية ووسّعها إلى ما بين {target_words} و{target_words + 150} كلمة عربية.
-حافظ على الحقائق والنبرة الهادئة وتسلسل الفقرة، وأضف فقط تفاصيل يومية وتاريخية يدعمها المصدر المعرفي. لا تضف عنوانًا ولا مقدمة للمستمع ولا خاتمة شكر.
-
-الموضوع: {topic['topic_ar']}
-القسم: {section.get('title', '')}
-المصدر المعرفي:
-{research[:36000]}
-
-المسودة:
-{chapter}
-"""
-            expanded, _ = gemini(expansion_prompt, max_tokens=8000, temperature=0.35)
-            if word_count(expanded) > word_count(chapter):
-                chapter = expanded
-                write(chapter_path, chapter)
-        # Rewrites tend to compress, so a still-short chapter is extended by
-        # appending continuation paragraphs, checkpointing each improvement.
-        for _attempt in range(3):
-            if word_count(chapter) >= 600:
+        # A chapter below its minimum is only extended with new paragraphs
+        # appended to the saved text; it is never regenerated or replaced.
+        for _attempt in range(CHAPTER_EXPANSION_ATTEMPTS):
+            if word_count(chapter) >= minimum_words:
                 break
-            missing = max(250, target_words - word_count(chapter))
+            missing = minimum_words - word_count(chapter)
+            request_words = missing + max(100, missing // 5)
             continuation_prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
 {rules}
 
-أكمل القسم التالي من قصة تاريخية للنوم بفقرات جديدة تأتي بعد نهايته مباشرة، بنحو {missing} كلمة عربية.
-لا تكرر ما سبق ولا تلخصه، ولا تضف عنوانًا أو خاتمة شكر. أضف فقط تفاصيل يومية وتاريخية يدعمها المصدر المعرفي، بنفس النبرة الهادئة.
+أكمل القسم التالي من قصة تاريخية للنوم بفقرات جديدة تأتي بعد نهايته مباشرة، بنحو {request_words} كلمة عربية.
+أكمل من نهاية النص مباشرة؛ لا تلخص ولا تكرر ما سبق ولا تضف عنوانًا ولا خاتمة ولا شكرًا. أضف فقط تفاصيل يدعمها المصدر المعرفي، دون حشو ودون أسماء أو تواريخ لمجرد زيادة الكلمات. حافظ على المرحلة {section.get('phase', '')} وعلى الخيط السردي نفسه ونبرة هادئة بالغة، ولا تخترع شخصية أو حوارًا.
 
 الموضوع: {topic['topic_ar']}
 القسم: {section.get('title', '')} — {section.get('brief', '')}
+المشاهد: {json.dumps(section.get('scenes', []), ensure_ascii=False)}
 المصدر المعرفي:
 {research[:36000]}
 
@@ -1036,9 +1035,11 @@ def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path)
             if word_count(continuation) > 0:
                 chapter = f"{chapter.rstrip()}\n\n{continuation.strip()}"
                 write(chapter_path, chapter)
-        if word_count(chapter) < 600:
-            raise RuntimeError(f"Chapter {index} is too short after expansion: {word_count(chapter)} words")
-        write(chapter_path, chapter)
+        if word_count(chapter) < minimum_words:
+            raise RuntimeError(
+                f"CHAPTER_LENGTH_TARGET_FAILED: chapter {index} has {word_count(chapter)} words; "
+                f"minimum acceptable is {minimum_words}"
+            )
         chapters.append(chapter)
     return "\n\n".join(chapters)
 
