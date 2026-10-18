@@ -446,11 +446,20 @@ def generate_pollinations(prompt: str, api_key: str, seed: int) -> tuple[bytes, 
             "User-Agent": "SleepHistoryAutomation/1.0",
         },
     )
-    with urllib.request.urlopen(request, timeout=300) as response:
-        content_type = response.headers.get("Content-Type", "")
-        if not content_type.startswith("image/"):
-            raise RuntimeError(f"Unexpected Pollinations response: {content_type}")
-        return response.read(), model
+    try:
+        with urllib.request.urlopen(request, timeout=300) as response:
+            content_type = response.headers.get("Content-Type", "")
+            if not content_type.startswith("image/"):
+                raise RuntimeError(f"Unexpected Pollinations response: {content_type}")
+            return response.read(), model
+    except urllib.error.HTTPError as exc:
+        if exc.code == 402:
+            # No free capacity left. Never retry or pay: fail closed with a
+            # reason that notifications can show.
+            raise RuntimeError(
+                "BLOCKED_COST_OR_FREE_LIMIT: Pollinations free/Quest Pollen capacity unavailable (HTTP 402)"
+            ) from exc
+        raise
 
 
 def generate(story: Path, seed: int | None = None) -> None:
@@ -517,7 +526,12 @@ def generate(story: Path, seed: int | None = None) -> None:
             actual_provider = "pollinations"
             actual_model = SETTINGS.get("pollinations_image_model", "microsoft/mai-image-2.6")
             actual_cost_mode = SETTINGS.get("pollinations_cost_mode", "quest_pollen_only")
-            image_bytes, provider_record = generate_pollinations(legacy_prompt, api_key, seed)
+            try:
+                image_bytes, provider_record = generate_pollinations(legacy_prompt, api_key, seed)
+            except RuntimeError as fallback_error:
+                if str(fallback_error).startswith("BLOCKED_COST_OR_FREE_LIMIT"):
+                    raise RuntimeError(f"IMAGE_FREE_CAPACITY_EXHAUSTED: {fallback_error}") from fallback_error
+                raise
             image = prepare_image(image_bytes, temporary)
         background = story / "10_background.png"
         thumbnail = story / "11_thumbnail_base.jpg"
@@ -567,42 +581,41 @@ def generate(story: Path, seed: int | None = None) -> None:
 
 
 def generate_with_accuracy_retries(story: Path, seed: int | None = None) -> None:
+    """Retry on historical-accuracy rejections without changing provider.
+
+    A QUALITY_REJECTION (the provider returned a valid image that the accuracy
+    gate refused) is retried on the same provider with the strict exclusion
+    prompt. Only a PROVIDER_FAILURE inside generate() may use the configured
+    fallback, so a rejected image never moves production to a paid-capacity
+    provider.
+    """
     attempts = max(1, int(SETTINGS.get("image_accuracy_retry_attempts", 3)))
-    original_provider = SETTINGS.get("image_provider", "pollinations")
-    fallback = SETTINGS.get("image_fallback_provider")
     prompt_path = story / "08_image_prompt_en.txt"
     exclusion = (
         "STRICT HISTORICAL EXCLUSION: no electricity, utility poles, power lines, "
         "overhead wires, insulators, streetlights, vehicles, antennas, asphalt, "
         "or any other modern infrastructure."
     )
-    try:
-        for attempt in range(attempts):
-            if attempt and original_provider == "cloudflare_workers_ai" and fallback == "pollinations":
-                # A provider may reproduce the same rejected composition for an
-                # unchanged prompt. Switch model/provider as well as the seed.
-                SETTINGS["image_provider"] = "pollinations"
-            attempt_seed = seed + attempt if seed is not None else None
-            try:
-                generate(story, attempt_seed)
-                return
-            except RuntimeError as exc:
-                quality_rejection = (
-                    str(exc).startswith("IMAGE_ACCURACY_GATE_FAILED: {")
-                    and '"status": "FAIL"' in str(exc)
-                )
-                if not quality_rejection or attempt + 1 >= attempts:
-                    raise
-                prompt = prompt_path.read_text(encoding="utf-8").rstrip()
-                if exclusion not in prompt:
-                    prompt_path.write_text(f"{prompt}\n\n{exclusion}\n", encoding="utf-8")
-                print(
-                    f"Historical image rejected; generating a new candidate "
-                    f"({attempt + 2}/{attempts})",
-                    flush=True,
-                )
-    finally:
-        SETTINGS["image_provider"] = original_provider
+    for attempt in range(attempts):
+        attempt_seed = seed + attempt if seed is not None else None
+        try:
+            generate(story, attempt_seed)
+            return
+        except RuntimeError as exc:
+            quality_rejection = (
+                str(exc).startswith("IMAGE_ACCURACY_GATE_FAILED: {")
+                and '"status": "FAIL"' in str(exc)
+            )
+            if not quality_rejection or attempt + 1 >= attempts:
+                raise
+            prompt = prompt_path.read_text(encoding="utf-8").rstrip()
+            if exclusion not in prompt:
+                prompt_path.write_text(f"{prompt}\n\n{exclusion}\n", encoding="utf-8")
+            print(
+                f"Historical image rejected; generating a new candidate "
+                f"({attempt + 2}/{attempts}) on the same provider",
+                flush=True,
+            )
 
 
 def main() -> None:
