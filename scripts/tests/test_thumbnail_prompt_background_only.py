@@ -19,6 +19,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[2]
 LABEL = "أحواض نقع التوت"
+LABEL_OK = "سرّ ورق سمرقند"
 TOPIC = {
     "topic_ar": "صناعة الورق في سمرقند", "angle_ar": "ليلة في ورشة ورق",
     "location_ar": "سمرقند", "period_ar": "العصر العباسي",
@@ -122,11 +123,12 @@ class PackagingCacheAndImagePromptTests(unittest.TestCase):
                 }, ensure_ascii=False), []
 
             with mock.patch.object(generate_daily, "gemini", side_effect=fake_gemini) as gem, \
+                 mock.patch.object(generate_daily.thumbnail_hook, "write_hook", return_value=LABEL_OK), \
                  mock.patch.object(generate_daily, "recent_published_packaging", return_value=[]):
                 result = generate_daily.generate_youtube_packaging(story, TOPIC)
         self.assertGreaterEqual(gem.call_count, 2)  # cache was NOT reused
         self.assertEqual(result["thumbnail_prompt"], BACKGROUND_ONLY)
-        self.assertEqual(result["thumbnail_text"], LABEL)
+        self.assertEqual(result["thumbnail_text"], LABEL_OK)
 
     def test_story_and_audio_artifacts_are_not_inputs_of_packaging(self):
         source = inspect.getsource(generate_daily.generate_youtube_packaging)

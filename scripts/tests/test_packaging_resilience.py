@@ -23,7 +23,7 @@ TOPIC = {
     "family": "الطبيعة التاريخية والبيئة",
 }
 GOOD_CORE = "ظل النخيل وماء الأفلاج في واحة خليجية"
-GOOD_TEXT = "ماء الأفلاج"
+GOOD_TEXT = "كيف جرى الماء؟"
 GOOD_PROMPT = (
     "A quiet date-palm oasis at dusk with a falaj water channel and warm lantern light, "
     "calm illustrated realism. Background scene only, no text, no logo, no watermark. "
@@ -42,6 +42,8 @@ def story(tmp_path, monkeypatch):
     rules.write_text("packaging rules", encoding="utf-8")
     monkeypatch.setattr(generate_daily, "YOUTUBE_PACKAGING_RULES_PATH", rules)
     monkeypatch.setattr(generate_daily, "recent_published_packaging", lambda limit=10: [])
+    # The hook has its own writer (covered in test_thumbnail_hook); these tests are about the other fields.
+    monkeypatch.setattr(generate_daily.thumbnail_hook, "write_hook", lambda *args, **kwargs: GOOD_TEXT)
     return folder
 
 
@@ -79,7 +81,7 @@ def test_only_the_failing_field_is_regenerated_and_valid_fields_survive(story):
 
     with mock.patch.object(generate_daily, "gemini", side_effect=fake):
         package = generate_daily.generate_youtube_packaging(story, TOPIC)
-    assert requested_keys(prompts[0]) == ["episode_title_core", "thumbnail_text", "thumbnail_prompt"]
+    assert requested_keys(prompts[0]) == ["episode_title_core", "thumbnail_prompt"]
     assert requested_keys(prompts[1]) == ["episode_title_core"]          # only the failing field
     assert package["thumbnail_text"] == GOOD_TEXT and package["thumbnail_prompt"] == GOOD_PROMPT
     assert package["episode_title_core"] == GOOD_CORE
@@ -243,7 +245,8 @@ def test_packaging_outage_parks_the_episode_and_the_next_run_resumes_packaging_o
         (package_json(episode_title_core=GOOD_CORE, thumbnail_text=GOOD_TEXT, thumbnail_prompt=GOOD_PROMPT), []),
         (PASS, []),
     ])
-    with mock.patch.object(generate_daily, "gemini", side_effect=lambda *a, **k: next(responses)) as gemini:
+    with mock.patch.object(generate_daily, "gemini", side_effect=lambda *a, **k: next(responses)) as gemini, \
+            mock.patch.object(generate_daily.thumbnail_hook, "write_hook", return_value=GOOD_TEXT):
         result = generate_daily.resume_partial_story(folder)
     assert result == folder and gemini.call_count == 2               # package + semantic gate, nothing else
     metadata = json.loads((folder / "15_metadata.json").read_text(encoding="utf-8"))

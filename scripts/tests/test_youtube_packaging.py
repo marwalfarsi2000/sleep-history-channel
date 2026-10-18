@@ -28,7 +28,7 @@ class YoutubePackagingTests(unittest.TestCase):
             "episode_title_core": "ليلة هادئة في بغداد العباسية",
             "title_suffix": "رحلة هادئة إلى الماضي 😴",
             "final_youtube_title": "ليلة هادئة في بغداد العباسية | رحلة هادئة إلى الماضي 😴",
-            "thumbnail_text": "بغداد ليلًا",
+            "thumbnail_text": "سر فانوس بغداد",
             "thumbnail_prompt": (
                 "A night scene of Baghdad marketplace with warm lanterns and historic architecture. "
                 "Background only, no text overlay. 16:9 YouTube thumbnail. Professional quality."
@@ -45,6 +45,7 @@ class YoutubePackagingTests(unittest.TestCase):
             archive = root / "archive_index.json"
             archive.write_text("[]", encoding="utf-8")
             with mock.patch.object(generate_daily, "ARCHIVE_INDEX_PATH", archive), \
+                    mock.patch.object(generate_daily.thumbnail_hook, "write_hook", return_value=package["thumbnail_text"]), \
                     mock.patch.object(
                         generate_daily, "gemini",
                         side_effect=[
