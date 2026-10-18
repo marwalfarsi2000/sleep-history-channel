@@ -87,5 +87,27 @@
     "youtube_video_id": "4zJFXMkzvMA",
     "youtube_url": "https://www.youtube.com/watch?v=4zJFXMkzvMA",
     "published_at": "2026-10-18T03:15:20.686638+04:00"
+  },
+  {
+    "identifier": "lan-tukmil-alqissa-20261018-oasis-life-gulf-falaj-pal",
+    "slug": "oasis-life-gulf-falaj-palm",
+    "title": "حياة مزارع النخيل في واحة الموتس بالخليج | رحلة هادئة إلى الماضي 😴",
+    "episode_title_core": "حياة مزارع النخيل في واحة الموتس بالخليج",
+    "title_suffix": "رحلة هادئة إلى الماضي 😴",
+    "final_youtube_title": "حياة مزارع النخيل في واحة الموتس بالخليج | رحلة هادئة إلى الماضي 😴",
+    "thumbnail_text": "سواقي واحة الموتس",
+    "thumbnail_scene_type": "الطبيعة التاريخية والبيئة",
+    "thumbnail_prompt": "Calm illustrated realism of an 18th-century Arabian oasis at dusk with subtle painterly texture and premium storybook quality; low-key night lighting with a dim lantern casting a warm glow on ancient mud-brick walls and a falaj water channel beneath towering date palms; palette of deep midnight navy, charcoal, muted warm gold, and aged ivory; one simple memorable scene focusing on a quiet irrigation stream; large simple elegant typography in soft ivory reading سواقي واحة الموتس occupying a clean dark area at the top; mobile-first strong silhouette, no people, no modern objects, no text overlaying most of the image. 16:9 YouTube thumbnail. Original composition. Professional quality.",
+    "historical_setting": "شبه الجزيرة العربية والخليج — القرن الثامن عشر الميلادي",
+    "created_at": "2026-10-18T11:11:08.269764+04:00",
+    "status": "REVIEW_PENDING",
+    "video_filename": "14_video_final.mp4",
+    "item_url": "https://archive.org/details/lan-tukmil-alqissa-20261018-oasis-life-gulf-falaj-pal",
+    "video_url": "https://archive.org/download/lan-tukmil-alqissa-20261018-oasis-life-gulf-falaj-pal/14_video_final.mp4",
+    "thumbnail_url": "https://archive.org/download/lan-tukmil-alqissa-20261018-oasis-life-gulf-falaj-pal/11_thumbnail_base.jpg",
+    "video_size": 87699801,
+    "video_sha256": "57c7af3f7a9c18b72b383f3fd1e2a561916e21440e192a5187e902f54cc259dc",
+    "audio_duration_seconds": 4941.7,
+    "video_duration_seconds": 4942.0
   }
 ]
