@@ -20,12 +20,14 @@
     },
     "lan-tukmil-alqissa-20261018-oasis-life-gulf-falaj-pal": {
       "archive_identifier": "lan-tukmil-alqissa-20261018-oasis-life-gulf-falaj-pal",
-      "approval_status": "REVIEW_PENDING",
+      "approval_status": "PUBLISHED",
       "story_path": "stories/2026-10-17_oasis-life-gulf-falaj-palm",
       "title": "حياة مزارع النخيل في واحة الموتس بالخليج | رحلة هادئة إلى الماضي 😴",
       "review_url": "https://archive.org/details/lan-tukmil-alqissa-20261018-oasis-life-gulf-falaj-pal",
       "youtube_video_id": "k-HLNiQF8xY",
-      "youtube_upload_status": "verified"
+      "youtube_upload_status": "verified",
+      "publish_blocked": null,
+      "youtube_url": "https://www.youtube.com/watch?v=k-HLNiQF8xY"
     },
     "2026-10-17_oasis-life-gulf-falaj-palm": {
       "approval_status": "MEDIA_READY",
