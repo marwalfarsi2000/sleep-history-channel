@@ -41,12 +41,14 @@
     },
     "lan-tukmil-alqissa-20261018-samarkand-paper-making-da": {
       "archive_identifier": "lan-tukmil-alqissa-20261018-samarkand-paper-making-da",
-      "approval_status": "REVIEW_PENDING",
+      "approval_status": "PUBLISHED",
       "story_path": "stories/2026-10-18_samarkand-paper-making-daily-life",
       "title": "صناعة الورق في سمـرقند العصر السـاماني | حكاية هادئة من الماضي 😴",
       "review_url": "https://archive.org/details/lan-tukmil-alqissa-20261018-samarkand-paper-making-da",
       "youtube_video_id": "lpOl9d4Ynhk",
-      "youtube_upload_status": "verified"
+      "youtube_upload_status": "verified",
+      "publish_blocked": null,
+      "youtube_url": "https://www.youtube.com/watch?v=lpOl9d4Ynhk"
     }
   }
 }
