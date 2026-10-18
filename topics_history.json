@@ -171,9 +171,8 @@
     "slug": "samarkand-paper-making-daily-life",
     "topic": "الحياة اليومية في مدينة سمرقند على طريق الحرير",
     "angle": "تتبع يوم في حياة صانع ورق من قشر التوت في ورش سمرقند التقليدية، مع خطوات النقع والهرس والتجفيف تحت أشعة الشمس في العصر الساماني.",
-    "story_path": "stories/2026-10-18_samarkand-paper-making-daily-life",
     "created_at": "2026-10-18T12:53:40.388578+04:00",
-    "status": "GENERATING",
+    "status": "REVIEW_PENDING",
     "topic_ar": "الحياة اليومية في مدينة سمرقند على طريق الحرير",
     "angle_ar": "تتبع يوم في حياة صانع ورق من قشر التوت في ورش سمرقند التقليدية، مع خطوات النقع والهرس والتجفيف تحت أشعة الشمس في العصر الساماني.",
     "search_query_en": "samarkand paper making history traditional workshop silk road",
@@ -245,6 +244,8 @@
         "الزاوية المختارة (صناعة الورق في سمرقند) تختلف تماماً عن الحلقات السابقة وتوفر بيئة حسية غنية ومستدامة.",
         "الخيط السردي واضح ومبني على تتبع عملية حرفية ملموسة تتيح للمستمع الاندماج الهادئ والانتقال التدريجي نحو النوم."
       ]
-    }
+    },
+    "archive_identifier": "lan-tukmil-alqissa-20261018-samarkand-paper-making-da",
+    "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261018-samarkand-paper-making-da"
   }
 ]
