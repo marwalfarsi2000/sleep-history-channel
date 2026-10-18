@@ -1335,10 +1335,8 @@ def voice_metadata() -> dict:
     }
 
 def mix_background_audio(narration: Path, output: Path) -> None:
-    configured = SETTINGS.get("background_audio_file", "")
-    background = (ROOT / configured).resolve() if configured else None
-    if not background or not background.exists() or background.stat().st_size <= 1024:
-        raise RuntimeError(f"Background audio is missing or empty: {background}")
+    import background_audio
+    background = background_audio.ensure_background_audio(ROOT, SETTINGS.get("background_audio_file")).resolve()
     volume = float(SETTINGS.get("background_audio_volume", 0.15))
     if not 0.0 <= volume <= 1.0:
         raise RuntimeError(f"Invalid background_audio_volume: {volume}")

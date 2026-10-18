@@ -546,6 +546,7 @@ def generate(story: Path, seed: int | None = None) -> None:
                 thumbnail, format="JPEG", quality=94, optimize=True
             )
             thumbnail_status = "legacy_no_text"
+        LAST_ATTEMPT.update(provider=actual_provider, model=actual_model)
         accuracy = historical_accuracy_gate(background, original_prompt, secret_values)
     finally:
         temporary.unlink(missing_ok=True)
@@ -580,40 +581,124 @@ def generate(story: Path, seed: int | None = None) -> None:
     print(json.dumps({"status": "ok", "provider": actual_provider, "model": actual_model, "seed": seed}))
 
 
+LAST_ATTEMPT: dict = {}  # provider/model of the attempt in progress, for the attempt log
+
+
+MODERN_EXCLUSION = (
+    "STRICT HISTORICAL EXCLUSION: no electricity, utility poles, power lines, "
+    "overhead wires, insulators, streetlights, vehicles, antennas, asphalt, "
+    "or any other modern infrastructure."
+)
+NO_TEXT_EXCLUSION = (
+    "NO TEXT ANYWHERE: no letters, no words, no numbers, no signs, no inscriptions, no calligraphy, "
+    "no logos, no watermarks and no glyph-like markings on any surface."
+)
+PERIOD_EXCLUSION = "Only period-correct architecture, clothing, tools and materials; no fantasy elements."
+TOPIC_MATCH_REQUIREMENT = "Show the described scene plainly and centrally; do not substitute another place or subject."
+PROMPT_LIMIT = 1990  # Cloudflare refuses prompts over 2048 characters; never truncate silently
+
+
+def rejection_gate(error: Exception) -> dict:
+    """The accuracy gate's verdict carried inside the error message ({} when unreadable)."""
+    text = str(error)
+    if not text.startswith("IMAGE_ACCURACY_GATE_FAILED: {"):
+        return {}
+    try:
+        value = json.loads(text.split(": ", 1)[1])
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def corrective_lines(gate: dict) -> list[str]:
+    """Targeted instructions for the reason the last image was rejected, most important first."""
+    failed = {key for key in ("no_text_or_watermark", "no_modern_objects", "historically_plausible", "topic_match")
+              if gate.get(key) is False}
+    if not failed:  # a bare FAIL names no reason: tighten both common causes
+        failed = {"no_text_or_watermark", "no_modern_objects"}
+    lines: list[str] = []
+    if "no_text_or_watermark" in failed:
+        lines.append(NO_TEXT_EXCLUSION)
+    if "no_modern_objects" in failed:
+        lines.append(MODERN_EXCLUSION)
+    if "historically_plausible" in failed:
+        lines.append(PERIOD_EXCLUSION)
+    if "topic_match" in failed:
+        lines.append(TOPIC_MATCH_REQUIREMENT)
+    return lines
+
+
+def tighten_prompt(prompt: str, gate: dict) -> str:
+    """Append only the missing corrective lines that still fit under the provider's prompt limit."""
+    result = prompt.rstrip()
+    for line in corrective_lines(gate):
+        if line in result:
+            continue
+        if len(result) + 2 + len(line) > PROMPT_LIMIT:
+            print("Corrective image instruction skipped: the prompt would exceed the provider limit", flush=True)
+            continue
+        result = f"{result}\n\n{line}"
+    return result + "\n"
+
+
+def _record_attempt(story: Path, record: dict) -> None:
+    path = story / "logs" / "image_attempts.json"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        attempts = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+        attempts.append(record)
+        path.write_text(json.dumps(attempts, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except (OSError, ValueError):
+        pass
+
+
+def _attach_attempts_to_metadata(story: Path) -> None:
+    try:
+        attempts = json.loads((story / "logs" / "image_attempts.json").read_text(encoding="utf-8"))
+        path = story / "15_metadata.json"
+        metadata = json.loads(path.read_text(encoding="utf-8"))
+        metadata["image_attempts"] = attempts
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(path)
+    except (OSError, ValueError):
+        pass
+
+
 def generate_with_accuracy_retries(story: Path, seed: int | None = None) -> None:
     """Retry on historical-accuracy rejections without changing provider.
 
     A QUALITY_REJECTION (the provider returned a valid image that the accuracy
-    gate refused) is retried on the same provider with the strict exclusion
-    prompt. Only a PROVIDER_FAILURE inside generate() may use the configured
-    fallback, so a rejected image never moves production to a paid-capacity
-    provider.
+    gate refused) is retried on the same provider with a corrective prompt aimed at the
+    gate's actual reason (text/watermark, modern objects, period, topic). Only a
+    PROVIDER_FAILURE inside generate() may use the configured fallback, so a rejected
+    image never moves production to a paid-capacity provider. Every attempt is logged
+    with its provider and model; only the image is regenerated, never earlier stages.
     """
     attempts = max(1, int(SETTINGS.get("image_accuracy_retry_attempts", 3)))
     prompt_path = story / "08_image_prompt_en.txt"
-    exclusion = (
-        "STRICT HISTORICAL EXCLUSION: no electricity, utility poles, power lines, "
-        "overhead wires, insulators, streetlights, vehicles, antennas, asphalt, "
-        "or any other modern infrastructure."
-    )
     for attempt in range(attempts):
         attempt_seed = seed + attempt if seed is not None else None
+        LAST_ATTEMPT.clear()
         try:
             generate(story, attempt_seed)
+            _record_attempt(story, {"attempt": attempt + 1, "outcome": "passed", **LAST_ATTEMPT})
+            _attach_attempts_to_metadata(story)
             return
         except RuntimeError as exc:
-            quality_rejection = (
-                str(exc).startswith("IMAGE_ACCURACY_GATE_FAILED: {")
-                and '"status": "FAIL"' in str(exc)
-            )
+            gate = rejection_gate(exc)
+            quality_rejection = bool(gate) and gate.get("status") == "FAIL"
+            _record_attempt(story, {
+                "attempt": attempt + 1, "outcome": "quality_rejection" if quality_rejection else "failed",
+                "error": str(exc)[:300] if not quality_rejection else "", "gate": gate if quality_rejection else {},
+                **LAST_ATTEMPT,
+            })
             if not quality_rejection or attempt + 1 >= attempts:
                 raise
-            prompt = prompt_path.read_text(encoding="utf-8").rstrip()
-            if exclusion not in prompt:
-                prompt_path.write_text(f"{prompt}\n\n{exclusion}\n", encoding="utf-8")
+            prompt_path.write_text(tighten_prompt(prompt_path.read_text(encoding="utf-8"), gate), encoding="utf-8")
             print(
-                f"Historical image rejected; generating a new candidate "
-                f"({attempt + 2}/{attempts}) on the same provider",
+                f"Historical image rejected ({', '.join(k for k, v in gate.items() if v is False) or 'unspecified'}); "
+                f"generating a new candidate ({attempt + 2}/{attempts}) on the same provider",
                 flush=True,
             )
 

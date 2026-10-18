@@ -16,6 +16,10 @@ on:
     # 12:30 Dubai (08:30 UTC): always after the Gemini daily quota reset
     # (midnight Pacific = 07:00 UTC in summer, 08:00 UTC in winter).
     - cron: "30 8 * * *"
+    # Resume-only passes (never start a new topic): finish an unfinished episode whose
+    # quota window has reopened, without a runner waiting for hours.
+    - cron: "30 14 * * *"
+    - cron: "30 20 * * *"
 
 permissions:
   actions: read
@@ -72,9 +76,14 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SLEEP_HISTORY_DURABLE_CHECKPOINTS: "1"
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
         run: |
           if [[ "${{ inputs.resume_archive_only }}" == "true" ]]; then
             python scripts/cloud_pipeline.py resume-review
+          elif [[ "$EVENT_NAME" == "schedule" && "$EVENT_SCHEDULE" != "30 8 * * *" ]]; then
+            python scripts/cloud_pipeline.py produce --resume-only
           else
             python scripts/cloud_pipeline.py produce
           fi
@@ -114,7 +123,7 @@ jobs:
             !stories/**/*.m4a
           include-hidden-files: true
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 30
       - name: Persist runtime and episode state to automation-state branch
         if: always()
         run: python scripts/git_sync.py

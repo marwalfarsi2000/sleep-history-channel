@@ -49,8 +49,8 @@ def run(responses, topic=TOPIC):
 
 
 class OutlineRetryTests(unittest.TestCase):
-    def test_retry_limit_constant(self) -> None:
-        self.assertEqual(generate_daily.OUTLINE_RETRY_MAX, 3)
+    def test_model_call_limit_constant(self) -> None:
+        self.assertEqual(generate_daily.OUTLINE_MAX_MODEL_CALLS, 4)
 
     def test_1_valid_first_attempt_single_call(self) -> None:
         good = outline()
@@ -74,41 +74,48 @@ class OutlineRetryTests(unittest.TestCase):
         self.assertIn("Outline must contain 7-10 macro sections", gem.call_args_list[1].args[0])
         self.assertIn("Previous outline failed validation", gem.call_args_list[1].args[0])
 
-    def test_4_bad_phase_order_then_valid(self) -> None:
+    def test_4_bad_phase_order_is_repaired_locally_without_a_second_call(self) -> None:
         bad = outline()
         bad[2]["phase"], bad[5]["phase"] = bad[5]["phase"], bad[2]["phase"]
-        _, gem = run([reply(bad), reply(outline())])
-        self.assertEqual(gem.call_count, 2)
+        sections, gem = run([reply(bad)])
+        self.assertEqual(gem.call_count, 1)
+        generate_daily.validate_outline_sections(sections)
 
-    def test_5_missing_scene_field_then_valid(self) -> None:
+    def test_5_unrecoverable_missing_scene_field_goes_back_to_the_model(self) -> None:
         bad = outline()
         del bad[3]["scenes"][0]["main_idea"]
+        del bad[3]["scenes"][0]["action"]
         _, gem = run([reply(bad), reply(outline())])
         self.assertEqual(gem.call_count, 2)
         self.assertIn("main_idea", gem.call_args_list[1].args[0])
 
     def test_scene_count_bounds_still_enforced(self) -> None:
-        for scenes in ([scene()], [scene(i) for i in range(5)]):
-            bad = outline()
-            bad[1]["scenes"] = scenes
-            _, gem = run([reply(bad), reply(outline())])
-            self.assertEqual(gem.call_count, 2)
+        bad = outline()
+        bad[1]["scenes"] = [scene()]  # one scene would need invented content: model correction
+        _, gem = run([reply(bad), reply(outline())])
+        self.assertEqual(gem.call_count, 2)
+        self.assertIn("sections 2 (has 1)", gem.call_args_list[1].args[0])
+        # Extra scenes are a structural problem: cut locally, no second call.
+        bad = outline()
+        bad[1]["scenes"] = [scene(i) for i in range(5)]
+        sections, gem = run([reply(bad)])
+        self.assertEqual((gem.call_count, len(sections[1]["scenes"])), (1, 4))
 
     def test_non_object_responses_are_validation_failures(self) -> None:
         _, gem = run([("[1, 2]", []), reply([1, 2, 3]), reply(outline())])
         self.assertEqual(gem.call_count, 3)
 
-    def test_6_three_malformed_fail_with_last_error(self) -> None:
+    def test_6_all_malformed_fail_with_last_error_after_the_call_limit(self) -> None:
         with self.assertRaisesRegex(RuntimeError, r"OUTLINE_GENERATION_FAILED_AFTER_RETRIES: JSONDecodeError") as ctx:
-            run([MALFORMED] * 3)
-        self.assertEqual(ctx.exception.gem.call_count, 3)
+            run([MALFORMED] * 4)
+        self.assertEqual(ctx.exception.gem.call_count, 4)
 
-    def test_7_three_validation_failures_fail_with_last_error(self) -> None:
+    def test_7_unrepairable_validation_failures_fail_with_last_error(self) -> None:
         with self.assertRaisesRegex(
             RuntimeError, r"OUTLINE_GENERATION_FAILED_AFTER_RETRIES: Outline must contain 7-10 macro sections"
         ) as ctx:
-            run([reply(outline(6))] * 3)
-        self.assertEqual(ctx.exception.gem.call_count, 3)
+            run([reply(outline(6))] * 4)
+        self.assertEqual(ctx.exception.gem.call_count, 4)
 
     def test_8_returns_last_successful_not_an_earlier_attempt(self) -> None:
         first, second = outline(6), outline(10)
@@ -151,7 +158,16 @@ class OutlineRetryTests(unittest.TestCase):
         self.assertNotIn("بحث", written)
 
 
+def passthrough_alignment(story, topic, research, sources, history_path):
+    return topic, research, sources
+
+
 class ResumeStillReusesWorkTests(unittest.TestCase):
+    def setUp(self) -> None:
+        patcher = mock.patch.object(generate_daily, "ensure_research_alignment", side_effect=passthrough_alignment)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _story(self, root: Path) -> Path:
         story = root / "stories" / "2026-10-18_samarkand-paper-making-daily-life"
         (story / "logs").mkdir(parents=True)

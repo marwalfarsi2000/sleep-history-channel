@@ -14,7 +14,7 @@ from pathlib import Path, PurePosixPath
 
 from state_machine import ACTIVE_STATES, State, normalize_state
 
-ZOMBIE_AFTER_DAYS = 7
+ZOMBIE_AFTER_DAYS = 30  # matches failure-artifact retention; a durable checkpoint covers the rest
 UPLOAD_INCOMPLETE = {State.REVIEW_PENDING, State.MEDIA_READY}
 LEGACY_PENDING = {"pending_approval"}
 
@@ -85,3 +85,24 @@ def active_episode(history: list[dict], root: Path, state_episodes: dict | None 
                     return record
     # 2. latest valid unfinished record (history is append-ordered).
     return valid[-1]
+
+
+def migrate_zombie_records(history: list[dict], root: Path, now: dt.datetime | None = None) -> list[str]:
+    """Retire unfinished records that can never be resumed, once, with an audit trail.
+
+    A zombie has no story folder and no usable ``created_at`` (or is older than the retention
+    window). It becomes ``ABANDONED_LEGACY`` so it stops producing a warning on every run. History
+    is never deleted, and records with a folder, a recent ``created_at`` or an archive item are
+    untouched. Idempotent: an already migrated record is skipped. Returns the migrated slugs.
+    """
+    migrated: list[str] = []
+    stamp = (now or dt.datetime.now(dt.timezone.utc)).isoformat()
+    for record in history:
+        if not is_unfinished(record) or is_valid_checkpoint(record, root, now, quiet=True):
+            continue
+        record["status_before_migration"] = record.get("status")
+        record["status"] = State.ABANDONED_LEGACY
+        record["migrated_at"] = stamp
+        record["migration_reason"] = "zombie checkpoint: no story folder and no usable created_at / past retention"
+        migrated.append(str(record.get("slug") or ""))
+    return migrated

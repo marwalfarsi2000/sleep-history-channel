@@ -123,9 +123,24 @@ def public_file_url(identifier: str, filename: str) -> str:
     )
 
 
+TRANSIENT_HTTP = frozenset({408, 425, 429, 500, 502, 503, 504})
+TRANSIENT_ERRORS = (urllib.error.URLError, TimeoutError, ConnectionError)
+
+
+def is_transient_archive_error(exc: Exception) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in TRANSIENT_HTTP
+    return isinstance(exc, TRANSIENT_ERRORS)
+
+
 def archive_metadata(identifier: str) -> dict:
-    with urllib.request.urlopen(f"https://archive.org/metadata/{identifier}", timeout=60) as response:
-        return json.loads(response.read().decode("utf-8"))
+    """Item metadata, with bounded retries for 5xx/429/timeouts (404 and other 4xx fail at once)."""
+    def fetch() -> dict:
+        with urllib.request.urlopen(f"https://archive.org/metadata/{identifier}", timeout=60) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    from error_classifier import retry_transient
+    return retry_transient(fetch, max_retries=3, initial_delay=2.0)
 
 
 def wait_for_remote_file(
@@ -147,8 +162,8 @@ def wait_for_remote_file(
             remote = files.get(filename)
             if remote and int(remote.get("size") or 0) > 0:
                 candidates.append(remote)
-        except urllib.error.HTTPError as exc:
-            if exc.code != 404:
+        except (urllib.error.HTTPError, *TRANSIENT_ERRORS) as exc:
+            if not (isinstance(exc, urllib.error.HTTPError) and exc.code == 404) and not is_transient_archive_error(exc):
                 raise
             last_error = exc
 
@@ -158,8 +173,8 @@ def wait_for_remote_file(
                 remote_size = int(response.headers.get("Content-Length") or 0)
             if remote_size > 0:
                 candidates.append({"size": remote_size})
-        except urllib.error.HTTPError as exc:
-            if exc.code != 404:
+        except (urllib.error.HTTPError, *TRANSIENT_ERRORS) as exc:
+            if not (isinstance(exc, urllib.error.HTTPError) and exc.code == 404) and not is_transient_archive_error(exc):
                 raise
             last_error = exc
 

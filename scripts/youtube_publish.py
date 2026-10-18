@@ -167,6 +167,69 @@ def credentials() -> Credentials:
     )
 
 
+def _record_remote_fields(identifier: str, fields: dict) -> None:
+    """Best-effort durable note on Internet Archive and automation-state (never raises)."""
+    try:
+        import state_store
+        state_store.save_episode_for_archive(identifier, dict(fields))
+    except Exception as exc:
+        print(f"Warning: automation-state update for {identifier} failed: {exc}")
+    access, secret = os.environ.get("IAS3_ACCESS_KEY", ""), os.environ.get("IAS3_SECRET_KEY", "")
+    if not access or not secret:
+        return
+    try:
+        from archive_storage import get_archive_item
+        from error_classifier import retry_transient
+        retry_transient(lambda: get_archive_item(identifier, access_key=access, secret_key=secret).modify_metadata(dict(fields)))
+    except Exception as exc:
+        print(f"Warning: archive metadata update for {identifier} failed: {type(exc).__name__}")
+
+
+def record_upload_intent(identifier: str, status: str) -> None:
+    """Written BEFORE videos.insert: if the runner dies mid-upload the next run knows a video may exist."""
+    _record_remote_fields(identifier, {"youtube_upload_status": status})
+
+
+def upload_intent_pending(identifier: str, metadata: dict) -> bool:
+    if str(metadata.get("youtube_upload_status") or "") == "inserting":
+        return True
+    try:
+        import state_store
+        for episode in (state_store._load_state().get("episodes") or {}).values():
+            if episode.get("archive_identifier") == identifier and episode.get("youtube_upload_status") == "inserting":
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def set_thumbnail_safely(youtube, identifier: str, video_id: str, thumbnail: Path) -> bool:
+    """The video already exists: a thumbnail problem is retried, recorded and never creates a second video."""
+    from error_classifier import retry_transient
+    try:
+        retry_transient(lambda: youtube.thumbnails().set(
+            videoId=video_id, media_body=MediaFileUpload(str(thumbnail), mimetype="image/jpeg")).execute())
+    except Exception as exc:
+        print(f"Warning: YouTube thumbnail upload failed ({type(exc).__name__}); the video is kept: {video_id}")
+        _record_remote_fields(identifier, {"youtube_thumbnail_status": "failed"})
+        return False
+    _record_remote_fields(identifier, {"youtube_thumbnail_status": "set"})
+    return True
+
+
+def retry_missing_thumbnail(youtube, identifier: str, video_id: str, metadata: dict) -> None:
+    if str(metadata.get("youtube_thumbnail_status") or "") != "failed":
+        return
+    with tempfile.TemporaryDirectory(prefix="sleep-history-thumbnail-") as folder:
+        thumbnail = Path(folder) / "thumbnail.jpg"
+        try:
+            download(identifier, "11_thumbnail_base.jpg", thumbnail)
+        except Exception as exc:
+            print(f"Warning: thumbnail retry could not download the image: {type(exc).__name__}")
+            return
+        set_thumbnail_safely(youtube, identifier, video_id, thumbnail)
+
+
 def pending_youtube_record_path(identifier: str) -> Path:
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]
@@ -301,6 +364,7 @@ def publish_archive_item(identifier: str) -> dict:
     if existing:
         outcome = resume_existing(youtube, identifier, existing, mode, granted)
         if outcome is not None:
+            retry_missing_thumbnail(youtube, identifier, outcome.get("video_id") or existing, metadata)
             return outcome
 
     title = read_text(identifier, "01_title.txt")
@@ -333,6 +397,19 @@ def publish_archive_item(identifier: str) -> dict:
                         return outcome
         except Exception as search_exc:
             print(f"Warning: YouTube search discovery failed: {search_exc}")
+        if not granted & READ_SCOPES and upload_intent_pending(identifier, metadata):
+            # A previous attempt started videos.insert and never recorded a video ID, and this token
+            # cannot search YouTube to check. YouTube has no idempotency key, so never guess.
+            return {
+                "requires_owner_action": True,
+                "status": "OWNER_ACTION_REQUIRED",
+                "action": "REAUTHORIZE_YOUTUBE_OAUTH_WITH_READ_SCOPE",
+                "mode": mode,
+                "video_id": None,
+                "uploaded": False,
+                "reason": "A previous upload may have created the video; without a read scope it cannot be "
+                          "verified, so a second copy is not uploaded. Check the channel, or re-authorize with a read scope.",
+            }
 
     with tempfile.TemporaryDirectory(prefix="sleep-history-youtube-") as folder:
         directory = Path(folder)
@@ -344,6 +421,7 @@ def publish_archive_item(identifier: str) -> dict:
             raise RuntimeError("Downloaded archive video is empty")
 
         privacy = "public" if mode == MODE_DIRECT_PUBLIC else "private"
+        record_upload_intent(identifier, "inserting")
         request = youtube.videos().insert(
             part="snippet,status",
             body={
@@ -353,18 +431,20 @@ def publish_archive_item(identifier: str) -> dict:
             media_body=MediaFileUpload(str(video), mimetype="video/mp4", resumable=True, chunksize=8 * 1024 * 1024),
         )
         response = None
-        while response is None:
-            _, response = request.next_chunk()
+        try:
+            while response is None:
+                _, response = request.next_chunk()
+        except HttpError as exc:
+            if 400 <= getattr(exc.resp, "status", 0) < 500:
+                record_upload_intent(identifier, "rejected")  # YouTube refused it outright: nothing was created
+            raise
         video_id = response.get("id")
         if not video_id:
             raise RuntimeError("YouTube upload finished without a video ID")
         save_pending_youtube_id(identifier, video_id)
         record_remote_upload(identifier, video_id, "processing")
 
-        youtube.thumbnails().set(
-            videoId=video_id,
-            media_body=MediaFileUpload(str(thumbnail), mimetype="image/jpeg"),
-        ).execute()
+        set_thumbnail_safely(youtube, identifier, video_id, thumbnail)
 
         if mode == MODE_DIRECT_PUBLIC and not granted & READ_SCOPES:
             record_remote_upload(identifier, video_id, "verified")

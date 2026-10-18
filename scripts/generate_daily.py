@@ -16,6 +16,8 @@ from pathlib import Path
 
 import episode_selection
 import llm_router
+import outline_repair
+import research_alignment
 import run_summary
 import state_store
 
@@ -276,7 +278,10 @@ STORY_FORMATS = (
 STORY_PHASES = ("CALM_HOOK", "EXPLORATION", "SETTLE", "UNWIND", "SOFT_FADE")
 MIN_MACRO_SECTIONS, MAX_MACRO_SECTIONS = 7, 10
 MAX_SAME_FORMAT_IN_A_ROW = 2
-OUTLINE_RETRY_MAX = 3
+# Model calls, not blind retries: generate, then up to two targeted corrections that
+# list every error at once, then one full regeneration. Local repair runs before each rejection.
+OUTLINE_MAX_MODEL_CALLS = 4
+OUTLINE_RETRY_MAX = OUTLINE_MAX_MODEL_CALLS
 MIN_OUTLINE_TARGET_WORDS = 5500
 CHAPTER_EXPANSION_ATTEMPTS = 3
 
@@ -327,37 +332,54 @@ class OutlineValidationError(RuntimeError):
     """The outline parsed but violates the required schema."""
 
 
-def validate_outline_sections(sections: list[dict]) -> list[dict]:
+def collect_outline_errors(sections: object) -> list[str]:
+    """Every schema violation at once, in a stable order (count first)."""
+    errors: list[str] = []
     if not isinstance(sections, list) or not MIN_MACRO_SECTIONS <= len(sections) <= MAX_MACRO_SECTIONS:
-        raise OutlineValidationError(
-            f"Outline must contain {MIN_MACRO_SECTIONS}-{MAX_MACRO_SECTIONS} macro sections"
-        )
+        errors.append(f"Outline must contain {MIN_MACRO_SECTIONS}-{MAX_MACRO_SECTIONS} macro sections")
+    if not isinstance(sections, list) or not sections:
+        return errors
     if not all(isinstance(section, dict) for section in sections):
-        raise OutlineValidationError("Every outline section must be an object")
+        errors.append("Every outline section must be an object")
+        return errors
     phases = [str(section.get("phase", "")).strip() for section in sections]
     if phases[0] != "CALM_HOOK" or phases[-1] != "SOFT_FADE":
-        raise OutlineValidationError("Outline must start with CALM_HOOK and end with SOFT_FADE")
+        errors.append("Outline must start with CALM_HOOK and end with SOFT_FADE")
     if any(phase not in STORY_PHASES for phase in phases):
-        raise OutlineValidationError("Outline contains an unknown phase")
-    indexes = [STORY_PHASES.index(phase) for phase in phases]
-    if indexes != sorted(indexes) or set(phases) != set(STORY_PHASES):
-        raise OutlineValidationError("Outline must cover all five phases in order")
-    for section in sections:
+        errors.append("Outline contains an unknown phase")
+    elif [STORY_PHASES.index(phase) for phase in phases] != sorted(STORY_PHASES.index(phase) for phase in phases) \
+            or set(phases) != set(STORY_PHASES):
+        errors.append("Outline must cover all five phases in order")
+    bad_counts: list[str] = []
+    bad_scenes: list[str] = []
+    for number, section in enumerate(sections, 1):
         scenes = section.get("scenes")
         if not isinstance(scenes, list) or not 2 <= len(scenes) <= 4:
-            raise OutlineValidationError("Every outline section needs 2-4 scenes")
-        for scene in scenes:
+            bad_counts.append(f"{number} (has {len(scenes) if isinstance(scenes, list) else 'none'})")
+            continue
+        for scene_number, scene in enumerate(scenes, 1):
             if not isinstance(scene, dict):
-                raise OutlineValidationError("Every scene must be an object")
-            if not all(str(scene.get(key, "")).strip() for key in ("place_or_anchor", "main_idea", "transition")):
-                raise OutlineValidationError("Every scene needs place_or_anchor, main_idea and transition")
+                errors.append("Every scene must be an object")
+                continue
+            missing = [k for k in ("place_or_anchor", "main_idea", "transition") if not str(scene.get(k, "")).strip()]
+            if missing:
+                bad_scenes.append(f"section {number} scene {scene_number}: {', '.join(missing)}")
+    if bad_counts:
+        errors.append(f"Every outline section needs 2-4 scenes [sections {', '.join(bad_counts)}]")
+    if bad_scenes:
+        errors.append(f"Every scene needs place_or_anchor, main_idea and transition [{'; '.join(bad_scenes)}]")
     targets = [section.get("target_words") for section in sections]
     if not all(isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in targets):
-        raise OutlineValidationError("Every outline section needs a positive integer target_words")
-    if sum(targets) < MIN_OUTLINE_TARGET_WORDS:
-        raise OutlineValidationError(
-            f"Outline target_words total is {sum(targets)}; minimum is {MIN_OUTLINE_TARGET_WORDS}"
-        )
+        errors.append("Every outline section needs a positive integer target_words")
+    elif sum(targets) < MIN_OUTLINE_TARGET_WORDS:
+        errors.append(f"Outline target_words total is {sum(targets)}; minimum is {MIN_OUTLINE_TARGET_WORDS}")
+    return errors
+
+
+def validate_outline_sections(sections: list[dict]) -> list[dict]:
+    errors = collect_outline_errors(sections)
+    if errors:
+        raise OutlineValidationError("; ".join(errors))
     return sections
 
 
@@ -415,6 +437,7 @@ def upsert_history_checkpoint(history_path: Path, story: Path, topic: dict, stat
         "soft_narrative_spine", "gentle_curiosity", "attentional_anchor",
         "sensory_potential_notes", "tension_risks", "reentry_plan",
         "long_form_capacity", "difference_from_recent", "scores", "selection_gate",
+        *research_alignment.METADATA_KEYS,
     ):
         if topic.get(key):
             record[key] = topic[key]
@@ -957,10 +980,11 @@ def make_outline(topic: dict, research: str) -> list[dict]:
 """
     feedback = ""
     last_error = ""
-    for attempt in range(1, OUTLINE_RETRY_MAX + 1):
-        # Every retry asks for a complete new outline; only the short error
-        # reason is added, never the previous raw response.
-        text, _ = gemini(prompt + feedback, json_mode=True, max_tokens=6000, temperature=0.3)
+    for attempt in range(1, OUTLINE_MAX_MODEL_CALLS + 1):
+        # A retry never resends the previous raw response: only a compact structural
+        # summary and the complete list of validation errors.
+        final = attempt == OUTLINE_MAX_MODEL_CALLS
+        text, _ = gemini(prompt + feedback, json_mode=True, max_tokens=6000, temperature=0.5 if final else 0.3)
         try:
             result = parse_json(text)
         except ValueError as exc:  # json.JSONDecodeError is a ValueError
@@ -971,20 +995,38 @@ def make_outline(topic: dict, research: str) -> list[dict]:
                 "JSON object only. Do not use Markdown, code fences, commentary, or text outside the JSON object."
             )
             continue
-        try:
-            if not isinstance(result, dict):
-                raise OutlineValidationError("Outline response must be a JSON object with a sections list")
-            sections = validate_outline_sections(result.get("sections") or [])
-        except OutlineValidationError as exc:
-            last_error = str(exc)[:300]
-            print(f"OUTLINE_ATTEMPT={attempt} PARSE=PASS VALIDATION=FAIL ERROR={last_error}", file=sys.stderr, flush=True)
-            feedback = (
-                f"\n\nPrevious outline failed validation: {last_error}. Return one complete corrected "
-                "outline matching the required schema exactly."
+        if not isinstance(result, dict):
+            errors = ["Outline response must be a JSON object with a sections list"]
+            sections = None
+            repairs: list[str] = []
+        else:
+            sections, repairs = outline_repair.repair_outline(
+                result.get("sections") or [], phases=STORY_PHASES,
+                min_sections=MIN_MACRO_SECTIONS, max_sections=MAX_MACRO_SECTIONS,
+                min_scenes=2, max_scenes=4, min_total_words=MIN_OUTLINE_TARGET_WORDS,
             )
-            continue
-        print(f"OUTLINE_ATTEMPT={attempt} PARSE=PASS VALIDATION=PASS ERROR=", file=sys.stderr, flush=True)
-        return sections
+            errors = collect_outline_errors(sections)
+        if repairs:
+            print(f"OUTLINE_LOCAL_REPAIRS={len(repairs)} {' | '.join(repairs)[:600]}", file=sys.stderr, flush=True)
+        if not errors:
+            print(f"OUTLINE_ATTEMPT={attempt} PARSE=PASS VALIDATION=PASS ERROR=", file=sys.stderr, flush=True)
+            return sections
+        last_error = "; ".join(errors)[:600]
+        print(f"OUTLINE_ATTEMPT={attempt} PARSE=PASS VALIDATION=FAIL ERROR={last_error}", file=sys.stderr, flush=True)
+        summary = json.dumps([
+            {"n": number, "title": str(section.get("title", ""))[:60], "phase": section.get("phase"),
+             "scenes": len(section.get("scenes") or []) if isinstance(section.get("scenes"), list) else 0,
+             "target_words": section.get("target_words")}
+            for number, section in enumerate(sections if isinstance(sections, list) else [], 1)
+            if isinstance(section, dict)
+        ], ensure_ascii=False)
+        feedback = (
+            f"\n\nPrevious outline failed validation: {last_error}.\n"
+            f"VALIDATION_ERRORS = {json.dumps(errors, ensure_ascii=False)}\n"
+            f"Previous outline structure (for reference): {summary}\n"
+            "Return one complete corrected outline that fixes ALL of the errors above at once and matches "
+            "the required schema exactly."
+        )
     raise RuntimeError(f"OUTLINE_GENERATION_FAILED_AFTER_RETRIES: {last_error}")
 
 
@@ -1062,6 +1104,8 @@ def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path)
 
 def resume_partial_story(story: Path) -> Path:
     _remember_story(story)
+    if (story / "logs/topic.json").exists():
+        run_summary.update(checkpoint_saved=True)  # the saved topic is already a resumable checkpoint
     topic_path = story / "logs/topic.json"
     outline_path = story / "logs/outline.json"
     if not topic_path.exists():
@@ -1078,6 +1122,9 @@ def resume_partial_story(story: Path) -> Path:
         research, sources = research_topic(topic, story)
         write(research_path, research)
         write(sources_path, json.dumps(sources, ensure_ascii=False, indent=2))
+    if not (story / "logs/final_story_after_gates.md").exists():  # a finished story is past this gate
+        topic, research, sources = ensure_research_alignment(
+            story, topic, research, sources, ROOT / "config/topics_history.json")
     if outline_path.exists():
         sections = json.loads(outline_path.read_text(encoding="utf-8"))["sections"]
         run_summary.reused("outline")
@@ -1085,13 +1132,16 @@ def resume_partial_story(story: Path) -> Path:
         run_summary.stage("outline")
         sections = make_outline(topic, research)
         write(outline_path, json.dumps({"sections": sections}, ensure_ascii=False, indent=2))
+        durable_checkpoint(story, "outline", "chapters")
     run_summary.stage("chapters")
     draft = draft_story(topic, research, sections, story / "logs")
     if word_count(draft) < 5000:
         raise RuntimeError(f"Generated story is too short: {word_count(draft)} Arabic words")
     write(story / "logs/assembled_story.md", draft)
+    durable_checkpoint(story, "chapters", "quality_gates")
     run_summary.stage("quality_gates")
     story_text, quality_gate, fact_check = finalize_story_text(story, topic, research, draft)
+    durable_checkpoint(story, "quality_gates", "packaging")
     build_metadata_files(story, topic, research, sources, story_text, quality_gate, fact_check)
     history_path = ROOT / "config/topics_history.json"
     from state_machine import State
@@ -1498,6 +1548,7 @@ PIPELINE SCENE RENDER: Generate the historical scene and reserved dark text area
         "tts_model": "Microsoft Edge neural TTS free fallback",
         "research_sources_count": len(sources),
         "topic_gate_status": "passed",
+        **{key: topic.get(key) for key in research_alignment.METADATA_KEYS},
         "grounded_research_status": "passed",
         "source_validation_status": "passed",
         "language_gate_status": "passed",
@@ -1523,10 +1574,76 @@ PIPELINE SCENE RENDER: Generate the historical scene and reserved dark text area
     write(story / "15_metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2))
 
 
+def durable_checkpoint(story: Path, completed: str, next_stage: str | None) -> None:
+    """Record a real checkpoint in the run summary and copy its small text state to automation-state.
+
+    Best effort: a persistence problem is a warning, never a production failure.
+    """
+    relative = story.relative_to(ROOT).as_posix() if story.is_relative_to(ROOT) else str(story)
+    run_summary.mark_checkpoint(relative, completed, next_stage)
+    if os.environ.get("SLEEP_HISTORY_DURABLE_CHECKPOINTS") == "1":
+        try:
+            state_store.save_story_checkpoint(story)
+        except Exception as exc:
+            print(f"Warning: durable checkpoint not saved: {exc}", file=sys.stderr, flush=True)
+
+
+ALIGNMENT_DOWNSTREAM = ("outline.json", "assembled_story.md", "content_gates.json", "final_story_after_gates.md")
+
+
+def ensure_research_alignment(
+    story: Path, topic: dict, research: str, sources: list[dict], history_path: Path,
+) -> tuple[dict, str, list[dict]]:
+    """Hard gate between research and outline: the sources must support the episode's angle."""
+    run_summary.stage("research_alignment")
+    logs = story / "logs"
+    extra_sources: list[dict] = []
+
+    def search_more(adjusted: dict) -> str:
+        try:
+            extra, found = research_topic(adjusted, story)
+        except llm_router.LlmQuotaWaiting:
+            raise
+        except RuntimeError as error:
+            if not str(error).startswith(("SOURCE_VALIDATION_FAILED", "GROUNDED_RESEARCH_UNAVAILABLE")):
+                raise
+            return ""  # no extra evidence found: the gate decides on what it has
+        extra_sources.extend(found)
+        return extra
+
+    before = research_alignment.topic_view(topic)
+    new_topic, new_research, record = research_alignment.run_gate(
+        gemini, parse_json, topic, research, cache_path=logs / "research_topic_alignment.json",
+        search_more=search_more,
+    )
+    if new_research != research:
+        sources = sources + [item for item in extra_sources if item not in sources]
+        write(logs / "research_notes_draft.md", new_research)
+        write(logs / "research_grounding_sources.json", json.dumps(sources, ensure_ascii=False, indent=2))
+    if research_alignment.topic_view(new_topic) != before:
+        # The angle changed: an outline or chapters written for the old angle must not survive.
+        for name in ALIGNMENT_DOWNSTREAM:
+            (logs / name).unlink(missing_ok=True)
+        for chapter in logs.glob("chapter_*.md"):
+            chapter.unlink(missing_ok=True)
+        print(f"RESEARCH_TOPIC_ALIGNMENT=REANCHORED elements={record['unsupported_topic_elements']}", file=sys.stderr, flush=True)
+    write(logs / "topic.json", json.dumps(new_topic, ensure_ascii=False, indent=2))
+    if history_path.exists():
+        from state_machine import State
+        upsert_history_checkpoint(history_path, story, new_topic, State.GENERATING)
+    durable_checkpoint(story, "research_alignment", "outline")
+    return new_topic, new_research, sources
+
+
 def create_daily_story(dry_run: bool = False) -> Path | None:
     history_path = ROOT / "config/topics_history.json"
     history = json.loads(history_path.read_text(encoding="utf-8"))
     if not dry_run:
+        migrated = episode_selection.migrate_zombie_records(history, ROOT)
+        if migrated:
+            write(history_path, json.dumps(history, ensure_ascii=False, indent=2))
+            print(f"Retired zombie history record(s) as ABANDONED_LEGACY: {migrated}", file=sys.stderr, flush=True)
+
         def checkpoint_path(item: dict) -> Path | None:
             return episode_selection.story_dir(item, ROOT)
 
@@ -1575,20 +1692,25 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
     # its saved chapters instead of selecting a different topic.
     from state_machine import State
     upsert_history_checkpoint(history_path, story, topic, State.GENERATING)
+    durable_checkpoint(story, "topic_selection", "research")
     run_summary.stage("research")
     research, sources = research_topic(topic, story)
     write(story / "logs/research_notes_draft.md", research)
     write(story / "logs/research_grounding_sources.json", json.dumps(sources, ensure_ascii=False, indent=2))
+    topic, research, sources = ensure_research_alignment(story, topic, research, sources, history_path)
     run_summary.stage("outline")
     outline = make_outline(topic, research)
     write(story / "logs/outline.json", json.dumps({"sections": outline}, ensure_ascii=False, indent=2))
+    durable_checkpoint(story, "outline", "chapters")
     run_summary.stage("chapters")
     draft = draft_story(topic, research, outline, story / "logs")
     if word_count(draft) < 5000:
         raise RuntimeError(f"Generated story is too short: {word_count(draft)} Arabic words")
     write(story / "logs/assembled_story.md", draft)
+    durable_checkpoint(story, "chapters", "quality_gates")
     run_summary.stage("quality_gates")
     story_text, quality_gate, fact_check = finalize_story_text(story, topic, research, draft)
+    durable_checkpoint(story, "quality_gates", "packaging")
     build_metadata_files(story, topic, research, sources, story_text, quality_gate, fact_check)
     from state_machine import State
     upsert_history_checkpoint(history_path, story, topic, State.GENERATING)

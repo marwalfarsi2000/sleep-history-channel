@@ -37,3 +37,31 @@ class MasterProductionRulesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RulesMatchRuntimeTests(unittest.TestCase):
+    """The written rules and the runtime constants must never silently disagree."""
+
+    def setUp(self) -> None:
+        self.rules = generate_daily.MASTER_RULES_PATH.read_text(encoding="utf-8")
+
+    def test_candidate_minimums_are_documented_as_an_explicit_fallback(self) -> None:
+        self.assertEqual(
+            (generate_daily.PREFERRED_CANDIDATES, generate_daily.MIN_VALID_CANDIDATES, generate_daily.MIN_NARRATIVE_FAMILIES),
+            (6, 4, 4),
+        )
+        self.assertIn("PREFERRED_CANDIDATES", self.rules)
+        self.assertIn("MIN_VALID_CANDIDATES = 4", self.rules)
+        self.assertIn("MIN_NARRATIVE_FAMILIES = 4", self.rules)
+        self.assertNotIn("أنشئ ستة مرشحين متنوعين على الأقل", self.rules)
+
+    def test_outline_limits_match_the_rules(self) -> None:
+        self.assertEqual((generate_daily.MIN_MACRO_SECTIONS, generate_daily.MAX_MACRO_SECTIONS), (7, 10))
+        self.assertIn("من 7 إلى 10 أقسام كبرى", self.rules)
+        self.assertEqual(generate_daily.MIN_OUTLINE_TARGET_WORDS, 5500)
+        self.assertIn("لا يقل عن 5500", self.rules)
+
+    def test_research_alignment_gate_is_a_written_hard_rule(self) -> None:
+        self.assertIn("RESEARCH_TOPIC_ALIGNMENT_GATE", self.rules)
+        self.assertIn("REANCHOR_REQUIRED", self.rules)
+        self.assertIn("RESEARCH_INSUFFICIENT", self.rules)

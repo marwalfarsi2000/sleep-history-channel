@@ -120,15 +120,14 @@ class OutlineTotalTests(unittest.TestCase):
         with self.assertRaises(generate_daily.OutlineValidationError):
             generate_daily.validate_outline_sections(sections)
 
-    def test_retry_recovers_from_low_total(self):
+    def test_low_total_is_repaired_locally_without_a_second_model_call(self):
         import json as js
-        low, good = self.sections(700), self.sections(800)
-        responses = [(js.dumps({"sections": low}), []), (js.dumps({"sections": good}), [])]
-        with mock.patch.object(generate_daily, "gemini", side_effect=responses) as gemini:
+        low = self.sections(700)
+        with mock.patch.object(generate_daily, "gemini", side_effect=[(js.dumps({"sections": low}), [])]) as gemini:
             result = generate_daily.make_outline({"topic_ar": "ت", "angle_ar": "ز"}, "بحث")
-        self.assertEqual(gemini.call_count, 2)
-        self.assertEqual(result, good)
-        self.assertIn("target_words total is 4900", gemini.call_args_list[1].args[0])
+        self.assertEqual(gemini.call_count, 1)
+        self.assertGreaterEqual(sum(s["target_words"] for s in result), 5500)
+        generate_daily.validate_outline_sections(result)
 
     def test_final_story_gate_still_5000(self):
         import inspect

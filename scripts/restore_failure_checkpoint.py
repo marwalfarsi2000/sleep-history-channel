@@ -113,12 +113,53 @@ def safe_story_members(archive: zipfile.ZipFile, story_path: str) -> list[zipfil
     return members
 
 
-def restore_latest_checkpoint(root: Path = ROOT) -> bool:
-    token = os.environ.get("GITHUB_TOKEN", "").strip()
-    repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
-    if not token or not repository:
-        print("Checkpoint restore skipped: GitHub runner credentials unavailable.")
+def _record_restore(story_path: str, source: str, artifact: dict | None = None) -> None:
+    try:
+        import run_summary
+        run_summary.start(workflow="restore", action="restore")
+        run_summary.update(
+            restored_from_checkpoint=True, story_path=story_path, checkpoint_saved=True,
+            checkpoint_source=source, checkpoint_location=story_path,
+            checkpoint_artifact_id=(artifact or {}).get("id"), checkpoint_artifact_name=(artifact or {}).get("name"),
+            checkpoint_created_at=(artifact or {}).get("created_at"),
+        )
+    except Exception:
+        pass
+
+
+def restore_durable_checkpoint(root: Path, story_path: str, *, record: bool = True) -> bool:
+    """Fallback when no (unexpired) artifact matches: the small text state lives on automation-state."""
+    try:
+        import state_store
+        restored = state_store.restore_story_checkpoint(root, PurePosixPath(story_path).name)
+    except Exception as exc:
+        print(f"Durable checkpoint restore unavailable: {exc}")
         return False
+    if restored:
+        print(f"Restored {restored} file(s) for {story_path} from the automation-state checkpoint.")
+        if record:
+            _record_restore(story_path, "automation-state")
+    return bool(restored)
+
+
+def migrate_history(root: Path) -> list[str]:
+    """Retire zombie history records once (idempotent) so they stop warning on every run."""
+    import episode_selection
+    path = root / "config" / "topics_history.json"
+    try:
+        history = json.loads(path.read_text(encoding="utf-8"))
+        migrated = episode_selection.migrate_zombie_records(history, root)
+        if migrated:
+            path.write_text(json.dumps(history, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            print(f"Retired zombie history record(s) as ABANDONED_LEGACY: {migrated}")
+        return migrated
+    except Exception as exc:
+        print(f"History migration skipped: {exc}")
+        return []
+
+
+def restore_latest_checkpoint(root: Path = ROOT) -> bool:
+    migrate_history(root)
     try:
         import state_store
         state_episodes = state_store._load_state().get("episodes", {})
@@ -128,11 +169,27 @@ def restore_latest_checkpoint(root: Path = ROOT) -> bool:
     if not story_path:
         print("Checkpoint restore skipped: no unfinished story.")
         return False
+    from_artifact = restore_from_artifact(root, story_path)
+    # An expired or missing artifact must never make the episode unrecoverable; the durable
+    # copy also fills gaps (it never overwrites a file the artifact restored).
+    from_state = restore_durable_checkpoint(root, story_path, record=not from_artifact)
+    return from_artifact or from_state
 
-    data = github_json(
-        f"https://api.github.com/repos/{repository}/actions/artifacts?per_page=100",
-        token,
-    )
+
+def restore_from_artifact(root: Path, story_path: str) -> bool:
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if not token or not repository:
+        print("Artifact restore skipped: GitHub runner credentials unavailable.")
+        return False
+    try:
+        data = github_json(
+            f"https://api.github.com/repos/{repository}/actions/artifacts?per_page=100",
+            token,
+        )
+    except Exception as exc:
+        print(f"Artifact listing failed ({type(exc).__name__}); trying the durable checkpoint.")
+        return False
     artifacts = sorted(
         (
             item for item in data.get("artifacts", [])
@@ -143,8 +200,13 @@ def restore_latest_checkpoint(root: Path = ROOT) -> bool:
         reverse=True,
     )
     for artifact in artifacts:
-        payload = download(artifact["archive_download_url"], token)
-        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        try:
+            payload = download(artifact["archive_download_url"], token)
+            archive = zipfile.ZipFile(io.BytesIO(payload))
+        except Exception as exc:
+            print(f"Artifact {artifact.get('name')} could not be read ({type(exc).__name__}); skipping.")
+            continue
+        with archive:
             members = safe_story_members(archive, story_path)
             if not members:
                 continue
@@ -157,12 +219,7 @@ def restore_latest_checkpoint(root: Path = ROOT) -> bool:
                 f"Restored {len(members)} checkpoint file(s) for {story_path} "
                 f"from {artifact['name']}."
             )
-            try:
-                import run_summary
-                run_summary.start(workflow="restore", action="restore")
-                run_summary.update(restored_from_checkpoint=True, story_path=story_path)
-            except Exception:
-                pass
+            _record_restore(story_path, "artifact", artifact)
             return True
     print(f"No saved failure checkpoint matched {story_path}.")
     return False

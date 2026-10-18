@@ -37,12 +37,14 @@ jobs:
           python-version: "3.13"
           cache: pip
       - name: Install dependencies
+        id: install
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Apply review decision
+        id: apply
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_TTS_VOICE_ID: ${{ secrets.GEMINI_TTS_VOICE_ID }}
@@ -67,6 +69,26 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python scripts/cloud_pipeline.py notify-review
+      - name: Notify Telegram about failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          PRODUCE_OUTCOME: ${{ steps.apply.outcome }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python scripts/notify_failure.py
+      - name: Preserve diagnostic logs after failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sleep-history-review-failure-${{ github.run_id }}
+          path: |
+            logs/*.log
+            .runtime/run_summary.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
       - name: Persist decision to automation-state branch
         if: always()
         run: python scripts/git_sync.py

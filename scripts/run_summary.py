@@ -53,6 +53,9 @@ def _blank(run_id: str) -> dict:
         "owner_action_required": False, "owner_action": None,
         "waiting_for_quota": False, "quota_provider": None, "quota_model": None, "quota_kind": None,
         "blocked_until": None, "checkpoint_saved": False, "resume_stage": None,
+        "last_completed_stage": None, "checkpoint_location": None, "checkpoint_artifact_id": None,
+        "checkpoint_artifact_name": None, "checkpoint_source": None, "checkpoint_created_at": None,
+        "auto_recovery_log": [], "immediate_retry": False, "max_attempts": 2,
         "restored_from_checkpoint": False, "reused_stages": [], "regenerated_stages": [],
         "models_attempted": [], "search_provider_used": None,
         "external_calls_summary": {service: 0 for service in SERVICES},
@@ -150,8 +153,38 @@ def classify(exc: BaseException) -> dict:
         return {"error_category": "UNCLASSIFIED", "retryable": False, "waiting_for_quota": False, "cost_blocked": False}
 
 
+def mark_checkpoint(story_path: str, completed_stage: str, next_stage: str | None = None) -> None:
+    """A real, resumable checkpoint now exists: record it the moment it does, not at packaging."""
+    def change(summary: dict) -> None:
+        summary.update(
+            checkpoint_saved=True, last_completed_stage=completed_stage, resume_stage=next_stage,
+            checkpoint_location=story_path, checkpoint_created_at=now_iso(),
+        )
+        if not summary.get("checkpoint_source"):
+            summary["checkpoint_source"] = "local"
+    _mutate(change)
+
+
+def begin_recovery(attempt: int, error_code: str | None, stage: str | None, wait_seconds: int = 0) -> None:
+    """Close the failed attempt in the log and reopen the run for a bounded automatic retry."""
+    def change(summary: dict) -> None:
+        log = summary.setdefault("auto_recovery_log", [])
+        log.append({"attempt": attempt, "error_code": error_code, "failed_stage": stage,
+                    "wait_seconds": wait_seconds, "at": now_iso(),
+                    "root_error": summary.get("final_root_error")})
+        for key in ("failed_stage", "failed_component", "error_code", "error_category", "recovery_policy",
+                    "recommended_action", "final_root_error", "root_error", "repo_file", "repo_function",
+                    "repo_line", "finished_at", "retryable"):
+            summary[key] = None
+        summary.update(status="running", auto_recovery_attempted=True, auto_recovery_available=False,
+                       waiting_for_quota=False, planned_wait=False, cost_blocked=False,
+                       owner_action_required=False)
+    _mutate(change)
+
+
 _DIAGNOSIS_FIELDS = (
     "failed_component", "error_code", "error_category", "recovery_policy", "retryable",
+    "immediate_retry", "max_attempts",
     "auto_recovery_available", "recommended_action", "planned_wait", "cost_blocked",
     "repo_file", "repo_function", "repo_line",
 )
@@ -173,6 +206,12 @@ def fail(exc: BaseException, *, overwrite: bool = False) -> None:
         if info.get("owner_action_required"):
             summary["owner_action_required"] = True
         summary["waiting_for_quota"] = bool(info["waiting_for_quota"])
+        if not summary.get("checkpoint_saved"):
+            # Safety net: a story folder with a saved topic is a real, resumable checkpoint.
+            story_path = str(summary.get("story_path") or "")
+            if story_path and (ROOT / story_path / "logs" / "topic.json").exists():
+                summary.update(checkpoint_saved=True, checkpoint_location=story_path,
+                               last_completed_stage=summary.get("last_completed_stage") or "topic_selection")
         summary["status"] = "waiting_for_quota" if info["waiting_for_quota"] else "failed"
         summary["failed_stage"] = info.get("failed_stage") or summary.get("current_stage") or None
         summary["final_root_error"] = summary["root_error"] = redact(exc)

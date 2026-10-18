@@ -9,6 +9,7 @@ commit), so the working tree, index and checked-out branch are never touched.
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import json
 import os
@@ -35,6 +36,11 @@ RUNTIME_FILES = (
     "pronunciation_dictionary.json",
 )
 PUSH_ATTEMPTS = 4
+CHECKPOINT_DIR = "checkpoints"
+CHECKPOINT_MAX_FILE_BYTES = 400_000
+CHECKPOINT_MAX_TOTAL_BYTES = 3_000_000
+CHECKPOINT_TEXT_SUFFIXES = (".json", ".md", ".txt")
+CHECKPOINT_ROOT_FILES = ("03_sources.md", "04_research_notes.md", "01_title.txt", "02_description.txt")
 IDENTITY = {
     "GIT_AUTHOR_NAME": "sleep-history-bot",
     "GIT_AUTHOR_EMAIL": "marwalfarsi2000@gmail.com",
@@ -382,6 +388,18 @@ def persist_all() -> bool:
         if path.exists():
             local_files[name] = path.read_text(encoding="utf-8")
     episodes = _story_episode_states(ROOT)
+    for story in sorted(ROOT.glob("stories/*")):
+        metadata = story / "15_metadata.json"
+        status = ""
+        if metadata.exists():
+            try:
+                status = str(json.loads(metadata.read_text(encoding="utf-8")).get("approval_status") or "")
+            except (OSError, json.JSONDecodeError):
+                status = ""
+        if status in ("", "GENERATING", "generating", "drafting"):  # unfinished: keep a durable copy
+            bundle = collect_story_checkpoint(story)
+            if bundle:
+                local_files[checkpoint_file(story.name)] = json.dumps(bundle, ensure_ascii=False, separators=(",", ":"))
 
     def mutate(read):
         changes = dict(local_files)
@@ -395,6 +413,71 @@ def persist_all() -> bool:
         return changes
 
     return _update_remote(mutate, "Persist runtime state")
+
+
+def checkpoint_file(story_name: str) -> str:
+    return f"{CHECKPOINT_DIR}/{story_name}.json"
+
+
+def collect_story_checkpoint(story: Path) -> dict | None:
+    """Small text state needed to rebuild an unfinished episode: topic, research, sources, outline, chapters.
+
+    Audio, images, video and logs are never included; those live in artifacts or Internet Archive.
+    """
+    logs = story / "logs"
+    if not (logs / "topic.json").exists():
+        return None
+    files: dict[str, str] = {}
+    total = 0
+    candidates = [path for path in sorted(logs.glob("*")) if path.suffix in CHECKPOINT_TEXT_SUFFIXES]
+    candidates += [story / name for name in CHECKPOINT_ROOT_FILES if (story / name).exists()]
+    for path in candidates:
+        try:
+            size = path.stat().st_size
+            if not path.is_file() or size > CHECKPOINT_MAX_FILE_BYTES or total + size > CHECKPOINT_MAX_TOTAL_BYTES:
+                continue
+            files[path.relative_to(story).as_posix()] = path.read_text(encoding="utf-8")
+            total += size
+        except (OSError, UnicodeDecodeError):
+            continue
+    return {"version": 1, "story": story.name, "saved_at": dt.datetime.now(dt.timezone.utc).isoformat(), "files": files}
+
+
+def save_story_checkpoint(story: Path) -> bool:
+    """Persist the small checkpoint bundle to automation-state (never to main)."""
+    bundle = collect_story_checkpoint(story)
+    if not bundle:
+        return False
+    name = checkpoint_file(story.name)
+    return _update_remote(lambda read: {name: json.dumps(bundle, ensure_ascii=False, separators=(",", ":"))},
+                          f"Checkpoint {story.name}")
+
+
+def _safe_checkpoint_path(relative: str) -> bool:
+    parts = relative.replace("\\", "/").split("/")
+    if ".." in parts or relative.startswith("/") or not parts[-1].endswith(CHECKPOINT_TEXT_SUFFIXES):
+        return False
+    return (len(parts) == 2 and parts[0] == "logs") or (len(parts) == 1 and relative in CHECKPOINT_ROOT_FILES)
+
+
+def restore_story_checkpoint(root: Path, story_name: str) -> int:
+    """Rebuild missing text files of an unfinished story from automation-state; returns files restored."""
+    raw = _read_remote(checkpoint_file(story_name))
+    bundle = _loads(raw, None)
+    if not isinstance(bundle, dict) or not isinstance(bundle.get("files"), dict):
+        return 0
+    restored = 0
+    story = root / "stories" / story_name
+    for relative, content in bundle["files"].items():
+        if not isinstance(content, str) or not _safe_checkpoint_path(relative):
+            continue
+        destination = story / relative
+        if destination.exists():
+            continue  # never overwrite newer local work
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(content, encoding="utf-8")
+        restored += 1
+    return restored
 
 
 def compute_rules_sha(rules_path: Path) -> str:
