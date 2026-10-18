@@ -18,6 +18,7 @@ import episode_selection
 import llm_router
 import run_summary
 import state_store
+import thumbnail_hook
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1198,12 +1199,15 @@ def packaging_field_issues(package: dict, topic: dict, recent: list[dict]) -> di
         issues["title_suffix"] = "repeats one of the previous three suffixes"
     forbidden_labels = {"قصة للنوم", "قصة تاريخية", "حكاية للنوم", "للنوم", "قبل النوم"}
     recent_labels = {str(item.get("thumbnail_text", "")).strip() for item in recent}
-    if not 1 <= len(label_words) <= 4:
-        issues["thumbnail_text"] = f"has {len(label_words)} Arabic words; it must be 2-4 Arabic words"
+    hook_problem = thumbnail_hook.hook_rejection(label, core, sorted(recent_labels))
+    if not 2 <= len(label_words) <= 5:
+        issues["thumbnail_text"] = f"has {len(label_words)} Arabic words; it must be 2-5 Arabic words"
     elif label in forbidden_labels or "😴" in label:
         issues["thumbnail_text"] = "is a generic label or contains an emoji"
     elif label in recent_labels:
         issues["thumbnail_text"] = "repeats a recent thumbnail label"
+    elif hook_problem:
+        issues["thumbnail_text"] = f"{hook_problem}; write a real hook (curiosity, discovery, transformation, immersion, object/process mystery or contrast)"
     if len(prompt) > THUMBNAIL_PROMPT_MAX_CHARS:
         issues["thumbnail_prompt"] = f"is {len(prompt)} characters; the maximum is {THUMBNAIL_PROMPT_MAX_CHARS}"
     forbidden_prompt_phrases = {"[topic_ar]", "[thumbnail_text]", "${", "{{", "}}"}
@@ -1298,11 +1302,13 @@ def generate_youtube_packaging(story: Path, topic: dict) -> dict:
         details = packaging_field_issues(package, topic, recent)
         # The suffix and joined title are code-owned; a bad joined title is fixed through the core.
         ask = [f for f in LLM_PACKAGING_FIELDS if f in details]
+        hook_needed = "thumbnail_text" in ask
+        ask = [f for f in ask if f != "thumbnail_text"]  # the hook has its own writer
         if ("final_youtube_title" in details or "title_suffix" in details) and "episode_title_core" not in ask:
             ask.append("episode_title_core")
-        if ask:
+        if ask or hook_needed:
             reasons = {f: details.get(f) or details.get("final_youtube_title") or "invalid" for f in ask}
-            keep = {k: v for k, v in package.items() if k not in ask}
+            keep = {k: v for k, v in package.items() if k not in ask and not (hook_needed and k == "thumbnail_text")}
             prompt = f"""طبّق قواعد حزمة YouTube التالية حرفيًا.
 {rules}
 
@@ -1321,17 +1327,28 @@ RECENT TEN PUBLISHED RECORDS:
 
 Return JSON only with exactly these keys: {json.dumps(ask)}
 """
-            text, _ = gemini(prompt, json_mode=True, max_tokens=3000, temperature=0.35)
-            try:
-                candidate = parse_json(text)
-            except (ValueError, KeyError):
-                candidate = {}
-            for field in ask:
-                value = str(candidate.get(field, "")).strip() if isinstance(candidate, dict) else ""
-                if value:
-                    package[field] = value
-            _with_joined_title(package)
-            checkpoint()
+            if ask:
+                text, _ = gemini(prompt, json_mode=True, max_tokens=3000, temperature=0.35)
+                try:
+                    candidate = parse_json(text)
+                except (ValueError, KeyError):
+                    candidate = {}
+                for field in ask:
+                    value = str(candidate.get(field, "")).strip() if isinstance(candidate, dict) else ""
+                    if value:
+                        package[field] = value
+                _with_joined_title(package)
+                checkpoint()
+            if hook_needed and package.get("episode_title_core"):
+                # THUMBNAIL_HOOK_WRITER decides what the thumbnail says; the Arabic
+                # typography renderer decides how it is drawn.
+                hook = thumbnail_hook.write_hook(
+                    gemini, parse_json, topic, package["episode_title_core"],
+                    sorted(str(item.get("thumbnail_text", "")).strip() for item in recent),
+                )
+                if hook:
+                    package["thumbnail_text"] = hook
+                checkpoint()
             details = packaging_field_issues(package, topic, recent)
         if details:
             diagnostics = {

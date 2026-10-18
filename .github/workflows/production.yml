@@ -45,7 +45,7 @@ jobs:
         id: install
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg libpangocairo-1.0-0 fonts-noto-core
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Restore latest failed-run checkpoint

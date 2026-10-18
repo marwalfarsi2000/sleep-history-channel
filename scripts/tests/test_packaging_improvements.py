@@ -45,7 +45,7 @@ class PackagingValidationTests(unittest.TestCase):
             "episode_title_core": "بغداد ليلًا",
             "title_suffix": "قصة تاريخية للنوم 😴",
             "final_youtube_title": "بغداد ليلًا | قصة تاريخية للنوم 😴",
-            "thumbnail_text": "الأسواق",
+            "thumbnail_text": "سر ضوء الفانوس",
             "thumbnail_prompt": (
                 "A night scene of a Baghdad marketplace with calm lighting. "
                 "16:9 YouTube thumbnail. Original composition. "
@@ -63,7 +63,7 @@ class PackagingValidationTests(unittest.TestCase):
             "episode_title_core": "بغداد ليلًا",
             "title_suffix": "قصة تاريخية للنوم 😴",
             "final_youtube_title": "بغداد ليلًا | قصة تاريخية للنوم 😴",
-            "thumbnail_text": "الأسواق",
+            "thumbnail_text": "سر ضوء الفانوس",
             "thumbnail_prompt": (
                 "A marketplace at night with warm lanterns and historic architecture. "
                 "Background scene only, no text overlay. "
@@ -80,7 +80,7 @@ class PackagingValidationTests(unittest.TestCase):
             "episode_title_core": "بغداد ليلًا",
             "title_suffix": "قصة تاريخية للنوم 😴",
             "final_youtube_title": "بغداد ليلًا | قصة تاريخية للنوم 😴",
-            "thumbnail_text": "الأسواق الليلية",
+            "thumbnail_text": "سر ضوء الفانوس",
             "thumbnail_prompt": (
                 "Ancient marketplace at night, soft lighting, historic mood. "
                 "16:9 YouTube thumbnail. Background only, no text. Professional quality."
@@ -96,7 +96,7 @@ class PackagingValidationTests(unittest.TestCase):
             "episode_title_core": "بغداد ليلًا",
             "title_suffix": "قصة تاريخية للنوم 😴",
             "final_youtube_title": "بغداد ليلًا | قصة تاريخية للنوم 😴",
-            "thumbnail_text": "الأسواق",
+            "thumbnail_text": "سر ضوء الفانوس",
             "thumbnail_prompt": (
                 "A marketplace scene of [topic_ar]. "
                 "16:9 YouTube thumbnail. Professional quality."
@@ -113,7 +113,7 @@ class PackagingValidationTests(unittest.TestCase):
             "episode_title_core": "بغداد ليلًا",
             "title_suffix": "قصة تاريخية للنوم 😴",
             "final_youtube_title": "بغداد ليلًا | قصة تاريخية للنوم 😴",
-            "thumbnail_text": "الأسواق",
+            "thumbnail_text": "سر ضوء الفانوس",
             "thumbnail_prompt": long_prompt,
         }
         recent = []
@@ -128,7 +128,7 @@ class PackagingValidationTests(unittest.TestCase):
             "episode_title_core": "بغداد ليلًا",
             "title_suffix": "قصة تاريخية للنوم 😴",
             "final_youtube_title": "بغداد ليلًا | قصة تاريخية للنوم 😴",
-            "thumbnail_text": "الأسواق",
+            "thumbnail_text": "سر ضوء الفانوس",
             "thumbnail_prompt": prompt,
         }
         recent = []
@@ -141,7 +141,7 @@ class PackagingValidationTests(unittest.TestCase):
             "episode_title_core": "بغداد ليلًا",
             "title_suffix": "قصة تاريخية للنوم 😴",
             "final_youtube_title": "بغداد ليلًا | قصة تاريخية للنوم 😴",
-            "thumbnail_text": "الأسواق",
+            "thumbnail_text": "سر ضوء الفانوس",
             "thumbnail_prompt": (
                 "A marketplace background scene. "
                 "16:9 YouTube thumbnail. No generated text. Professional quality."
@@ -157,7 +157,7 @@ class PackagingValidationTests(unittest.TestCase):
             "episode_title_core": "بغداد ليلًا",
             "title_suffix": "قصة تاريخية للنوم 😴",
             "final_youtube_title": "بغداد ليلًا | قصة تاريخية للنوم 😴",
-            "thumbnail_text": "الأسواق",
+            "thumbnail_text": "سر ضوء الفانوس",
             "thumbnail_prompt": (
                 "A marketplace background scene. "
                 "16:9 YouTube thumbnail. Professional quality."
@@ -173,7 +173,7 @@ class PackagingValidationTests(unittest.TestCase):
             "episode_title_core": "بغداد ليلًا",
             "title_suffix": "قصة تاريخية للنوم 😴",
             "final_youtube_title": "بغداد ليلًا | قصة تاريخية للنوم 😴",
-            "thumbnail_text": "الأسواق",
+            "thumbnail_text": "سر ضوء الفانوس",
             "thumbnail_prompt": (
                 "A marketplace background scene, no text. "
                 "16:9 YouTube thumbnail. No logo or watermark. Professional quality."

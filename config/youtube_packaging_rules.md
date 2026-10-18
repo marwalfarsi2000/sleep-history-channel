@@ -13,9 +13,13 @@ Return only these structured values: `episode_title_core`, `title_suffix`, `fina
 
 ## Thumbnail text
 
-- Two to four Arabic words, concrete, natural, instantly readable, and specific to this episode.
-- No emoji, sentence, sleep suffix, or generic phrase such as قصة للنوم، قصة تاريخية، حكاية للنوم، للنوم، قبل النوم.
-- Complement rather than duplicate the title. Avoid recent labels.
+The thumbnail text is a hook written by THUMBNAIL_HOOK_WRITER (copy only; the typography renderer draws it later).
+
+- Two to four Arabic words (five only when clearly stronger), concrete, natural, instantly readable on a phone, and specific to this episode.
+- A real hook, not a scene label: curiosity question, discovery, transformation, inside/immersion, object or process mystery, or historical contrast.
+- Reject generic scene labels such as «ورش صناعة…», «أسواق … القديمة», «سواقي …», «حياة …».
+- No emoji, sentence, sleep suffix, cheap clickbait, or generic phrase such as قصة للنوم، قصة تاريخية، حكاية للنوم، للنوم، قبل النوم.
+- Complement the title; never repeat it. Avoid recent hooks.
 
 ## Thumbnail prompt
 

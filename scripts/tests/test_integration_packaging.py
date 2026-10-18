@@ -30,7 +30,7 @@ class PackagingIntegrationTests(unittest.TestCase):
             "episode_title_core": "يوم في سوق بغداد",
             "title_suffix": "قصة تاريخية للنوم 😴",
             "final_youtube_title": "يوم في سوق بغداد | قصة تاريخية للنوم 😴",
-            "thumbnail_text": "السوق الليلي",
+            "thumbnail_text": "سر ضوء الفانوس",
             "thumbnail_prompt": (
                 "A night scene of an ancient Baghdad marketplace with lanterns and historic architecture. "
                 "16:9 YouTube thumbnail. Background only, no text generation. Professional quality."
@@ -123,6 +123,7 @@ class PackagingIntegrationTests(unittest.TestCase):
             with mock.patch.object(generate_daily, "YOUTUBE_PACKAGING_RULES_PATH", rules_path), \
                     mock.patch.object(generate_daily, "ARCHIVE_INDEX_PATH", archive_path), \
                     mock.patch.object(generate_daily, "recent_published_packaging", return_value=[]), \
+                    mock.patch.object(generate_daily.thumbnail_hook, "write_hook", return_value=good_package["thumbnail_text"]), \
                     mock.patch.object(
                         generate_daily, "gemini",
                         side_effect=[
