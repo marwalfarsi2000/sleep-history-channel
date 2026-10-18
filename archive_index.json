@@ -125,7 +125,7 @@
     "thumbnail_prompt": "Calm illustrated realism of a 10th-century Samarkand paper-making workshop at dusk with subtle painterly texture and premium storybook quality; low-key night lighting with a dim oil lamp casting a warm glow on wooden vats, frames, and drying mulberry bark sheets; palette of deep midnight navy, charcoal, muted warm gold, and aged ivory; one simple memorable scene focusing on traditional paper crafting tools; mobile-first strong silhouette, no people, no modern objects, no text or typography of any kind rendered in the image. 16:9 YouTube thumbnail. Original composition. Professional quality.",
     "historical_setting": "سمرقند، أوزبكستان — القرن العاشر الميلادي (العصر الساماني)",
     "created_at": "2026-10-18T20:10:13.349899+04:00",
-    "status": "REVIEW_PENDING",
+    "status": "PUBLISHED",
     "video_filename": "14_video_final.mp4",
     "item_url": "https://archive.org/details/lan-tukmil-alqissa-20261018-samarkand-paper-making-da",
     "video_url": "https://archive.org/download/lan-tukmil-alqissa-20261018-samarkand-paper-making-da/14_video_final.mp4",
@@ -133,6 +133,9 @@
     "video_size": 72409312,
     "video_sha256": "a0029682f10625793f6be97527df4c8d1698ead950d074f70b146bba443ccd75",
     "audio_duration_seconds": 4499.86,
-    "video_duration_seconds": 4500.0
+    "video_duration_seconds": 4500.0,
+    "youtube_video_id": "lpOl9d4Ynhk",
+    "youtube_url": "https://www.youtube.com/watch?v=lpOl9d4Ynhk",
+    "published_at": "2026-10-18T20:30:39.636965+04:00"
   }
 ]

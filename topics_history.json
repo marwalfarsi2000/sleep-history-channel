@@ -172,7 +172,7 @@
     "topic": "الحياة اليومية في مدينة سمرقند على طريق الحرير",
     "angle": "تتبع يوم في حياة صانع ورق من قشر التوت في ورش سمرقند التقليدية، مع خطوات النقع والهرس والتجفيف تحت أشعة الشمس في العصر الساماني.",
     "created_at": "2026-10-18T12:53:40.388578+04:00",
-    "status": "REVIEW_PENDING",
+    "status": "PUBLISHED",
     "topic_ar": "الحياة اليومية في مدينة سمرقند على طريق الحرير",
     "angle_ar": "تتبع يوم في حياة صانع ورق من قشر التوت في ورش سمرقند التقليدية، مع خطوات النقع والهرس والتجفيف تحت أشعة الشمس في العصر الساماني.",
     "search_query_en": "samarkand paper making history traditional workshop silk road",
@@ -246,6 +246,7 @@
       ]
     },
     "archive_identifier": "lan-tukmil-alqissa-20261018-samarkand-paper-making-da",
-    "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261018-samarkand-paper-making-da"
+    "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261018-samarkand-paper-making-da",
+    "youtube_video_id": "lpOl9d4Ynhk"
   }
 ]
