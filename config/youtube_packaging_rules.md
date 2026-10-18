@@ -26,12 +26,13 @@ Write one complete English prompt for a premium adult historical sleep-story thu
 - Low-key night lighting: dim lanterns, candles, warm windows, restrained moonlight behind clouds, optional light haze or context-appropriate rain.
 - Palette: deep midnight navy, near-black blue, charcoal, muted warm gold, warm brown, muted amber, aged ivory and restrained dark olive.
 - One simple memorable scene, one dominant focal subject, intimate rather than monumental. The actual place or an everyday setting from the episode must be unmistakable.
-- Include the exact Arabic thumbnail text in large simple elegant typography, soft ivory or warm off-white, in a clean dark area occupying about twenty-five to thirty-five percent. No extra text, metallic gold, 3D letters, or text covering most of the image.
-- Mobile-first: one scene, one focal point, one short phrase, strong silhouette, no reliance on tiny details.
+- Background only: do NOT render any letters, words, typography, captions, logos, or watermarks, and do NOT include the Arabic `thumbnail_text` (or any Arabic) inside the prompt or the generated image. The image model paints the historical scene only; the deterministic renderer draws the Arabic label afterwards.
+- Reserve a clean dark negative-space area occupying approximately 25-35% of the composition where that label will later be added. Describe the empty dark area only; never describe or request text in it.
+- Mobile-first: one scene, one focal point, strong silhouette, no reliance on tiny details; compose for the later text overlay without rendering any text.
 - People optional; at most two, natural pose, no camera eye contact, giant face, portrait, emotion, or hero pose.
 - Strictly avoid rulers staring at camera, travel posters, perfect architecture, giant moon, magic, neon, HDR, excessive orange, oversaturated blue-orange, action, battle, weapons, crowds, collage, arrows, circles, clickbait, modern objects, artifacts, logos, and watermarks.
 - End with: `16:9 YouTube thumbnail. Original composition. Professional quality.`
 
 ## Anti-repetition and validation
 
-Read the previous ten published records. Avoid repeated title structures, suffixes, labels, scene types, focal subjects, and interchangeable generic city scenes. Ensure historical accuracy, exact Arabic text, one focal subject, brand palette, mobile readability, and no misleading element. Regenerate only fields reported as failing.
+Read the previous ten published records. Avoid repeated title structures, suffixes, labels, scene types, focal subjects, and interchangeable generic city scenes. Ensure historical accuracy, a correct Arabic `thumbnail_text` (kept out of the image prompt), one focal subject, brand palette, mobile readability, and no misleading element. Regenerate only fields reported as failing.
