@@ -184,7 +184,7 @@ def test_failure_keeps_the_specific_root_error_not_the_generic_wrapper(monkeypat
     run_summary.fail(RuntimeError("Command failed (1); diagnostic log: logs/cloud-generate.log"))   # parent process
     summary = run_summary.load()
     assert summary["final_root_error"].startswith("YOUTUBE_PACKAGING_VALIDATION_FAILED: episode_title_core")
-    assert summary["failed_stage"] == "packaging" and summary["error_category"] == "VALIDATION"
+    assert summary["failed_stage"] == "packaging" and summary["error_category"] == "DATA_OR_MODEL_OUTPUT_VALIDATION"
 
 
 def test_blocked_cost_and_owner_action_are_recorded(monkeypatch):

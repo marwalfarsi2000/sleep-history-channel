@@ -45,8 +45,11 @@ def _blank(run_id: str) -> dict:
         "run_id": run_id, "episode_id": "", "story_path": "", "archive_identifier": "",
         "workflow": os.environ.get("GITHUB_WORKFLOW", ""), "action": "",
         "started_at": now_iso(), "finished_at": None, "status": "running",
-        "current_stage": "", "failed_stage": None, "final_root_error": None,
-        "error_category": None, "retryable": None, "cost_blocked": False,
+        "current_stage": "", "failed_stage": None, "failed_component": None, "final_root_error": None,
+        "root_error": None, "error_code": None, "error_category": None, "recovery_policy": None,
+        "repo_file": None, "repo_function": None, "repo_line": None,
+        "retryable": None, "auto_recovery_available": False, "auto_recovery_attempted": False,
+        "recommended_action": None, "planned_wait": False, "cost_blocked": False,
         "owner_action_required": False, "owner_action": None,
         "waiting_for_quota": False, "quota_provider": None, "quota_model": None, "quota_kind": None,
         "blocked_until": None, "checkpoint_saved": False, "resume_stage": None,
@@ -138,22 +141,20 @@ def set_search_provider(name: str) -> None:
 
 
 def classify(exc: BaseException) -> dict:
-    """Map an exception to category/retryable/waiting/cost fields."""
-    text = str(exc)
-    upper = text.upper()
-    result = {"error_category": None, "retryable": None, "waiting_for_quota": False, "cost_blocked": False}
-    if type(exc).__name__ == "LlmQuotaWaiting" or "WAITING_FOR_LLM_QUOTA" in upper or "TTS_WAITING_FOR_QUOTA" in upper:
-        result.update(error_category="QUOTA_WAIT", retryable=True, waiting_for_quota=True)
-    elif "BLOCKED_COST" in upper:
-        result.update(error_category="COST_BLOCKED", retryable=False, cost_blocked=True)
-    else:
-        try:
-            from error_classifier import ErrorCategory, classify_error
-            category = classify_error(exc) if isinstance(exc, Exception) else ErrorCategory.PERMANENT
-        except Exception:
-            category = "PERMANENT"
-        result.update(error_category=category, retryable=category in ("TRANSIENT_RETRYABLE", "VALIDATION"))
-    return result
+    """Map an exception to category/retryable/waiting/cost fields (see failure_registry)."""
+    try:
+        import failure_registry
+        diagnosis = failure_registry.diagnose(exc)
+        return {key: diagnosis[key] for key in ("error_category", "retryable", "waiting_for_quota", "cost_blocked")}
+    except Exception:
+        return {"error_category": "UNCLASSIFIED", "retryable": False, "waiting_for_quota": False, "cost_blocked": False}
+
+
+_DIAGNOSIS_FIELDS = (
+    "failed_component", "error_code", "error_category", "recovery_policy", "retryable",
+    "auto_recovery_available", "recommended_action", "planned_wait", "cost_blocked",
+    "repo_file", "repo_function", "repo_line",
+)
 
 
 def fail(exc: BaseException, *, overwrite: bool = False) -> None:
@@ -162,11 +163,21 @@ def fail(exc: BaseException, *, overwrite: bool = False) -> None:
         if summary.get("status") in ("failed", "waiting_for_quota") and summary.get("final_root_error") and not overwrite:
             summary["finished_at"] = summary.get("finished_at") or now_iso()
             return
-        info = classify(exc)
-        summary.update(info)
+        try:
+            import failure_registry
+            info = failure_registry.diagnose(exc, summary.get("current_stage") or "")
+        except Exception:
+            info = {"failed_stage": summary.get("current_stage") or None, "waiting_for_quota": False,
+                    "error_category": "UNCLASSIFIED", "retryable": False, "owner_action_required": False}
+        summary.update({key: info[key] for key in _DIAGNOSIS_FIELDS if key in info})
+        if info.get("owner_action_required"):
+            summary["owner_action_required"] = True
+        summary["waiting_for_quota"] = bool(info["waiting_for_quota"])
         summary["status"] = "waiting_for_quota" if info["waiting_for_quota"] else "failed"
-        summary["failed_stage"] = summary.get("current_stage") or None
-        summary["final_root_error"] = redact(exc)
+        summary["failed_stage"] = info.get("failed_stage") or summary.get("current_stage") or None
+        summary["final_root_error"] = summary["root_error"] = redact(exc)
+        if info["waiting_for_quota"]:
+            summary["auto_recovery_attempted"] = bool(summary.get("checkpoint_saved") or summary.get("story_path"))
         summary["finished_at"] = now_iso()
         if info["waiting_for_quota"]:
             summary["resume_stage"] = summary.get("current_stage") or None

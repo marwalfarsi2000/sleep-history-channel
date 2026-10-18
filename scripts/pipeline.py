@@ -9,6 +9,7 @@ from pathlib import Path
 from PIL import Image
 import edge_tts
 from generate_daily import gemini, parse_json
+import run_summary
 from stage_manifest import record_stage, can_reuse_stage, compute_config_hash, compute_file_hash
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -1353,6 +1354,7 @@ def mix_background_audio(narration: Path, output: Path) -> None:
     ])
 
 def prepare(story: Path):
+    run_summary.stage("prepare")
     metadata_path = story / "15_metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     required_gates = (
@@ -1466,6 +1468,7 @@ def prepare(story: Path):
     print(f"Prepared {len(chunks)} chunks, {arabic_words(clean)} Arabic words, diacritics={diacritic_ratio(annotated):.3f}")
 
 async def synthesize(story: Path):
+    run_summary.stage("synthesize")
     provider = SETTINGS.get("tts_provider", "edge").lower()
     tts_config = {
         "provider": provider,
@@ -1493,6 +1496,7 @@ async def synthesize(story: Path):
     elif provider == "gemini":
         await asyncio.to_thread(validate_gemini_voice)
     prepare(story)
+    run_summary.stage("synthesize")
     tdir, adir = story / "tts_chunks", story / "audio_chunks"
     adir.mkdir(exist_ok=True)
     hash_path = story / "logs" / "tts_chunk_hashes.json"
@@ -1826,6 +1830,7 @@ def transcribe_audio_for_qc(path: Path, model: str) -> str:
     return transcript
 
 def background(story: Path, force: bool = False):
+    run_summary.stage("background")
     output = story / "10_background.png"
     thumbnail = story / "11_thumbnail_base.jpg"
     prompt_file = story / "08_image_prompt_en.txt"
@@ -1871,6 +1876,7 @@ def video_codec() -> list[str]:
 
 def render(story: Path):
     background(story, force=False)
+    run_summary.stage("render")
     audio = story / "12_audio_full.mp3"
     out = story / "14_video_final.mp4"
     bg = story / "10_background.png"
@@ -1898,6 +1904,7 @@ def render(story: Path):
     record_stage(story, "render", input_sha256=render_hash, output_hashes=output_hashes)
 
 def validate(story: Path):
+    run_summary.stage("validate")
     required=["01_title.txt","02_description.txt","03_sources.md","04_research_notes.md","05_story_clean.md","05b_story_tts_normalized.md","06_story_tts_annotated.md","07_story_tts_api.md","10_background.png","11_thumbnail_base.jpg","12_audio_narration.mp3","12_audio_full.mp3","13_audio_review.opus","14_video_final.mp4","15_metadata.json","16_fact_check.md","17_status.md"]
     initial_meta = json.loads((story / "15_metadata.json").read_text(encoding="utf-8")) if (story / "15_metadata.json").exists() else {}
     packaged_episode = bool(initial_meta.get("youtube_packaging_status"))
@@ -2003,6 +2010,7 @@ def validate(story: Path):
     print(json.dumps({"metadata":meta,"validation":validation},ensure_ascii=False,indent=2))
 
 def package(story: Path):
+    run_summary.stage("package")
     from state_machine import State
     meta=json.loads((story/"15_metadata.json").read_text(encoding="utf-8"))
     meta.update(audio_duration_seconds=round(duration(story/"12_audio_full.mp3"),2),video_duration_seconds=round(duration(story/"14_video_final.mp4"),2),word_count=arabic_words((story/"05_story_clean.md").read_text(encoding="utf-8")),**voice_metadata(),background_audio="pink noise",background_audio_volume_percent=15,narration_audio_path=str(story/"12_audio_narration.mp3"),audio_path=str(story/"12_audio_full.mp3"),video_path=str(story/"14_video_final.mp4"),thumbnail_path=str(story/"11_thumbnail_base.jpg"),approval_status=State.MEDIA_READY,publish_status="not_published")
@@ -2045,6 +2053,14 @@ def completed_artifacts_are_current(story: Path) -> bool:
     return all(path.exists() and metadata.get(key) == file_sha256(path) for key, path in expected.items())
 
 def main():
+    try:
+        _main()
+    except BaseException as exc:
+        if not isinstance(exc, SystemExit):
+            run_summary.fail(exc)  # the real root error, before the parent only sees "Command failed"
+        raise
+
+def _main():
     p=argparse.ArgumentParser(); p.add_argument("command",choices=["prepare","tts","image","render","validate","package","all"]); p.add_argument("story")
     a=p.parse_args(); story=Path(a.story).resolve()
     if a.command == "all" and completed_artifacts_are_current(story):
