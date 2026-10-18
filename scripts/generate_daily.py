@@ -272,6 +272,7 @@ STORY_FORMATS = (
 STORY_PHASES = ("CALM_HOOK", "EXPLORATION", "SETTLE", "UNWIND", "SOFT_FADE")
 MIN_MACRO_SECTIONS, MAX_MACRO_SECTIONS = 7, 10
 MAX_SAME_FORMAT_IN_A_ROW = 2
+OUTLINE_RETRY_MAX = 3
 
 
 def recent_story_formats(history: list[dict], limit: int = 2) -> list[str]:
@@ -311,26 +312,34 @@ def pick_topic_by_format(eligible: list[dict], history: list[dict], *, clear_mar
     return best
 
 
+class OutlineValidationError(RuntimeError):
+    """The outline parsed but violates the required schema."""
+
+
 def validate_outline_sections(sections: list[dict]) -> list[dict]:
     if not isinstance(sections, list) or not MIN_MACRO_SECTIONS <= len(sections) <= MAX_MACRO_SECTIONS:
-        raise RuntimeError(
+        raise OutlineValidationError(
             f"Outline must contain {MIN_MACRO_SECTIONS}-{MAX_MACRO_SECTIONS} macro sections"
         )
+    if not all(isinstance(section, dict) for section in sections):
+        raise OutlineValidationError("Every outline section must be an object")
     phases = [str(section.get("phase", "")).strip() for section in sections]
     if phases[0] != "CALM_HOOK" or phases[-1] != "SOFT_FADE":
-        raise RuntimeError("Outline must start with CALM_HOOK and end with SOFT_FADE")
+        raise OutlineValidationError("Outline must start with CALM_HOOK and end with SOFT_FADE")
     if any(phase not in STORY_PHASES for phase in phases):
-        raise RuntimeError("Outline contains an unknown phase")
+        raise OutlineValidationError("Outline contains an unknown phase")
     indexes = [STORY_PHASES.index(phase) for phase in phases]
     if indexes != sorted(indexes) or set(phases) != set(STORY_PHASES):
-        raise RuntimeError("Outline must cover all five phases in order")
+        raise OutlineValidationError("Outline must cover all five phases in order")
     for section in sections:
         scenes = section.get("scenes")
         if not isinstance(scenes, list) or not 2 <= len(scenes) <= 4:
-            raise RuntimeError("Every outline section needs 2-4 scenes")
+            raise OutlineValidationError("Every outline section needs 2-4 scenes")
         for scene in scenes:
+            if not isinstance(scene, dict):
+                raise OutlineValidationError("Every scene must be an object")
             if not all(str(scene.get(key, "")).strip() for key in ("place_or_anchor", "main_idea", "transition")):
-                raise RuntimeError("Every scene needs place_or_anchor, main_idea and transition")
+                raise OutlineValidationError("Every scene needs place_or_anchor, main_idea and transition")
     return sections
 
 
@@ -915,9 +924,37 @@ def make_outline(topic: dict, research: str) -> list[dict]:
 {{"sections":[{{"title":"...","phase":"CALM_HOOK","brief":"...","scenes":[{{"place_or_anchor":"...","action":"...","main_idea":"...","gentle_question":"...","transition":"..."}}],"target_words":700}}]}}
 اجعل الأقسام غير متكررة، ومجموع target_words لا يقل عن 5500 كلمة عربية بلا حشو.
 """
-    text, _ = gemini(prompt, json_mode=True, max_tokens=6000, temperature=0.3)
-    result = parse_json(text)
-    return validate_outline_sections(result.get("sections") or [])
+    feedback = ""
+    last_error = ""
+    for attempt in range(1, OUTLINE_RETRY_MAX + 1):
+        # Every retry asks for a complete new outline; only the short error
+        # reason is added, never the previous raw response.
+        text, _ = gemini(prompt + feedback, json_mode=True, max_tokens=6000, temperature=0.3)
+        try:
+            result = parse_json(text)
+        except ValueError as exc:  # json.JSONDecodeError is a ValueError
+            last_error = f"{type(exc).__name__}: {exc}"[:300]
+            print(f"OUTLINE_ATTEMPT={attempt} PARSE=FAIL VALIDATION=NOT_RUN ERROR={last_error}", file=sys.stderr, flush=True)
+            feedback = (
+                f"\n\nPrevious outline response was invalid JSON: {last_error}. Return one complete valid "
+                "JSON object only. Do not use Markdown, code fences, commentary, or text outside the JSON object."
+            )
+            continue
+        try:
+            if not isinstance(result, dict):
+                raise OutlineValidationError("Outline response must be a JSON object with a sections list")
+            sections = validate_outline_sections(result.get("sections") or [])
+        except OutlineValidationError as exc:
+            last_error = str(exc)[:300]
+            print(f"OUTLINE_ATTEMPT={attempt} PARSE=PASS VALIDATION=FAIL ERROR={last_error}", file=sys.stderr, flush=True)
+            feedback = (
+                f"\n\nPrevious outline failed validation: {last_error}. Return one complete corrected "
+                "outline matching the required schema exactly."
+            )
+            continue
+        print(f"OUTLINE_ATTEMPT={attempt} PARSE=PASS VALIDATION=PASS ERROR=", file=sys.stderr, flush=True)
+        return sections
+    raise RuntimeError(f"OUTLINE_GENERATION_FAILED_AFTER_RETRIES: {last_error}")
 
 
 def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path) -> str:
