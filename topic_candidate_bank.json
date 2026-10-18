@@ -1,47 +1,5 @@
 [
   {
-    "topic_ar": "الحياة اليومية في مدينة سمرقند على طريق الحرير",
-    "angle_ar": "تتبع يوم في حياة صانع ورق من قشر التوت في ورش سمرقند التقليدية، مع خطوات النقع والهرس والتجفيف تحت أشعة الشمس في العصر الساماني.",
-    "slug": "samarkand-paper-making-daily-life",
-    "search_query_en": "samarkand paper making history traditional workshop silk road",
-    "period_ar": "القرن العاشر الميلادي (العصر الساماني)",
-    "location_ar": "سمرقند، أوزبكستان",
-    "family": "الحرف والعمليات اليومية",
-    "key_elements": [
-      "صناعة الورق التقليدي",
-      "استخدام ألياف التوت",
-      "الدوامة المائية لطواحين الورق",
-      "أشعة الشمس في الساحات",
-      "هدوء الورش"
-    ],
-    "reason_ar": "عملية حرفية هادئة ومرتبطة بإنتاج الورق، وتوفر بيئة حسية متكاملة تناسب وقت النوم تماماً.",
-    "narrative_follow": "مراحل تحويل لحاء شجرة التوت إلى صفوف ورق ناعمة ومصقولة",
-    "soft_narrative_spine": "رحلة الألياف الخشنة حتى تصبح أوراقاً ناعمة جاهزة للكتابة",
-    "gentle_curiosity": "كيف كانت تُصقل صفحات الورق بالحصى الناعم لتصبح ملساء؟",
-    "attentional_anchor": "صوت تدفق الماء في طاحونة الورشة",
-    "sensory_potential_notes": "ملمس الورق الطري، رائحة الخشب الرطب، دفء الشمس في ساحة التجفيف",
-    "tension_risks": [
-      "لا توجد مخاطر توتر تذكر في هذه العملية الصنعية الهادئة"
-    ],
-    "reentry_plan": "العودة عبر تتبع شكل أوراق الورق المنشورة تحت الشمس",
-    "long_form_capacity": "تتيح العملية تفاصيل دقيقة ومريحة للمستمع لعدة مراحل متتالية",
-    "difference_from_recent": "تختلف عن مرو (السلجوقية) بالتركيز التقني البحت على صناعة الورق والحياة داخل الورشة",
-    "scores": {
-      "gentle_engagement": 5,
-      "low_cognitive_arousal": 5,
-      "narrative_flow": 5,
-      "sensory_potential": 5,
-      "reentry_tolerance": 5,
-      "low_stakes": 5,
-      "gradual_unwind_potential": 5,
-      "novelty_variety": 5
-    },
-    "bank_status": "queued",
-    "sleep_score_average": 5.0,
-    "first_discovered_at": "2026-10-18T03:07:59.522619+04:00",
-    "last_considered_at": "2026-10-18T03:07:59.522619+04:00"
-  },
-  {
     "topic_ar": "الحياة اليومية في مدينة طرابلس الغرب خلال العصر القره مانلي",
     "angle_ar": "استعراض روتين الحياة في البلدة القديمة والأسواق المطلة على البحر الأبيض المتوسط، مع التركيز على تحضير الزيوت العطرية وصناعة السجاد التقليدي في القرن الثامن عشر.",
     "slug": "tripoli-lybia-karamanli-daily-life",
@@ -81,7 +39,51 @@
     "bank_status": "queued",
     "sleep_score_average": 5.0,
     "first_discovered_at": "2026-10-18T03:07:59.522619+04:00",
-    "last_considered_at": "2026-10-18T03:07:59.522619+04:00"
+    "last_considered_at": "2026-10-18T12:53:38.896000+04:00",
+    "story_format": "PLACE_IMMERSION"
+  },
+  {
+    "topic_ar": "رحلة القوافل عبر واحة العلا القديمة على طريق التجارة القديم",
+    "angle_ar": "تتبع رحلة قافلة استراحة هادئة تحت ظلال واحة العلا والنخيل العالية في العصر اللحياني، مع التركيز على توزيع المياه والتربة الزراعية.",
+    "slug": "alula-oasis-caravans-history",
+    "search_query_en": "alula history ancient oasis trade route Lihyanite period",
+    "period_ar": "القرن الخامس قبل الميلاد",
+    "location_ar": "العلا، المملكة العربية السعودية",
+    "family": "طرق التجارة والواحات",
+    "story_format": "JOURNEY",
+    "key_elements": [
+      "ظلال واحة النخيل",
+      "قنوات الري المنحوتة في الصخر",
+      "استراحة المسافرين والجمال",
+      "المنحوتات الصخرية البسيطة",
+      "سكون الصحراء ليلاً"
+    ],
+    "reason_ar": "يقدم زاوية تاريخية مبكرة في شبه الجزيرة العربية تركز على الواحات وسكون الصحراء وراحة القوافل.",
+    "narrative_follow": "وصول القوافل إلى الواحة واختيار أماكن الاستراحة تحت الظلال",
+    "soft_narrative_spine": "التحول البطيء من حرارة الصحراء المفتوحة إلى برودة الواحة وظلالها",
+    "gentle_curiosity": "كيف كانت تنظم واحة العلا توزيع المياه بين الحقول والقوافل المارة؟",
+    "attentional_anchor": "صوت حفيف سعف النخيل في نسيم المساء",
+    "sensory_potential_notes": "برودة الظل، طعم الماء العذب، رائحة التراب النديين",
+    "tension_risks": [
+      "مشقة السفر في الصحراء يمكن تجنبها بالتركيز حصرياً على الواحة والراحة"
+    ],
+    "reentry_plan": "العودة عبر متابعة خطوط الظل المتمددة بين أشجار النخيل",
+    "long_form_capacity": "كافٍ لاستعراض تفاصيل العمارة الحجرية القديمة ونظم الري في الواحات",
+    "difference_from_recent": "يختلف عن واحة الموتس وظفار بكونه يركز على العصور القديمة المبكرة في شمال الجزيرة العربية",
+    "scores": {
+      "gentle_engagement": 5,
+      "low_cognitive_arousal": 5,
+      "narrative_flow": 5,
+      "sensory_potential": 5,
+      "reentry_tolerance": 5,
+      "low_stakes": 5,
+      "gradual_unwind_potential": 5,
+      "novelty_variety": 5
+    },
+    "bank_status": "queued",
+    "sleep_score_average": 5.0,
+    "first_discovered_at": "2026-10-18T12:53:38.896000+04:00",
+    "last_considered_at": "2026-10-18T12:53:38.896000+04:00"
   },
   {
     "topic_ar": "الحياة اليومية في مدينة دمشق خلال العصر المملوكي",
@@ -123,7 +125,8 @@
     "bank_status": "queued",
     "sleep_score_average": 4.875,
     "first_discovered_at": "2026-10-18T03:07:59.522619+04:00",
-    "last_considered_at": "2026-10-18T03:07:59.522619+04:00"
+    "last_considered_at": "2026-10-18T12:53:38.896000+04:00",
+    "story_format": "DAY_IN_THE_LIFE"
   },
   {
     "topic_ar": "رحلة في أزقة مدينة فاس خلال العصر المريني",
@@ -165,7 +168,8 @@
     "bank_status": "queued",
     "sleep_score_average": 4.875,
     "first_discovered_at": "2026-10-18T03:07:59.522619+04:00",
-    "last_considered_at": "2026-10-18T03:07:59.522619+04:00"
+    "last_considered_at": "2026-10-18T12:53:38.896000+04:00",
+    "story_format": "HOW_IT_WORKED"
   },
   {
     "topic_ar": "الحياة اليومية في مدينة صلالة القديمة وسواحل ظفار خلال موسم المنسوب والمونسون",
@@ -207,7 +211,52 @@
     "bank_status": "queued",
     "sleep_score_average": 4.875,
     "first_discovered_at": "2026-10-18T03:07:59.522619+04:00",
-    "last_considered_at": "2026-10-18T03:07:59.522619+04:00"
+    "last_considered_at": "2026-10-18T12:53:38.896000+04:00",
+    "story_format": "EVERYDAY_HABITS"
+  },
+  {
+    "topic_ar": "الحياة اليومية في مدينة سمرقند على طريق الحرير",
+    "angle_ar": "تتبع يوم في حياة صانع ورق من قشر التوت في ورش سمرقند التقليدية، مع خطوات النقع والهرس والتجفيف تحت أشعة الشمس في العصر الساماني.",
+    "slug": "samarkand-paper-making-daily-life",
+    "search_query_en": "samarkand paper making history traditional workshop silk road",
+    "period_ar": "القرن العاشر الميلادي (العصر الساماني)",
+    "location_ar": "سمرقند، أوزبكستان",
+    "family": "الحرف والعمليات اليومية",
+    "key_elements": [
+      "صناعة الورق التقليدي",
+      "استخدام ألياف التوت",
+      "الدوامة المائية لطواحين الورق",
+      "أشعة الشمس في الساحات",
+      "هدوء الورش"
+    ],
+    "reason_ar": "عملية حرفية هادئة ومرتبطة بإنتاج الورق، وتوفر بيئة حسية متكاملة تناسب وقت النوم تماماً.",
+    "narrative_follow": "مراحل تحويل لحاء شجرة التوت إلى صفوف ورق ناعمة ومصقولة",
+    "soft_narrative_spine": "رحلة الألياف الخشنة حتى تصبح أوراقاً ناعمة جاهزة للكتابة",
+    "gentle_curiosity": "كيف كانت تُصقل صفحات الورق بالحصى الناعم لتصبح ملساء؟",
+    "attentional_anchor": "صوت تدفق الماء في طاحونة الورشة",
+    "sensory_potential_notes": "ملمس الورق الطري، رائحة الخشب الرطب، دفء الشمس في ساحة التجفيف",
+    "tension_risks": [
+      "لا توجد مخاطر توتر تذكر في هذه العملية الصنعية الهادئة"
+    ],
+    "reentry_plan": "العودة عبر تتبع شكل أوراق الورق المنشورة تحت الشمس",
+    "long_form_capacity": "تتيح العملية تفاصيل دقيقة ومريحة للمستمع لعدة مراحل متتالية",
+    "difference_from_recent": "تختلف عن مرو (السلجوقية) بالتركيز التقني البحت على صناعة الورق والحياة داخل الورشة",
+    "scores": {
+      "gentle_engagement": 5,
+      "low_cognitive_arousal": 5,
+      "narrative_flow": 5,
+      "sensory_potential": 5,
+      "reentry_tolerance": 5,
+      "low_stakes": 5,
+      "gradual_unwind_potential": 5,
+      "novelty_variety": 5
+    },
+    "bank_status": "selected",
+    "sleep_score_average": 5.0,
+    "first_discovered_at": "2026-10-18T03:07:59.522619+04:00",
+    "last_considered_at": "2026-10-18T12:53:38.896000+04:00",
+    "story_format": "HOW_IT_WORKED",
+    "selected_at": "2026-10-18T12:53:40.386059+04:00"
   },
   {
     "topic_ar": "الحياة اليومية في واحة الموتس عبر طريق اللؤلؤ والتمور في الخليج العربي",
