@@ -33,6 +33,11 @@
       "approval_status": "MEDIA_READY",
       "youtube_video_id": null,
       "story_path": "stories/2026-10-17_oasis-life-gulf-falaj-palm"
+    },
+    "2026-10-18_samarkand-paper-making-daily-life": {
+      "approval_status": "GENERATING",
+      "youtube_video_id": null,
+      "story_path": "stories/2026-10-18_samarkand-paper-making-daily-life"
     }
   }
 }
