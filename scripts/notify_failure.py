@@ -57,6 +57,7 @@ def diagnostic_summary() -> str:
 
 STAGE_LABELS = {
     "produce": "بدء الإنتاج", "topic_selection": "اختيار الموضوع", "research": "البحث والمصادر",
+    "research_alignment": "مواءمة البحث مع الزاوية",
     "outline": "مخطط الحلقة", "chapters": "كتابة الفصول", "quality_gates": "بوابات الجودة والتحقق من الحقائق",
     "packaging": "حزمة YouTube (العنوان والصورة المصغرة)", "prepare": "تجهيز نص الصوت",
     "synthesize": "توليد الصوت", "background": "الصورة الخلفية", "render": "تصيير الفيديو",
@@ -76,7 +77,7 @@ COMPONENT_LABELS = {
     "provider_quota": "Provider Quota", "cost_policy": "Cost Policy", "gemini_auth": "Gemini Auth",
     "credentials": "Credentials", "internet_archive": "Internet Archive", "youtube_auth": "YouTube Auth",
     "youtube_publish": "YouTube Publish", "approval_gate": "Approval Gate", "approval_state": "Approval State",
-    "publish_preflight": "Publish Preflight",
+    "publish_preflight": "Publish Preflight", "research_alignment_gate": "Research ↔ Topic Alignment",
 }
 
 

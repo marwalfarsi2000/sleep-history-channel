@@ -44,6 +44,15 @@ class Failure:
     action_ar: str = ""
     wrapper: bool = False  # a generic parent-process message that hides the real error
 
+    @property
+    def immediate_retry(self) -> bool:
+        """Worth another bounded attempt in the same job (quota waits and free-limit blocks are not)."""
+        return self.policy == AUTO_RECOVERABLE and not self.planned_wait and not self.cost_blocked
+
+    @property
+    def max_attempts(self) -> int:
+        return 3 if self.category == TRANSIENT else 2
+
 
 def _f(code, stage, component, category, policy, retryable, action, **extra) -> tuple[str, Failure]:
     return code, Failure(code, stage, component, category, policy, retryable, action, **extra)
@@ -173,6 +182,16 @@ REGISTRY: dict[str, Failure] = dict([
        "Archive metadata failed the publish preflight; regenerate the episode from review.",
        owner_action_required=True, detail_ar="لم تجتز بيانات الحلقة فحص ما قبل النشر.",
        action_ar="أعد توليد الحلقة من رسالة المراجعة."),
+    _f("RESEARCH_TOPIC_ALIGNMENT_INSUFFICIENT", "research_alignment", "research_alignment_gate", VALIDATION,
+       OWNER_ACTION, False,
+       "The saved sources do not support a documented angle; the episode is checkpointed. Review the topic.",
+       owner_action_required=True,
+       detail_ar="المصادر المحفوظة لا تدعم زاوية موثقة لهذه الحلقة؛ الحلقة محفوظة ولم تُخترع تفاصيل.",
+       action_ar="راجع موضوع الحلقة أو اطلب استبداله؛ لا تُكمل قصة غير موثقة."),
+    _f("RESEARCH_TOPIC_ALIGNMENT_FAILED", "research_alignment", "research_alignment_gate", VALIDATION,
+       AUTO_RECOVERABLE, True,
+       "The alignment check returned no usable verdict; the next run repeats it from the saved research.",
+       detail_ar="لم تُرجع بوابة المواءمة حكمًا صالحًا."),
     _f("CHILD_PROCESS_FAILED", None, None, UNCLASSIFIED, None, False,
        "A child process failed without recording its own error; open the run log.", wrapper=True,
        detail_ar="فشلت عملية فرعية دون تسجيل سبب محدد."),
@@ -268,6 +287,7 @@ def diagnose(exc: BaseException, current_stage: str = "") -> dict:
             "recommended_action": known.recommended_action,
             "planned_wait": known.planned_wait, "waiting_for_quota": known.waiting_for_quota,
             "cost_blocked": known.cost_blocked, "known_failure": True,
+            "immediate_retry": known.immediate_retry, "max_attempts": known.max_attempts,
         }
     else:
         category, policy, retryable = _legacy(exc)
@@ -281,6 +301,7 @@ def diagnose(exc: BaseException, current_stage: str = "") -> dict:
                 if policy == CODE_DEFECT else None
             ),
             "planned_wait": False, "waiting_for_quota": False, "cost_blocked": False, "known_failure": False,
+            "immediate_retry": category == TRANSIENT, "max_attempts": 3 if category == TRANSIENT else 2,
         }
     result.update({"repo_file": None, "repo_function": None, "repo_line": None}, **location)
     return result
