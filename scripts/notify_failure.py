@@ -60,7 +60,23 @@ STAGE_LABELS = {
     "outline": "مخطط الحلقة", "chapters": "كتابة الفصول", "quality_gates": "بوابات الجودة والتحقق من الحقائق",
     "packaging": "حزمة YouTube (العنوان والصورة المصغرة)", "prepare": "تجهيز نص الصوت",
     "synthesize": "توليد الصوت", "background": "الصورة الخلفية", "render": "تصيير الفيديو",
-    "validate": "فحص الجودة النهائي", "archive": "رفع نسخة المراجعة", "publish": "النشر",
+    "validate": "فحص الجودة النهائي", "package": "تجهيز حزمة المراجعة",
+    "archive": "رفع نسخة المراجعة", "publish": "النشر",
+}
+
+COMPONENT_LABELS = {
+    "topic_discovery": "Topic Discovery", "topic_gate": "Topic Gate", "candidate_bank": "Candidate Bank",
+    "grounded_research": "Grounded Research", "source_validation": "Source Validation",
+    "outline_generation": "Outline Generation", "chapter_writer": "Chapter Writer", "story_length": "Story Length",
+    "story_quality_gate": "Story Quality Gate", "fact_check": "Fact Check", "youtube_packaging": "YouTube Packaging",
+    "pronunciation": "Pronunciation", "tts_text": "TTS Text", "tts_gate": "TTS Gate", "tts_chunking": "TTS Chunking",
+    "tts": "TTS", "audio_qc": "Audio QC", "llm_router": "LLM Router",
+    "historical_accuracy_gate": "Historical Accuracy Gate", "thumbnail_text": "Thumbnail Text",
+    "thumbnail_typography": "Thumbnail Typography", "image_provider": "Image Provider",
+    "provider_quota": "Provider Quota", "cost_policy": "Cost Policy", "gemini_auth": "Gemini Auth",
+    "credentials": "Credentials", "internet_archive": "Internet Archive", "youtube_auth": "YouTube Auth",
+    "youtube_publish": "YouTube Publish", "approval_gate": "Approval Gate", "approval_state": "Approval State",
+    "publish_preflight": "Publish Preflight",
 }
 
 
@@ -102,26 +118,63 @@ def message_for_summary(summary: dict, run_url: str) -> str:
             "لا يلزم أي إجراء منك.\n"
             + _link(run_url)
         )
+    return _failure_message(summary, stage, resume, error, run_url)
+
+
+def _code_location(summary: dict) -> str:
+    repo_file, function = summary.get("repo_file"), summary.get("repo_function")
+    if not repo_file:
+        return ""
+    name = str(repo_file).split("/")[-1]
+    return f"{name} → {function}()" if function and function != "<module>" else name
+
+
+def _failure_message(summary: dict, stage: str, resume: str, error: str, run_url: str) -> str:
+    import failure_registry
     episode = html.escape(str(summary.get("story_path") or summary.get("episode_id") or "").split("/")[-1])
-    lines = ["<b>توقفت أتمتة الفيديو ⚠️</b>", ""]
+    code = str(summary.get("error_code") or "")
+    known = failure_registry.REGISTRY.get(code)
+    component = str(summary.get("failed_component") or "")
+    lines = ["<b>توقفت الأتمتة ⚠️</b>", ""]
     if episode:
         lines.append(f"الحلقة: <code>{episode}</code>")
     lines.append(f"المرحلة: <b>{html.escape(stage or 'غير محددة')}</b>")
-    lines.append(f"السبب الحقيقي: <code>{error}</code>")
+    if component:
+        lines.append(f"المكوّن: <b>{html.escape(COMPONENT_LABELS.get(component, component.replace('_', ' ').title()))}</b>")
+    if known and code:
+        lines.append(f"السبب: <code>{html.escape(code)}</code>")
+        if known.detail_ar:
+            lines.append(f"التفصيل: {html.escape(known.detail_ar)}")
+        lines.append(f"الخطأ الأصلي: <code>{error}</code>")
+    else:
+        lines.append(f"السبب: <code>{error}</code>")
     if summary.get("cost_blocked"):
         lines.append("🚫 محظور بسياسة التكلفة: لم يُستخدم أي مزود مدفوع.")
-    if summary.get("retryable") and summary.get("checkpoint_saved"):
-        lines.append(f"🔄 سيُستأنف تلقائيًا من آخر نقطة محفوظة{f' ({html.escape(resume)})' if resume else ''}.")
-    elif summary.get("retryable"):
-        lines.append("🔄 يمكن إعادة المحاولة؛ التشغيل القادم سيستخدم ما حُفظ.")
-    else:
+    policy = summary.get("recovery_policy") if "recovery_policy" in summary else "LEGACY"
+    if policy == failure_registry.AUTO_RECOVERABLE:
+        lines.append("🔄 يستطيع النظام معالجة هذا تلقائيًا." + (
+            f" سيُستأنف من آخر نقطة محفوظة{f' ({html.escape(resume)})' if resume else ''}."
+            if summary.get("checkpoint_saved") else ""
+        ))
+    elif policy == failure_registry.OWNER_ACTION:
+        action = (known.action_ar if known else "") or str(summary.get("owner_action") or summary.get("recommended_action") or "")
+        lines.append(f"👤 يلزم منك: <code>{html.escape(action)}</code>")
+        if not summary.get("retryable"):
+            lines.append("⛔ لن يُحل بإعادة التشغيل وحدها.")
+    elif policy == failure_registry.CODE_DEFECT:
+        where = _code_location(summary)
         lines.append("⛔ لن يُحل بإعادة التشغيل وحدها.")
-    if summary.get("owner_action_required"):
+        lines.append("🛠️ يحتاج تعديلًا برمجيًا" + (f" في: <code>{html.escape(where)}</code>" if where else "") + ".")
+        lines.append("أرسلي هذه الرسالة إلى Codex دون بدء العمل من الصفر.")
+    elif policy is None:
+        lines.append("ℹ️ لم يُصنَّف السبب تلقائيًا؛ افتح سجل التشغيل لمعرفة التفاصيل.")
+    else:  # summary written before failure diagnostics existed
+        if summary.get("retryable"):
+            lines.append("🔄 يمكن إعادة المحاولة؛ التشغيل القادم سيستخدم ما حُفظ.")
+        else:
+            lines.append("⛔ لن يُحل بإعادة التشغيل وحدها.")
+    if summary.get("owner_action_required") and policy != failure_registry.OWNER_ACTION:
         lines.append(f"👤 يلزم إجراء منك: <code>{html.escape(str(summary.get('owner_action') or ''))}</code>")
-    elif not summary.get("retryable"):
-        lines.append("👤 يلزم إصلاح: أرسلي هذه الرسالة إلى Codex دون بدء العمل من الصفر.")
-    else:
-        lines.append("لا يلزم إجراء منك.")
     lines.append(_link(run_url))
     return "\n".join(lines)
 

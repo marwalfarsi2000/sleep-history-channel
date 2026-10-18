@@ -250,6 +250,7 @@ def produce() -> dict:
         raise RuntimeError(f"Production did not reach {State.MEDIA_READY}")
     # The verified video goes to Internet Archive as the durable review copy;
     # GitHub keeps only small state files and logs.
+    run_summary.stage("archive")
     return review_record(story, upload_story(story))
 
 
@@ -291,6 +292,7 @@ def publish(identifier: str) -> dict:
     from state_machine import State, normalize_state
     from archive_recovery import ensure_index_record
 
+    run_summary.stage("publish")
     current_remote = normalize_state(remote_status(identifier))
     allowed_states = {State.REVIEW_PENDING, State.APPROVED_FOR_PUBLISH, State.PUBLISHING, State.PUBLISHED}
     if current_remote not in allowed_states:
@@ -399,6 +401,7 @@ def regenerate(identifier: str) -> dict:
     metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
     if normalize_state(metadata.get("approval_status", "")) != State.MEDIA_READY:
         raise RuntimeError(f"Regeneration did not reach {State.MEDIA_READY}")
+    run_summary.stage("archive")
     return review_record(story, upload_story(story))
 
 

@@ -1554,9 +1554,11 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
             topic = topic_from_checkpoint(unfinished)
             story = saved_story
         else:
+            run_summary.stage("topic_selection")
             topic = choose_valid_topic(history)
             story = ROOT / "stories" / f"{dt.date.today().isoformat()}_{topic['slug']}"
     else:
+        run_summary.stage("topic_selection")
         topic = choose_valid_topic(history)
         story = ROOT / "stories" / f"{dt.date.today().isoformat()}_{topic['slug']}"
     if dry_run:
