@@ -1,0 +1,8 @@
+{
+  "name": "sleep-history-channel-tools",
+  "private": true,
+  "description": "Node adapter dependencies (Puter.js thumbnail provider only); the pipeline stays Python.",
+  "dependencies": {
+    "@heyputer/puter.js": "2.6.4"
+  }
+}

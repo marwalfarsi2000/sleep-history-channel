@@ -472,19 +472,33 @@ def _write_metadata(metadata_path: Path, metadata: dict) -> None:
 
 
 def build_final_thumbnail(story: Path, background: Path, thumbnail_text: str) -> tuple[dict, str]:
-    """Final thumbnail: GPT Image 2.5 Sunburst edits the text-free background and renders the Arabic phrase itself.
+    """Final thumbnail. Order: Puter (GPT Image 2.5 Sunburst, Arabic phrase rendered inside the image) then the existing free path.
 
-    No text is drawn afterwards, so 10_background.png (the video background) stays text-free.
+    Text is never drawn over a Puter result, and 10_background.png (the video background) always stays text-free.
+    There is no paid fallback.
     """
     thumbnail = story / "11_thumbnail_base.jpg"
-    if thumbnail_text:
-        import sunburst_thumbnail
-        return sunburst_thumbnail.generate(story, thumbnail_text), "passed"
-    # Backward compatibility for review regeneration of episodes made before the packaging automation existed.
     with Image.open(background) as source:
-        source.convert("RGB").resize((1280, 720), Image.Resampling.LANCZOS).save(
-            thumbnail, format="JPEG", quality=94, optimize=True)
-    return {}, "legacy_no_text"
+        base = source.convert("RGB")
+    if not thumbnail_text:
+        # Backward compatibility for review regeneration of episodes made before the packaging automation existed.
+        base.resize((1280, 720), Image.Resampling.LANCZOS).save(thumbnail, format="JPEG", quality=94, optimize=True)
+        return {}, "legacy_no_text"
+    import puter_thumbnail
+    puter_error = "PUTER_DISABLED"
+    if puter_thumbnail.enabled():
+        try:
+            return puter_thumbnail.generate(story, thumbnail_text), "passed"
+        except puter_thumbnail.PuterError as exc:
+            puter_error = exc.code
+            print(f"Puter thumbnail unavailable ({exc.code}); using the existing free thumbnail path", flush=True)
+    render_thumbnail(base, thumbnail, thumbnail_text)  # existing free path
+    return {
+        "thumbnail_generation_provider": "local_pillow_fallback",
+        "thumbnail_text_render_method": "pillow_overlay_fallback",
+        "thumbnail_puter_status": puter_error,
+        "thumbnail_text_ocr_verified": False,
+    }, "fallback_overlay"
 
 
 def reusable_background(story: Path, metadata: dict, original_prompt: str) -> bool:

@@ -1,0 +1,26 @@
+name: Puter Connection Test
+
+# Read-only: proves PUTER_AUTH_TOKEN reaches Actions and reports the free allowance. No image is generated, nothing is charged.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Secret present (never printed)
+        env:
+          PUTER_AUTH_TOKEN: ${{ secrets.PUTER_AUTH_TOKEN }}
+        run: |
+          if [ -n "$PUTER_AUTH_TOKEN" ]; then echo "PUTER_SECRET=PRESENT"; else echo "PUTER_SECRET=MISSING"; exit 1; fi
+      - name: Install adapter dependency
+        run: npm ci --ignore-scripts
+      - name: Auth and allowance (read only)
+        env:
+          PUTER_AUTH_TOKEN: ${{ secrets.PUTER_AUTH_TOKEN }}
+        run: timeout 60 node scripts/generate_image_puter.mjs --check
