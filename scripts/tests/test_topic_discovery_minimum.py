@@ -66,6 +66,21 @@ class TopicDiscoveryMinimumTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "TOPIC_DISCOVERY_FAILED: fewer than 4 narrative"):
             run(fresh(4, 3))
 
+    def test_retry_receives_family_shortage_feedback_and_corrects_the_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "bank.json"
+            path.write_text("[]", encoding="utf-8")
+            with mock.patch.object(generate_daily, "TOPIC_CANDIDATE_BANK_PATH", path), \
+                    mock.patch.object(generate_daily, "gemini", side_effect=[
+                        (json.dumps({"candidates": fresh(4, 3)}, ensure_ascii=False), []),
+                        (json.dumps({"candidates": fresh(4, 4)}, ensure_ascii=False), []),
+                        (json.dumps(GATE), []),
+                    ]) as gem:
+                topic = generate_daily.choose_valid_topic([], attempts=2)
+            self.assertTrue(topic["slug"])
+            self.assertIn("fewer than 4 narrative families", gem.call_args_list[1].args[0])
+            self.assertIn("استخدم أربع قيم family مختلفة", gem.call_args_list[1].args[0])
+
     def test_queued_bank_completes_the_pool(self) -> None:
         bank = [banked(10, "bank-a"), banked(11, "bank-b")]
         topic, _ = run(fresh(2, 2), bank)
