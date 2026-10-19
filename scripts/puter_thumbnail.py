@@ -74,7 +74,8 @@ def edit_image(prompt: str, reference_png: bytes, timeout: int = 600) -> bytes:
         out = work / "out.png"
         if not out.is_file():
             raise PuterError("PUTER_BAD_RESPONSE", "no image file")
-        return out.read_bytes()
+        LAST_RUN["raw"] = out.read_bytes()  # kept for the live-test report only
+        return LAST_RUN["raw"]
 
 
 def generate(story: Path, thumbnail_text: str, *, max_attempts: int = MAX_ATTEMPTS) -> dict:
@@ -98,8 +99,8 @@ def generate(story: Path, thumbnail_text: str, *, max_attempts: int = MAX_ATTEMP
             time.sleep(min(5 * number, 20))
             continue
         except (OSError, ValueError, RuntimeError) as exc:
-            shared._log(story, {**record, "outcome": "invalid_image", "detail": type(exc).__name__})
-            last_error = "PUTER_INVALID_IMAGE"
+            shared._log(story, {**record, "outcome": "invalid_image", "detail": type(exc).__name__, "reason": str(exc)[:120]})
+            last_error = f"PUTER_INVALID_IMAGE: {str(exc)[:120]}"
             continue
         quality = shared.save_jpeg(image, story / shared.THUMBNAIL_FILE)
         shared._log(story, {**record, "outcome": "passed"})

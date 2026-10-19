@@ -186,6 +186,6 @@ def test_video_background_stays_text_free(story, monkeypatch):
 
 def test_adapter_source_guards_allowance_and_never_retries_402():
     text = (ROOT / "scripts" / "generate_image_puter.mjs").read_text(encoding="utf-8")
-    assert "getMonthlyUsage" in text and "PUTER_MIN_ALLOWANCE" in text and "PUTER_FREE_ALLOWANCE_EXHAUSTED" in text
-    assert "status === 402" in text and "insufficient_funds" in text
+    assert "getMonthlyUsage" in text and "PUTER_SAFETY_BUFFER" in text and "PUTER_FREE_ALLOWANCE_EXHAUSTED" in text
+    assert "subscription_required" in text and "status === 402" in text and "insufficient_funds" in text
     assert "allowance_before" in text and "allowance_after" in text

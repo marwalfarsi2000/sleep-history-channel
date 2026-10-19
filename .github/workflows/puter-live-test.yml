@@ -56,13 +56,15 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          if [ -f puter-live-test/2_puter_thumbnail.jpg ]; then
-            curl -sS -o /dev/null -w "telegram_http=%{http_code}\n" "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
-              -F "chat_id=${TELEGRAM_CHAT_ID}" -F "document=@puter-live-test/2_puter_thumbnail.jpg" \
-              -F "caption=Puter / Sunburst live test (single image)" || echo "telegram_send_failed"
-          else
-            echo "no image to send"
-          fi
+          for f in puter-live-test/2_puter_thumbnail.jpg puter-live-test/raw_model_output.png; do
+            if [ -f "$f" ]; then
+              curl -sS -o /dev/null -w "telegram_http=%{http_code}\n" "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
+                -F "chat_id=${TELEGRAM_CHAT_ID}" -F "document=@${f}" \
+                -F "caption=Puter / Sunburst live test (single image)" || echo "telegram_send_failed"
+              exit 0
+            fi
+          done
+          echo "no image to send"
       - name: Upload result for owner review
         if: always()
         uses: actions/upload-artifact@v4

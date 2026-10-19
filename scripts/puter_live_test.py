@@ -7,6 +7,7 @@ account is marked free-only verified, so an unverified account never reaches the
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
@@ -34,10 +35,20 @@ def main(argv: list[str] | None = None) -> int:
     try:
         record = puter.generate(story, TEST_PHRASE, max_attempts=1)
     except puter.PuterError as exc:
+        raw = puter.LAST_RUN.get("raw")
+        if raw:  # the model did answer: keep exactly what came back so it can be inspected
+            (OUT / "raw_model_output.png").write_bytes(raw)
+            try:
+                with Image.open(io.BytesIO(raw)) as returned:
+                    result.update(raw_format=returned.format, raw_size=list(returned.size))
+            except Exception as problem:  # not an image at all
+                result.update(raw_format="not_an_image", raw_error=type(problem).__name__)
         result.update(status="FAIL", **{k: puter.LAST_RUN.get(k) for k in ("allowance_before", "allowance_after")}, error_code=exc.code, error=puter.redact(str(exc))[:300])
         (OUT / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(f"PUTER_LIVE_TEST=FAIL {exc.code}")
         print(f"PUTER_LIVE_TEST_ERROR={puter.redact(str(exc))[:300]}")
+        print(f"ALLOWANCE_BEFORE={puter.LAST_RUN.get('allowance_before')} ALLOWANCE_AFTER={puter.LAST_RUN.get('allowance_after')}")
+        print(f"RAW_OUTPUT={result.get('raw_format')} {result.get('raw_size')}")
         return 1
     final = story / "11_thumbnail_base.jpg"
     shutil.copy2(final, OUT / "2_puter_thumbnail.jpg")
@@ -50,7 +61,10 @@ def main(argv: list[str] | None = None) -> int:
     (OUT / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     shutil.rmtree(story, ignore_errors=True)
     print(f"PUTER_LIVE_TEST=PASS size={size[0]}x{size[1]} bytes={final.stat().st_size}")
-    print(f"ALLOWANCE_BEFORE={puter.LAST_RUN.get('allowance_before')} ALLOWANCE_AFTER={puter.LAST_RUN.get('allowance_after')}")
+    before, after = puter.LAST_RUN.get("allowance_before"), puter.LAST_RUN.get("allowance_after")
+    print(f"ALLOWANCE_BEFORE={before} ALLOWANCE_AFTER={after}")
+    if isinstance(before, (int, float)) and isinstance(after, (int, float)):
+        print(f"ALLOWANCE_CONSUMED={before - after:.6f} SAFETY_BUFFER=50")
     return 0
 
 

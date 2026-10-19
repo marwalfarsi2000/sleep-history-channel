@@ -53,8 +53,8 @@ try {
     // Never start a generation that the free monthly allowance cannot clearly cover (purchased credits are never used).
     const readRemaining = async () => (await puter.auth.getMonthlyUsage())?.allowanceInfo?.remaining;
     const before = await readRemaining();
-    const minimum = Number(process.env.PUTER_MIN_ALLOWANCE || 50);
-    if (!(typeof before === 'number' && before >= minimum)) fail('PUTER_FREE_ALLOWANCE_EXHAUSTED', `allowance ${before} below required ${minimum}`);
+    const minimum = Number(process.env.PUTER_SAFETY_BUFFER || 50); // a safety buffer, not the expected cost of an image
+    if (!(typeof before === 'number' && before >= minimum)) fail('PUTER_FREE_ALLOWANCE_EXHAUSTED', `allowance ${before} below safety buffer ${minimum}`);
 
     const reference = readFileSync(referencePath).toString('base64');
     const result = await puter.ai.txt2img({
@@ -86,7 +86,7 @@ try {
     process.exit(0); // puter.js leaves sockets open
 } catch (error) {
     const { status, code, message } = errorInfo(error);
-    const funds = status === 402 || code === 'insufficient_funds' || error?.metadata?.usage_limited === true;
+    const funds = status === 402 || code === 'insufficient_funds' || code === 'subscription_required' || error?.metadata?.usage_limited === true;
     const auth = status === 401 || code === 'token_auth_failed' || code === 'forbidden';
     fail(funds ? 'PUTER_FREE_ALLOWANCE_EXHAUSTED' : auth ? 'PUTER_AUTH_FAILED' : 'PUTER_REQUEST_FAILED', `${status ?? ''} ${code ?? ''} ${message}`);
 }
