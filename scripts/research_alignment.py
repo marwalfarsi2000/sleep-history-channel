@@ -21,7 +21,8 @@ CHECKED_FIELDS = (
 )
 # The fictional layer: not checked against sources (it is invented), kept as context and left untouched by re-anchoring.
 FICTION_CONTEXT_FIELDS = ("character_ar", "protagonist_kind", "small_want_ar", "quest_ar")
-REANCHORED_FIELDS = ("angle_ar", "narrative_follow", "soft_narrative_spine", "gentle_curiosity", "key_elements")
+REANCHORED_FIELDS = ("angle_ar", "narrative_follow", "soft_narrative_spine", "gentle_curiosity", "key_elements",
+                    "immersion_opportunities")
 RESEARCH_LIMIT = 45000
 METADATA_KEYS = (
     "research_topic_alignment_status", "unsupported_topic_elements", "reanchored_elements", "alignment_reason",
@@ -82,7 +83,7 @@ def build_reanchor_prompt(topic: dict, research: str, unsupported: list, support
 {research[:RESEARCH_LIMIT]}
 
 أعد JSON فقط:
-{{"angle_ar":"...","narrative_follow":"ما الذي سيتبعه المستمع","soft_narrative_spine":"...","gentle_curiosity":"سؤال لطيف يجيب عنه البحث","key_elements":["..."]}}"""
+{{"angle_ar":"...","narrative_follow":"ما الذي سيتبعه المستمع","soft_narrative_spine":"...","gentle_curiosity":"سؤال لطيف يجيب عنه البحث","key_elements":["..."],"immersion_opportunities":["فرص انغماس حسي موثقة في البحث، تحل محل غير المدعومة"]}}"""
 
 
 def _as_list(value: object) -> list:
@@ -128,6 +129,9 @@ def reanchor(gemini, parse_json, topic: dict, research: str, result: dict) -> di
             "gentle_curiosity": str(payload.get("gentle_curiosity") or "").strip(),
             "key_elements": [item for item in _as_list(payload.get("key_elements")) if item.strip()],
         }
+        immersion = [item for item in _as_list(payload.get("immersion_opportunities")) if item.strip()]
+        if immersion or topic.get("immersion_opportunities"):
+            fields["immersion_opportunities"] = immersion  # replaces the old (possibly unsupported) list; required when the topic had one
         if all(fields.values()):
             return fields
     raise AlignmentError("RESEARCH_TOPIC_ALIGNMENT_FAILED: could not re-anchor the angle on the supported elements")

@@ -75,7 +75,7 @@ def test_unsupported_elements_are_removed_from_the_checked_topic():
                      verdict(ra.PASS))
     topic, _, _ = gate(fake)
     assert not set(topic["key_elements"]) & {"السجاد", "الصوف", "صبغ الخيوط", "الزيوت العطرية"}
-    assert "الصوف" not in json.dumps({k: topic[k] for k in ra.REANCHORED_FIELDS}, ensure_ascii=False)
+    assert "الصوف" not in json.dumps({k: topic.get(k) for k in ra.REANCHORED_FIELDS}, ensure_ascii=False)
 
 
 def test_a_pass_that_lists_unsupported_elements_is_not_trusted():
@@ -202,3 +202,27 @@ def test_alignment_failures_are_registered_for_diagnostics():
     import failure_registry as registry
     for code in ("RESEARCH_TOPIC_ALIGNMENT_INSUFFICIENT", "RESEARCH_TOPIC_ALIGNMENT_FAILED"):
         assert registry.REGISTRY[code].stage == "research_alignment"
+
+
+def test_unsupported_immersion_opportunity_is_replaced_by_reanchor():
+    topic_in = dict(TOPIC, immersion_opportunities=["رائحة الزيوت العطرية", "ضوء الميناء"])
+    reanchored = dict(REANCHORED, immersion_opportunities=["ضوء الميناء", "أصوات الأسواق"])
+    fake = gemini_of(
+        verdict(ra.REANCHOR_REQUIRED, ["رائحة الزيوت العطرية"]),
+        (json.dumps(reanchored, ensure_ascii=False), []),
+        verdict(ra.PASS, supported=reanchored["key_elements"]),
+    )
+    topic, _, record = gate(fake, topic=topic_in)
+    assert record["research_topic_alignment_status"] == "PASS" and len(fake.calls) == 3
+    assert topic["immersion_opportunities"] == ["ضوء الميناء", "أصوات الأسواق"]
+    assert "رائحة الزيوت العطرية" not in json.dumps(topic["immersion_opportunities"], ensure_ascii=False)
+    assert "رائحة الزيوت العطرية" not in fake.calls[2]          # the second check no longer sees the unsupported value
+
+
+def test_reanchor_without_replacement_immersion_is_not_accepted_when_topic_had_one():
+    topic_in = dict(TOPIC, immersion_opportunities=["رائحة الزيوت العطرية"])
+    fake = gemini_of(verdict(ra.REANCHOR_REQUIRED, ["رائحة الزيوت العطرية"]),
+                     (json.dumps(REANCHORED, ensure_ascii=False), []),
+                     (json.dumps(REANCHORED, ensure_ascii=False), []))
+    with pytest.raises(ra.AlignmentError):
+        gate(fake, topic=topic_in)
