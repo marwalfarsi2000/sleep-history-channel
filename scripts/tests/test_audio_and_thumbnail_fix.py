@@ -94,6 +94,15 @@ class RepairPathTests(unittest.TestCase):
         self.assertIn("naturally uncluttered, low-detail text-safe area", new)
         self.assertIn("solid dark patch", new)
 
+    def test_sanitiser_keeps_the_scene_when_the_dark_area_is_inside_a_long_sentence(self):
+        old = ("A lantern lit whitewashed alley in Tripoli at dusk with arched doorways and a donkey cart, "
+               "warm amber windows and haze, leaving a clean dark negative-space area on the left third, "
+               "calm intimate mood and soft rain on the stones.")
+        new = self.repair.sanitize_prompt(old)
+        for kept in ("lantern lit whitewashed alley", "arched doorways", "calm intimate mood", "soft rain"):
+            self.assertIn(kept, new)
+        self.assertNotIn("negative-space", new)
+
     def test_frame_analysis_detects_flat_black_patch(self):
         from PIL import Image, ImageDraw
         image = Image.new("RGB", (1280, 720), (90, 80, 70))

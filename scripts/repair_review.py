@@ -14,6 +14,7 @@ import json
 import re
 import shutil
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,8 +27,9 @@ DOWNLOAD_NAMES = (
     "16_fact_check.md",
 )
 OPTIONAL_MEDIA = ("12_audio_narration.mp3", "10_background.png")
-DARK_SENTENCE = re.compile(
-    r"[^.]*\b(?:dark negative[- ]space|reserved dark|empty dark|clean dark|dark (?:text )?area|negative[- ]space)\b[^.]*\.?",
+DARK_CLAUSE = re.compile(
+    r"[^.;,\n]*\b(?:dark negative[- ]space|reserved dark|empty dark|clean dark|dark (?:text )?area|negative[- ]space|"
+    r"text[- ]safe dark|dark (?:panel|patch|zone|space))\b[^.;,\n]*[.;,]?",
     re.IGNORECASE)
 NATURAL_AREA = (
     "Leave one naturally uncluttered, low-detail text-safe area integrated organically into the historical "
@@ -49,7 +51,7 @@ def say(key: str, value: object) -> None:
 
 def sanitize_prompt(prompt: str) -> str:
     body = SCENE_TAIL.sub("", prompt).strip()
-    body = DARK_SENTENCE.sub("", body).strip()
+    body = DARK_CLAUSE.sub("", body).strip()
     return f"{body} {NATURAL_AREA}\n\n{NEW_SCENE_TAIL}\n"
 
 
@@ -133,9 +135,22 @@ def run_repair(identifier: str, upload: bool) -> None:
         say("BACKGROUND_SOURCE", "10_background.png from archive item")
     if patch_in_video:
         prompt_path = story / "08_image_prompt_en.txt"
-        prompt_path.write_text(sanitize_prompt(prompt_path.read_text(encoding="utf-8")), encoding="utf-8")
+        original_prompt = prompt_path.read_text(encoding="utf-8")
+        cleaned_prompt = sanitize_prompt(original_prompt)
+        print("PROMPT_BEFORE\n" + original_prompt + "\nPROMPT_AFTER\n" + cleaned_prompt, flush=True)
+        if len(cleaned_prompt) < 0.6 * len(original_prompt):
+            raise RuntimeError("REPAIR_ABORTED: prompt sanitising removed too much of the scene description")
+        prompt_path.write_text(cleaned_prompt, encoding="utf-8")
         background.unlink(missing_ok=True)
-        image_generate.generate_with_accuracy_retries(story)
+        for attempt in range(1, 4):  # free providers only; a flat/low-quality candidate is simply re-rolled
+            try:
+                image_generate.generate_with_accuracy_retries(story)
+                break
+            except RuntimeError as exc:
+                if "IMAGE_FREE_CAPACITY_EXHAUSTED" not in str(exc) or attempt == 3:
+                    raise
+                print(f"Image attempt {attempt} unavailable ({str(exc)[:160]}); retrying in 30s", flush=True)
+                time.sleep(30)
         say("BACKGROUND_REGENERATED", "YES")
         say("WHY_BACKGROUND_REGENERATED", "flat near-black patch detected in the video frame")
         say("THUMBNAIL_REBUILT", "YES (by image_generate with the new background)")
