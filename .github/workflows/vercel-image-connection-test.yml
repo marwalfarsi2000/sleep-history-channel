@@ -1,0 +1,22 @@
+name: Vercel Image Connection Test
+
+# Smoke test of the stored AI_GATEWAY_API_KEY secret: GET /v1/models only, no image is generated.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Check Vercel AI Gateway key and Sunburst model
+        env:
+          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+        run: python scripts/vercel_gateway.py check

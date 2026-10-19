@@ -1,4 +1,9 @@
 .env
+.env.local
+.env.*
+!.env.example
+*.secret
+secrets/
 stories/
 stories/**/audio_chunks/
 stories/**/tts_chunks/
