@@ -35,3 +35,4 @@ scripts/tests/cloudflare_e2e.py
 resume.ps1
 
 
+node_modules/
