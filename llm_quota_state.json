@@ -1,13 +1,4 @@
 {
   "version": 1,
-  "updated_at": "2026-10-19T23:12:03.660972+00:00",
-  "models": {
-    "gemini-3.5-flash-lite": {
-      "status": "blocked",
-      "quota_kind": "per_minute_model",
-      "blocked_until": "2026-10-19T23:13:00.660972+00:00",
-      "last_error_category": "per_minute_model",
-      "updated_at": "2026-10-19T23:12:03.660972+00:00"
-    }
-  }
+  "updated_at": "2026-10-19T23:12:03.660972+00:00"
 }
