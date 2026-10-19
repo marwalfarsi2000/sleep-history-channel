@@ -137,5 +137,27 @@
     "youtube_video_id": "lpOl9d4Ynhk",
     "youtube_url": "https://www.youtube.com/watch?v=lpOl9d4Ynhk",
     "published_at": "2026-10-18T20:30:39.636965+04:00"
+  },
+  {
+    "identifier": "lan-tukmil-alqissa-20261019-tripoli-lybia-karamanli-d",
+    "slug": "tripoli-lybia-karamanli-daily-life",
+    "title": "الحياة اليومية في بيوت طرابلس الغرب | قصة تاريخية للنوم 😴",
+    "episode_title_core": "الحياة اليومية في بيوت طرابلس الغرب",
+    "title_suffix": "قصة تاريخية للنوم 😴",
+    "final_youtube_title": "الحياة اليومية في بيوت طرابلس الغرب | قصة تاريخية للنوم 😴",
+    "thumbnail_text": "أزقة طرابلس البيضاء",
+    "thumbnail_scene_type": "الحياة اليومية والأسواق",
+    "thumbnail_prompt": "Calm illustrated realism of an 18th-century old city street in Tripoli at dusk with subtle painterly texture and premium storybook quality; low-key night lighting with a dim wall lantern casting a warm glow on whitewashed plaster walls and arched doorways overlooking the sea; palette of deep midnight navy, charcoal, muted warm gold, and aged ivory; one simple memorable scene focusing on a quiet alleyway; a clean dark negative-space area occupying approximately thirty percent of the upper composition left free of details; mobile-first strong silhouette, no people, no modern objects, no text or typography of any kind rendered in the image. 16:9 YouTube thumbnail. Original composition. Professional quality.",
+    "historical_setting": "طرابلس، ليبيا — القرن الثامن عشر الميلادي",
+    "created_at": "2026-10-19T12:03:21.005918+04:00",
+    "status": "REVIEW_PENDING",
+    "video_filename": "14_video_final.mp4",
+    "item_url": "https://archive.org/details/lan-tukmil-alqissa-20261019-tripoli-lybia-karamanli-d",
+    "video_url": "https://archive.org/download/lan-tukmil-alqissa-20261019-tripoli-lybia-karamanli-d/14_video_final.mp4",
+    "thumbnail_url": "https://archive.org/download/lan-tukmil-alqissa-20261019-tripoli-lybia-karamanli-d/11_thumbnail_base.jpg",
+    "video_size": 78057269,
+    "video_sha256": "6326dd6f777a1b0e24e713043a702a8777ea58a45f28b15ed5facda58ff88af2",
+    "audio_duration_seconds": 4749.5,
+    "video_duration_seconds": 4750.0
   }
 ]
