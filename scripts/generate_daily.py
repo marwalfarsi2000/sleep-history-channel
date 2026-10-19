@@ -942,6 +942,30 @@ def validate_story_quality(topic: dict, story_text: str) -> dict:
     return result
 
 
+def _fact_check_json(prompt: str, *, max_tokens: int) -> dict:
+    last_shape = "unknown"
+    for attempt in range(2):
+        retry_instruction = "" if attempt == 0 else (
+            "\n\nتصحيح إلزامي: أعد كائن JSON واحدًا فقط مطابقًا للمخطط المطلوب، "
+            "ولا تُعد قائمة JSON."
+        )
+        text, _ = gemini(
+            prompt + retry_instruction,
+            json_mode=True,
+            max_tokens=max_tokens,
+            temperature=0.0,
+        )
+        result = parse_json(text)
+        if isinstance(result, dict):
+            return result
+        if isinstance(result, list) and len(result) == 1 and isinstance(result[0], dict):
+            return result[0]
+        last_shape = f"{type(result).__name__}[{len(result)}]" if isinstance(result, list) else type(result).__name__
+    raise RuntimeError(
+        f"FACT_CHECK_SCHEMA_FAILED: expected one JSON object, got {last_shape}"
+    )
+
+
 def fact_check_story(topic: dict, research: str, story_text: str) -> tuple[str, dict]:
     rules = production_rules(26, 27, 28, 29)
     first_prompt = f"""{rules}
@@ -960,8 +984,7 @@ def fact_check_story(topic: dict, research: str, story_text: str) -> tuple[str, 
 القصة:
 {story_text[:90000]}
 """
-    first_text, _ = gemini(first_prompt, json_mode=True, max_tokens=8000, temperature=0.0)
-    first = parse_json(first_text)
+    first = _fact_check_json(first_prompt, max_tokens=8000)
     uncertain = first.get("uncertain") or []
     corrected = first.get("corrected") or []
     unsupported = [
@@ -1000,8 +1023,7 @@ UNSUPPORTED:
 القصة النهائية:
 {final_story[:90000]}
 """
-    second_text, _ = gemini(second_prompt, json_mode=True, max_tokens=5000, temperature=0.0)
-    second = parse_json(second_text)
+    second = _fact_check_json(second_prompt, max_tokens=5000)
     passed = (
         second.get("status") == "PASS"
         and second.get("corrections_applied") is True
