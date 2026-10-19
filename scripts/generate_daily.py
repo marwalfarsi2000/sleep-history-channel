@@ -17,6 +17,7 @@ from pathlib import Path
 import episode_selection
 import llm_router
 import outline_repair
+import quest_rules
 import research_alignment
 import run_summary
 import state_store
@@ -38,11 +39,7 @@ TITLE_SUFFIXES = (
     "قصة طويلة وهادئة للنوم 😴",
     "رحلة تاريخية هادئة للنوم 😴",
 )
-SLEEP_SCORE_NAMES = (
-    "gentle_engagement", "low_cognitive_arousal", "narrative_flow",
-    "sensory_potential", "reentry_tolerance", "low_stakes",
-    "gradual_unwind_potential", "novelty_variety",
-)
+SLEEP_SCORE_NAMES = quest_rules.SCORE_NAMES  # gentle_curiosity, low_arousal, quest_clarity, historical_immersion, ...
 PREFERRED_CANDIDATES = 6
 MIN_VALID_CANDIDATES = 4
 MIN_NARRATIVE_FAMILIES = 4
@@ -271,11 +268,10 @@ def word_count(text: str) -> int:
     return len(re.findall(r"[\u0600-\u06FF]+", text))
 
 
-STORY_FORMATS = (
-    "JOURNEY", "DAY_IN_THE_LIFE", "PLACE_IMMERSION", "HOW_IT_WORKED",
-    "EVERYDAY_HABITS", "CLEAR_HISTORICAL_ARC",
-)
-STORY_PHASES = ("CALM_HOOK", "EXPLORATION", "SETTLE", "UNWIND", "SOFT_FADE")
+# Immersion flavors of the one story shape every episode has: a small low-stakes quest (see quest_rules).
+# Old format names stay readable in the history for rotation but are not valid for a new episode.
+STORY_FORMATS = quest_rules.QUEST_FLAVORS
+STORY_PHASES = ("CALM_HOOK", "EXPLORATION", "SETTLE", "UNWIND", "SOFT_FADE")  # same names, quest meaning (rules 64-65)
 MIN_MACRO_SECTIONS, MAX_MACRO_SECTIONS = 7, 10
 MAX_SAME_FORMAT_IN_A_ROW = 2
 # Model calls, not blind retries: generate, then up to two targeted corrections that
@@ -373,6 +369,9 @@ def collect_outline_errors(sections: object) -> list[str]:
         errors.append("Every outline section needs a positive integer target_words")
     elif sum(targets) < MIN_OUTLINE_TARGET_WORDS:
         errors.append(f"Outline target_words total is {sum(targets)}; minimum is {MIN_OUTLINE_TARGET_WORDS}")
+    if not errors:
+        # Curiosity decay, a resolved quest with a quiet aftermath, movement, no overplotting (rule 65).
+        errors.extend(quest_rules.quest_outline_errors(sections))
     return errors
 
 
@@ -437,6 +436,7 @@ def upsert_history_checkpoint(history_path: Path, story: Path, topic: dict, stat
         "soft_narrative_spine", "gentle_curiosity", "attentional_anchor",
         "sensory_potential_notes", "tension_risks", "reentry_plan",
         "long_form_capacity", "difference_from_recent", "scores", "selection_gate",
+        *quest_rules.PREMISE_FIELDS, "penalty_flags", "narrative_identity",
         *research_alignment.METADATA_KEYS,
     ):
         if topic.get(key):
@@ -511,13 +511,16 @@ def save_topic_candidate_bank(
 
 
 def is_valid_topic_candidate(item: dict) -> bool:
+    """A usable Story Premise: complete quest fields, a quest flavor, valid scores and no mystery/high-stakes marker."""
     scores = item.get("scores") or {}
-    if not (str(item.get("slug", "")).strip() and str(item.get("story_format", "")).strip()):
+    if not str(item.get("slug", "")).strip():
         return False
     if not all(isinstance(scores.get(name), int) and 0 <= scores[name] <= 5 for name in SLEEP_SCORE_NAMES):
         return False
-    item["story_format"] = str(item["story_format"]).strip().upper().replace(" ", "_")
-    return True
+    item["story_format"] = quest_rules.normalize_flavor(item.get("story_format"))
+    if str(item.get("protagonist_kind") or "").strip():
+        item["protagonist_kind"] = str(item["protagonist_kind"]).strip().upper()
+    return not quest_rules.premise_errors(item)
 
 
 def choose_topic(history: list[dict]) -> dict:
@@ -533,12 +536,12 @@ def choose_topic(history: list[dict]) -> dict:
         if item.get("bank_status") == "queued" and item.get("slug") not in used_slugs
     ]
     saved_summary = json.dumps(saved_ideas[:20], ensure_ascii=False)
-    rules = production_rules(*range(2, 17), 62, 64)
-    prompt = f"""أنت محرر قناة عربية اسمها «لن تُكمل هذه القصة» تقدم سردًا تاريخيًا حقيقيًا هادئًا للنوم.
+    rules = production_rules(*range(2, 17), 62, 64, 65)
+    prompt = f"""أنت محرر قناة عربية اسمها «لن تُكمل هذه القصة» تقدم **حكايات تاريخية غامرة ذات مهمة لطيفة منخفضة المخاطر** (IMMERSIVE LOW-STAKES HISTORICAL QUEST) تساعد على النوم.
 التزم بالقواعد التالية التزامًا إلزاميًا:
 {rules}
 
-قبل البحث التاريخي العميق، أنشئ من ستة إلى ثمانية مرشحين متنوعين من أربع عائلات سردية مختلفة على الأقل. قيّمهم ثم اختر الأفضل وفق INTEREST × CALM × FLOW × SLEEPABILITY. يجب أن تتوفر للفائز مصادر متحفية أو جامعية أو أثرية كثيرة، وأن يحمل قصة طويلة بلا حشو، وألا يكرر موضوعًا أو زاوية في السجل.
+قبل البحث التاريخي العميق، أنشئ من ستة إلى ثمانية مرشحين، كل مرشح **Story Premise كامل** (ليس عنوان موضوع ولا «الحياة اليومية في X» ولا «كيف كان X يعمل»؛ هذه مواد داخل الحكاية وليست الحبكة)، من أربع عائلات سردية مختلفة على الأقل. لكل premise: SETTING وCHARACTER (شخصية خيالية مركّبة معقولة تاريخيًا تمثل دورًا موثقًا، أو شخصية تاريخية حقيقية دون اختراع حوارات أو أحداث خاصة لها) وSMALL WANT وQUEST (مهمة صغيرة لطيفة منخفضة المخاطر، لا لغز ولا إثارة ولا خطر ولا مؤامرة ولا شيء يجب حله قبل فوات الأوان) وWHY IT REQUIRES MOVEMENT وHISTORICAL IMMERSION OPPORTUNITIES وLOW-STAKES OBSTACLES وPOSSIBLE QUIET RESOLUTION. يجب أن تُلخَّص كل حكاية بجملة بسيطة واحدة. قيّمهم ثم اختر الأفضل. يجب أن تتوفر للفائز مصادر متحفية أو جامعية أو أثرية كثيرة عن **العالم** الذي تتحرك فيه الشخصية، وأن يحمل قصة طويلة (5000+ كلمة) بلا حشو، وألا يكرر موضوعًا أو زاوية في السجل. القاعدة الذهبية: المستمع يريد أن يبقى داخل هذا العالم، وليس مضطرًا إلى معرفة النهاية.
 
 السجل السابق:
 {prior}
@@ -548,13 +551,15 @@ def choose_topic(history: list[dict]) -> dict:
 
 أعد JSON فقط:
 {{"candidates":[{{
-"topic_ar":"...","angle_ar":"...","slug":"lowercase-hyphenated","search_query_en":"...","period_ar":"...","location_ar":"...","family":"...","story_format":"واحد من: {' | '.join(STORY_FORMATS)} (أو صيغة جديدة مناسبة للنوم)","key_elements":["..."],"reason_ar":"...",
+"topic_ar":"...","angle_ar":"...","slug":"lowercase-hyphenated","search_query_en":"... (للبحث عن العالم التاريخي لا عن الحبكة)","period_ar":"...","location_ar":"...","family":"...","story_format":"واحد من: {' | '.join(STORY_FORMATS)}","key_elements":["عناصر العالم التاريخي التي يجب أن تدعمها المصادر"],"reason_ar":"...",
+"character_ar":"الاسم والدور","protagonist_kind":"COMPOSITE_FICTIONAL أو DOCUMENTED_HISTORICAL","small_want_ar":"...","quest_ar":"...","movement_ar":"لماذا تتحرك الشخصية عبر العالم","immersion_opportunities":["..."],"low_stakes_obstacles":["..."],"quiet_resolution_ar":"...","one_sentence_summary_ar":"جملة واحدة بسيطة بلا علامات ترقيم داخلية",
+"main_plots":1,"secrets_or_mysteries":0,"antagonists":0,"named_characters":3,"penalty_flags":[],
 "narrative_follow":"ما الذي سيتبعه المستمع","soft_narrative_spine":"...","gentle_curiosity":"...","attentional_anchor":"...","sensory_potential_notes":"...","tension_risks":["..."],"reentry_plan":"...","long_form_capacity":"...","difference_from_recent":"...",
-"scores":{{"gentle_engagement":0,"low_cognitive_arousal":0,"narrative_flow":0,"sensory_potential":0,"reentry_tolerance":0,"low_stakes":0,"gradual_unwind_potential":0,"novelty_variety":0}}
+"scores":{{"gentle_curiosity":0,"low_arousal":0,"quest_clarity":0,"historical_immersion":0,"sensory_potential":0,"recoverability":0,"long_form_sustainability":0,"curiosity_decay_potential":0,"low_stakes":0,"variety":0}}
 }}]}}
-كل درجة عدد صحيح من صفر إلى خمسة. لا تُرجع مرشحًا واحدًا فقط.
-صيغ الحلقات الأخيرة في السجل: {recent_story_formats(history) or 'لا يوجد'}؛ لا تكرر صيغة استُخدمت في آخر حلقتين إلا إذا كانت أفضل بوضوح، ولا تُنشئ مرشحين كلهم بالصيغة نفسها.
-كل مرشح يجب أن يملك خيطًا سرديًا واضحًا وافتتاحًا بمشهد واضح، ويقبل التقسيم إلى مشاهد صغيرة مترابطة، ويُفهم دون معرفة تاريخية مسبقة، ويمكن تهدئته تدريجيًا، وألا يكون قائمة حقائق. لا بطل خياليًا مخترعًا.
+كل درجة عدد صحيح من صفر إلى خمسة. لا تُرجع مرشحًا واحدًا فقط. penalty_flags يضم ما ينطبق من: {', '.join(quest_rules.PENALTY_FLAGS)} (والمرشح الذي ينطبق عليه أي منها سيُرفض).
+نكهات المهمة الأخيرة في السجل: {recent_story_formats(history) or 'لا يوجد'}؛ لا تكرر نكهة استُخدمت في آخر حلقتين إلا إذا كانت أفضل بوضوح، ولا تُنشئ مرشحين كلهم بالنكهة نفسها.
+كل مرشح يجب أن يملك مهمة واضحة وافتتاحًا بمشهد (شخصية تفعل شيئًا) لا بمحاضرة، ويقبل التقسيم إلى مشاهد صغيرة مترابطة، ويُفهم دون معرفة تاريخية مسبقة، ويمكن تهدئته تدريجيًا، ويمكن للمستمع أن يسرح فيه ويعود، وألا يكون قائمة حقائق ولا روتينًا بلا هدف.
 """
     text, _ = gemini(prompt, json_mode=True, max_tokens=7000, temperature=0.7)
     discovery = parse_json(text)
@@ -582,26 +587,27 @@ def choose_topic(history: list[dict]) -> dict:
     if len(families) < MIN_NARRATIVE_FAMILIES:
         raise RuntimeError(f"TOPIC_DISCOVERY_FAILED: fewer than {MIN_NARRATIVE_FAMILIES} narrative families")
     topic = pick_topic_by_format(eligible, history)
+    topic["narrative_identity"] = quest_rules.IDENTITY
     topic["slug"] = safe_slug(str(topic.get("slug", "")))
     required = (
         "topic_ar", "angle_ar", "slug", "search_query_en", "period_ar",
         "location_ar", "family", "story_format", "reason_ar", "narrative_follow",
         "soft_narrative_spine", "gentle_curiosity", "attentional_anchor",
         "sensory_potential_notes", "reentry_plan", "long_form_capacity",
-        "difference_from_recent",
+        "difference_from_recent", *quest_rules.PREMISE_FIELDS,
     )
-    missing = [key for key in required if not str(topic.get(key, "")).strip()]
+    missing = [key for key in required if not quest_rules.nonempty(topic.get(key))]
     if missing:
         raise RuntimeError(f"Topic selection is missing required fields: {missing}")
-    validation_prompt = f"""{production_rules(*range(2, 17), 62, 64)}
+    validation_prompt = f"""{production_rules(*range(2, 17), 62, 64, 65)}
 
-أنت بوابة مستقلة لاختيار الموضوع. قيّم المرشح مقارنة بالسجل السابق، ولا تحاول إصلاحه.
+أنت بوابة مستقلة لاختيار الموضوع. قيّم المرشح (Story Premise) مقارنة بالسجل السابق، ولا تحاول إصلاحه.
 المرشح: {json.dumps(topic, ensure_ascii=False)}
 السجل: {prior}
 
 أعد JSON فقط بالشكل:
-{{"status":"PASS أو REJECT","language":true,"religion":true,"sleep":true,"quality":true,"universality":true,"non_duplicate":true,"soft_narrative_spine":true,"gentle_curiosity":true,"attentional_anchoring":true,"reentry_tolerance":true,"gradual_unwind":true,"long_form_without_filler":true,"clear_narrative_thread":true,"scene_openable":true,"divisible_into_scenes":true,"understandable_without_prior_knowledge":true,"gradually_calmable":true,"not_a_fact_list":true,"scores":{{"gentle_engagement":0,"low_cognitive_arousal":0,"narrative_flow":0,"sensory_potential":0,"reentry_tolerance":0,"low_stakes":0,"gradual_unwind_potential":0,"novelty_variety":0}},"reasons":["..."]}}
-كل قيمة true تعني أن البوابة نجحت. ارفض عند الشك الجوهري أو نقص المادة والمصادر.
+{{"status":"PASS أو REJECT","language":true,"religion":true,"sleep":true,"quality":true,"universality":true,"non_duplicate":true,"soft_narrative_spine":true,"gentle_curiosity":true,"attentional_anchoring":true,"reentry_tolerance":true,"gradual_unwind":true,"long_form_without_filler":true,"clear_narrative_thread":true,"scene_openable":true,"divisible_into_scenes":true,"understandable_without_prior_knowledge":true,"gradually_calmable":true,"not_a_fact_list":true,"has_small_want":true,"low_stakes_quest":true,"not_mystery_or_thriller":true,"summarizable_in_one_sentence":true,"not_overplotted":true,"not_boring_routine":true,"verifiable_historical_world":true,"fiction_clearly_separated":true,"scores":{{"gentle_curiosity":0,"low_arousal":0,"quest_clarity":0,"historical_immersion":0,"sensory_potential":0,"recoverability":0,"long_form_sustainability":0,"curiosity_decay_potential":0,"low_stakes":0,"variety":0}},"penalty_flags":[],"reasons":["..."]}}
+كل قيمة true تعني أن البوابة نجحت. اختبار: إذا كان المستمع يحتاج بشدة إلى معرفة النهاية فالحبكة أقوى من المطلوب فارفض. ارفض الألغاز والإثارة والرهانات العالية والروتين بلا هدف والموسوعية. ارفض عند الشك الجوهري أو نقص المادة والمصادر عن العالم التاريخي. penalty_flags تضم أي علامة من: {', '.join(quest_rules.PENALTY_FLAGS)} تنطبق فعلًا.
 """
     validation_text, _ = gemini(
         validation_prompt, json_mode=True, max_tokens=1200, temperature=0.0
@@ -613,6 +619,9 @@ def choose_topic(history: list[dict]) -> dict:
         "reentry_tolerance", "gradual_unwind", "long_form_without_filler",
         "clear_narrative_thread", "scene_openable", "divisible_into_scenes",
         "understandable_without_prior_knowledge", "gradually_calmable", "not_a_fact_list",
+        "has_small_want", "low_stakes_quest", "not_mystery_or_thriller",
+        "summarizable_in_one_sentence", "not_overplotted", "not_boring_routine",
+        "verifiable_historical_world", "fiction_clearly_separated",
     )
     verified_scores = validation.get("scores") or {}
     valid_scores = all(
@@ -630,10 +639,10 @@ def choose_topic(history: list[dict]) -> dict:
         validation.get("status") != "PASS"
         or not all(validation.get(name) is True for name in gate_names)
         or not valid_scores
-        or min((verified_scores[name] for name in SLEEP_SCORE_NAMES), default=0) < 3
-        or verified_scores.get("low_cognitive_arousal", 0) < 4
-        or verified_scores.get("low_stakes", 0) < 4
-        or score_average < 4.0
+        or min((verified_scores[name] for name in SLEEP_SCORE_NAMES), default=0) < quest_rules.MIN_SCORE
+        or any(verified_scores.get(name, 0) < floor for name, floor in quest_rules.CRITICAL_SCORES.items())
+        or score_average < quest_rules.MIN_AVERAGE
+        or {str(flag).strip().upper() for flag in (validation.get("penalty_flags") or [])} & set(quest_rules.PENALTY_FLAGS)
     ):
         save_topic_candidate_bank([], rejected_slug=topic["slug"])
         raise RuntimeError(
@@ -840,24 +849,41 @@ STORY_QUALITY_ENGAGEMENT_GATES = (
     "first_listen_comprehension", "teen_first_listen_comprehension", "calm_hook",
     "clear_narrative_thread", "scene_based_storytelling", "one_main_idea_per_scene",
     "terms_explained", "name_date_density", "clear_transitions", "adult_not_childish",
-    "historical_grounding", "no_fictionalized_history", "not_boring", "not_overstimulating",
+    "historical_grounding", "fiction_clearly_separated", "not_boring", "not_overstimulating",
+    # IMMERSIVE LOW-STAKES HISTORICAL QUEST (rule 65): questions A-O of the final test.
+    "reason_to_follow", "clear_quest", "low_stakes_quest", "movement_and_progress",
+    "history_embedded_in_scenes", "curiosity_gentle_not_urgent", "can_sleep_before_the_end",
+    "density_drops_toward_end", "last_fifth_calmer_than_first_half", "recoverable_after_drifting",
+    "sensory_detail", "not_boring_routine", "low_arousal", "verified_historical_world",
+    "summarizable_in_one_sentence", "not_overplotted", "no_late_new_question",
+    "quiet_post_resolution",
 )
 
 
 def validate_story_quality(topic: dict, story_text: str) -> dict:
-    prompt = f"""{production_rules(2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 23, 62, 64)}
+    deterministic = quest_rules.story_text_errors(story_text)
+    if deterministic:
+        raise RuntimeError("STORY_QUALITY_GATE_REJECTED: " + json.dumps({"deterministic": deterministic}, ensure_ascii=False))
+    quest = {
+        key: topic.get(key) for key in (
+            "character_ar", "protagonist_kind", "small_want_ar", "quest_ar", "one_sentence_summary_ar",
+        ) if topic.get(key)
+    }
+    gate_json = ",".join(f'"{name}":true' for name in STORY_QUALITY_ENGAGEMENT_GATES)
+    prompt = f"""{production_rules(2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 23, 62, 64, 65)}
 
 أنت بوابة جودة مستقلة. افحص النص النهائي دون إعادة كتابته.
 الموضوع: {topic['topic_ar']} — {topic['angle_ar']}
+المهمة المصممة: {json.dumps(quest, ensure_ascii=False)}
 
 أعد JSON فقط:
-{{"status":"PASS أو REJECT","language":true,"adult_audience":true,"religion":true,"sleep":true,"historical_style":true,"no_dangerous_drift":true,"soft_narrative_spine":true,"gentle_curiosity":true,"attentional_anchoring":true,"sensory_imagery":true,"low_stakes":true,"gradual_unwind":true,"reentry_tolerance":true,"not_boring_or_overstimulating":true,"flexible_composition":true,"first_listen_comprehension":true,"teen_first_listen_comprehension":true,"calm_hook":true,"clear_narrative_thread":true,"scene_based_storytelling":true,"one_main_idea_per_scene":true,"terms_explained":true,"name_date_density":true,"clear_transitions":true,"adult_not_childish":true,"historical_grounding":true,"no_fictionalized_history":true,"not_boring":true,"not_overstimulating":true,"issues":["..."]}}
-كل قيمة true تعني نجاح البوابة. الهدف CALM ENGAGEMENT: ارفض النص الممل (معلومات بلا حركة، وصف ساكن، موسوعي، قوائم، بطء شديد من البداية، بلا خيط أو فضول) وارفض النص المحفز (حماس، تشويق، خطر، cliffhanger، صراع مستمر، شخصيات كثيرة، معلومات معقدة، ذروة). teen_first_listen_comprehension: هل يفهمه مستمع عربي عمره 15–16 بلا معرفة سابقة من أول استماع بنبرة بالغة؟ calm_hook: هل تتضمن أول 500–700 كلمة مكانًا وزمنًا مبسطًا وحركة جارية وما نتبعه وفضولًا صغيرًا بلا مقدمة موسوعية؟ no_fictionalized_history: لا شخصية رئيسية مخترعة ولا حوار ولا أفكار داخلية ولا أحداث شخصية. gentle_curiosity وreentry_tolerance وgradual_unwind تُفحص عبر أثلاث النص. ارفض إذا كانت اللغة ثقيلة أو طفولية، أو أصبح المحتوى دينيًا بحتًا، أو صادمًا وغير مناسب للنوم.
+{{"status":"PASS أو REJECT","language":true,"adult_audience":true,"religion":true,"sleep":true,"historical_style":true,"no_dangerous_drift":true,"soft_narrative_spine":true,"gentle_curiosity":true,"attentional_anchoring":true,"sensory_imagery":true,"low_stakes":true,"gradual_unwind":true,"reentry_tolerance":true,"not_boring_or_overstimulating":true,"flexible_composition":true,{gate_json},"issues":["..."]}}
+كل قيمة true تعني نجاح البوابة. الهدف: حكاية تاريخية غامرة ذات مهمة لطيفة منخفضة المخاطر. المستمع يريد أن يبقى داخل العالم لا أن يحتاج إلى معرفة النهاية. ارفض النص الممل (معلومات بلا حركة، وصف ساكن، موسوعي، قوائم، روتين بلا هدف، بطء شديد من البداية، بلا مهمة أو فضول) وارفض النص المحفز (حماس، تشويق، لغز، خطر، cliffhanger، صراع مستمر، شخصيات كثيرة، معلومات معقدة، ذروة، twist، سؤال كبير مفتوح في آخر 10%). teen_first_listen_comprehension: هل يفهمه مستمع عربي عمره 15–16 بلا معرفة سابقة من أول استماع بنبرة بالغة؟ calm_hook: هل تتضمن أول 500–700 كلمة مكانًا وزمنًا مبسطًا وشخصية وما تفعله والمهمة الصغيرة ولماذا نتابعها بمشهد لا بمقدمة موسوعية؟ fiction_clearly_separated: الشخصية الخيالية المركّبة مسموحة لكن لا تُقدَّم كشخصية تاريخية حقيقية، ولا تُخترع حوارات أو أفكار أو أفعال خاصة لشخصية تاريخية حقيقية، ولا تُستخدم الحبكة لتمرير تفاصيل تاريخية غير موثقة. verified_historical_world: تفاصيل العالم (الأسواق والحرف والمواد...) مما تدعمه المصادر أو مصوغة بحذر. gentle_curiosity وreentry_tolerance وgradual_unwind وdensity_drops_toward_end وlast_fifth_calmer_than_first_half تُفحص عبر أثلاث النص (آخر 20% يجب أن يكون أهدأ بوضوح من أول 50%). can_sleep_before_the_end: هل يستطيع المستمع أن ينام قبل النهاية دون أن يفقد شيئًا مهمًا؟ quiet_post_resolution: هل تُحل المهمة قبل النهاية بوقت كافٍ ثم تأتي فترة هادئة بعد الحل؟ ارفض إذا كانت اللغة ثقيلة أو طفولية، أو أصبح المحتوى دينيًا بحتًا، أو صادمًا وغير مناسب للنوم.
 
 النص:
 {story_text[:90000]}
 """
-    text, _ = gemini(prompt, json_mode=True, max_tokens=3000, temperature=0.0)
+    text, _ = gemini(prompt, json_mode=True, max_tokens=4000, temperature=0.0)
     result = parse_json(text)
     gates = (
         "language", "adult_audience", "religion", "sleep", "historical_style",
@@ -875,8 +901,12 @@ def fact_check_story(topic: dict, research: str, story_text: str) -> tuple[str, 
     rules = production_rules(26, 27, 28, 29)
     first_prompt = f"""{rules}
 
-نفّذ Fact Check مستقلًا اعتمادًا فقط على البحث وخريطة الادعاءات. أعد JSON فقط:
-{{"status":"PASS أو NEEDS_CORRECTION","verified":["..."],"uncertain":[{{"claim":"...","action":"rephrase أو remove","replacement":"..."}}],"corrected":[{{"original":"...","replacement":"...","source":"URL أو مرجع من البحث"}}],"unsupported_critical":["..."]}}
+نفّذ Fact Check مستقلًا اعتمادًا فقط على البحث وخريطة الادعاءات. فرّق بين نوعين:
+(أ) ادعاءات العالم التاريخي (المدينة والأسواق والحرف والمواد والأدوات والطعام والنقل والعمارة والتجارة والعادات): تحتاج دعمًا من البحث.
+(ب) أحداث الحكاية الخيالية (ما تفعله الشخصية الخيالية المركّبة وأقوالها): لا تحتاج مصدرًا ولا تبحث عن مصدر يثبتها، لكن يجب أن تكون ممكنة تاريخيًا.
+ممنوع: تفصيلة تاريخية غير موثقة مُمرَّرة داخل الحكاية (fiction_smuggling)، وشخصية خيالية مقدَّمة كأنها شخصية تاريخية حقيقية، واختراع حوار أو أفكار أو أفعال لشخصية حقيقية وتقديمها كحقيقة. أدرج هذه في unsupported_critical.
+أعد JSON فقط:
+{{"status":"PASS أو NEEDS_CORRECTION","verified":["..."],"uncertain":[{{"claim":"...","action":"rephrase أو remove","replacement":"..."}}],"corrected":[{{"original":"...","replacement":"...","source":"URL أو مرجع من البحث"}}],"unsupported_critical":["..."],"fiction_smuggling":["..."],"fictional_presented_as_documented":["..."]}}
 
 الموضوع: {topic['topic_ar']}
 البحث:
@@ -889,7 +919,11 @@ def fact_check_story(topic: dict, research: str, story_text: str) -> tuple[str, 
     first = parse_json(first_text)
     uncertain = first.get("uncertain") or []
     corrected = first.get("corrected") or []
-    unsupported = first.get("unsupported_critical") or []
+    unsupported = [
+        *(first.get("unsupported_critical") or []),
+        *(first.get("fiction_smuggling") or []),
+        *(first.get("fictional_presented_as_documented") or []),
+    ]
     final_story = story_text
     if corrected or uncertain or unsupported or first.get("status") != "PASS":
         correction_prompt = f"""{rules}
@@ -912,8 +946,8 @@ UNSUPPORTED:
 
     second_prompt = f"""{rules}
 
-هذا هو التحقق النهائي الثاني بعد تطبيق التصحيحات. اعتمد فقط على البحث. أعد JSON فقط:
-{{"status":"PASS أو FAIL","remaining_errors":[],"unsupported_critical":[],"uncertain_presented_as_fact":[],"corrections_applied":true}}
+هذا هو التحقق النهائي الثاني بعد تطبيق التصحيحات. اعتمد فقط على البحث. تحقق من ادعاءات العالم التاريخي فقط؛ أحداث الحكاية الخيالية لا تحتاج مصدرًا لكنها يجب ألا تُمرّر تفاصيل تاريخية غير موثقة ولا تُقدَّم الشخصية الخيالية كحقيقية. أعد JSON فقط:
+{{"status":"PASS أو FAIL","remaining_errors":[],"unsupported_critical":[],"uncertain_presented_as_fact":[],"fiction_smuggling":[],"fictional_presented_as_documented":[],"corrections_applied":true}}
 
 البحث:
 {research[:50000]}
@@ -929,6 +963,8 @@ UNSUPPORTED:
         and not (second.get("remaining_errors") or [])
         and not (second.get("unsupported_critical") or [])
         and not (second.get("uncertain_presented_as_fact") or [])
+        and not (second.get("fiction_smuggling") or [])
+        and not (second.get("fictional_presented_as_documented") or [])
     )
     if not passed:
         raise RuntimeError("FINAL_FACT_CHECK_FAILED: " + json.dumps(second, ensure_ascii=False))
@@ -961,22 +997,40 @@ def finalize_story_text(story: Path, topic: dict, research: str, draft: str) -> 
     return final_story, final_quality, fact_check
 
 
+def quest_brief(topic: dict) -> str:
+    """The episode's premise as the outline and the chapters must see it (empty fields are skipped)."""
+    labels = (
+        ("character_ar", "الشخصية"), ("protagonist_kind", "نوع الشخصية"), ("small_want_ar", "الرغبة الصغيرة"),
+        ("quest_ar", "المهمة"), ("movement_ar", "سبب الحركة عبر العالم"),
+        ("immersion_opportunities", "فرص الانغماس التاريخي"), ("low_stakes_obstacles", "عقبات منخفضة الرهان"),
+        ("quiet_resolution_ar", "الحل الهادئ"), ("one_sentence_summary_ar", "الخلاصة بجملة"),
+    )
+    lines = []
+    for key, label in labels:
+        value = topic.get(key)
+        if quest_rules.nonempty(value):
+            lines.append(f"- {label}: {json.dumps(value, ensure_ascii=False) if isinstance(value, list) else value}")
+    return "\n".join(lines) or "- (لا premise محفوظ: ابنِ مهمة صغيرة لطيفة من الزاوية نفسها)"
+
+
 def make_outline(topic: dict, research: str) -> list[dict]:
-    rules = production_rules(17, 22, 62, 64)
+    rules = production_rules(17, 22, 62, 64, 65)
     prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
 {rules}
 
-أنشئ مخططًا من 7 إلى 10 أقسام كبرى (اختر العدد المناسب للموضوع، لا عددًا ثابتًا) لسرد تاريخي عربي هادئ يجذب الانتباه أولًا ثم يهدأ تدريجيًا حتى النوم، عن:
+أنشئ مخططًا من 7 إلى 10 أقسام كبرى (اختر العدد المناسب للموضوع، لا عددًا ثابتًا) لحكاية تاريخية عربية غامرة ذات مهمة لطيفة منخفضة المخاطر، تجذب الانتباه أولًا ثم تهدأ تدريجيًا حتى النوم، عن:
 {topic['topic_ar']} — {topic['angle_ar']}
-صيغة الحلقة: {topic.get('story_format', '')}
+نكهة المهمة: {topic.get('story_format', '')}
+Premise الحلقة (لا تغيّره):
+{quest_brief(topic)}
 
-ملاحظات البحث:
+ملاحظات البحث (هي مصدر العالم التاريخي فقط؛ الشخصية الخيالية والمهمة لا تحتاجان مصدرًا لكن يجب أن تكونا ممكنتين تاريخيًا، ولا تُدخل تفصيلة تاريخية غير مدعومة بالبحث):
 {research[:45000]}
 
-اختر بنية مرنة تناسب الموضوع بلا نسب ثابتة. ابنِ خيطًا سرديًا واحدًا واضحًا يجيب عن «ماذا نتبع الآن؟»، من دون شخصية خيالية مخترعة ولا حوار ولا أفكار داخلية؛ الأدوار العامة الموثقة فقط. كل قسم كبير يحوي من 2 إلى 4 مشاهد صغيرة مترابطة، في كل مشهد فكرة رئيسية واحدة: مكان أو مرساة ← فعل ← تفصيل ← فضول صغير ← انتقال. الأقسام تغطي المراحل الخمس بهذا الترتيب: CALM_HOOK (أول قسم) ثم EXPLORATION ثم SETTLE ثم UNWIND ثم SOFT_FADE (آخر قسم). البداية: مكان واضح وزمن مبسط وحركة جارية وما نتبعه وفضول صغير يُجاب قريبًا، بلا مقدمة موسوعية. فضول لطيف كل دقيقتين إلى أربع في الثلث الأول فقط، بلا cliffhanger. لا ذروة ولا ملخص مدرسي ولا شكر في النهاية. لا clickbait ولا خيال.
+اجعل الشخصية تتحرك عبر العالم بسبب المهمة: محاولات وتوقفات واكتشافات صغيرة، والتاريخ يدخل من خلال ما تراه الشخصية وتستخدمه وتحتاجه لا كمحاضرة. أقسام المخطط تغطي المراحل الخمس بهذا الترتيب: CALM_HOOK (أول قسم، نحو 10–15%: أين نحن ومتى ومن الشخصية وماذا تفعل والمهمة الصغيرة ولماذا نتابعها، بمشهد لا بمقدمة موسوعية) ثم EXPLORATION (أعلى اندماج، عدة micro-curiosity loops) ثم SETTLE (اقتراب المهمة من الحل بلا حبكة جديدة كبيرة) ثم UNWIND (أعمال مألوفة بلا أسئلة جديدة) ثم SOFT_FADE (آخر القصة: المهمة حُلَّت قبل ذلك بوقت كافٍ ونعيش فترة هادئة بعد الحل). لا ذروة ولا twist ولا cliffhanger ولا teaser ولا ملخص مدرسي ولا شكر. لا لغز ولا خطر ولا countdown ولا مطاردة ولا مؤامرة. شخصيات مسماة قليلة (ستة كحد أقصى). كل قسم كبير يحوي من 2 إلى 4 مشاهد صغيرة مترابطة، في كل مشهد فكرة رئيسية واحدة: مكان أو مرساة ← فعل ← تفصيل ← فضول صغير ← انتقال. ينخفض فتح الأسئلة الجديدة تدريجيًا: new_questions_opened أقل في الثلث الأخير منه في الأول، وصفر في UNWIND وSOFT_FADE وواحد على الأكثر في SETTLE. يقل الحوار تدريجيًا (dialogue_level: none أو light في UNWIND وSOFT_FADE). quest_state يتدرج: introduced ثم in_progress ثم nearly_solved ثم resolved (قبل القسم الأخير)، والقسم الأخير aftermath.
 أعد JSON فقط:
-{{"sections":[{{"title":"...","phase":"CALM_HOOK","brief":"...","scenes":[{{"place_or_anchor":"...","action":"...","main_idea":"...","gentle_question":"...","transition":"..."}}],"target_words":700}}]}}
-اجعل الأقسام غير متكررة، ومجموع target_words لا يقل عن 5500 كلمة عربية بلا حشو.
+{{"sections":[{{"title":"...","phase":"CALM_HOOK","brief":"...","quest_beat":"ما الذي تحاوله الشخصية الآن","quest_state":"introduced","new_questions_opened":1,"dialogue_level":"light","named_characters":["..."],"scenes":[{{"place_or_anchor":"...","action":"...","main_idea":"...","gentle_question":"...","transition":"..."}}],"target_words":700}}]}}
+اجعل الأقسام غير متكررة، ومجموع target_words لا يقل عن 5500 كلمة عربية بلا حشو (ولا حشو للوصول إلى الطول).
 """
     feedback = ""
     last_error = ""
@@ -1031,7 +1085,7 @@ def make_outline(topic: dict, research: str) -> list[dict]:
 
 
 def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path) -> str:
-    rules = production_rules(2, 3, 4, 5, 6, 7, 17, 23, 61, 62, 64)
+    rules = production_rules(2, 3, 4, 5, 6, 7, 17, 23, 61, 62, 64, 65)
     chapters: list[str] = []
     for index, section in enumerate(sections, 1):
         previous = chapters[-1][-2500:] if chapters else "هذه بداية السرد."
@@ -1041,11 +1095,15 @@ def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path)
         prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
 {rules}
 
-اكتب القسم {index} من {len(sections)} من قصة تاريخية حقيقية طويلة للنوم.
+اكتب القسم {index} من {len(sections)} من حكاية تاريخية غامرة طويلة ذات مهمة لطيفة منخفضة المخاطر للنوم.
 الموضوع: {topic['topic_ar']}
 الزاوية: {topic['angle_ar']}
+Premise الحلقة:
+{quest_brief(topic)}
 عنوان القسم: {section.get('title', '')}
 المرحلة: {section.get('phase', '')}
+حالة المهمة: {section.get('quest_state', '')} — ما تحاوله الشخصية: {section.get('quest_beat', '')}
+أسئلة جديدة تُفتح في هذا القسم: {section.get('new_questions_opened', '')} — الحوار: {section.get('dialogue_level', '')}
 المطلوب: {section.get('brief', '')}
 المشاهد (اكتبها بالترتيب؛ مشهد أولًا ثم المعلومة، وفكرة رئيسية واحدة لكل مشهد، ولا تحوّل الـ brief إلى مقال):
 {json.dumps(section.get('scenes', []), ensure_ascii=False, indent=1)}
@@ -1057,7 +1115,7 @@ def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path)
 نهاية القسم السابق للسياق فقط:
 {previous}
 
-اكتب السرد وحده بلا عنوان للقسم داخل القصة وبلا ملاحظات تحريرية. فصحى سهلة بجمل منطوقة قصيرة وواضحة، بنبرة بالغة غير طفولية، دافئة ومتصلة، وتزداد هدوءًا بحسب المرحلة. حافظ على الخيط السردي الواحد، وقلّل الأسماء والتواريخ، واشرح كل مصطلح جديد فورًا بجملة قصيرة أو احذفه، واربط المشاهد بانتقالات واضحة مع إعادة سياق خفيفة. استخدم الكاميرا السردية («نقترب من…») باعتدال ولا تبدأ كل فقرة بـ«نحن» أو «تخيّل». لا تخترع شخصية أو اسمًا أو حوارًا أو أفكارًا داخلية، ولا تضف حقائق حسية غير مدعومة. لا تبدأ بترحيب أو «في هذا الوثائقي» أو تعليمات تنفس. لا تخترع تفاصيل. صِغ المسائل المختلف عليها بحذر. تجنب الإثارة والدموية والخاتمة من نوع «شكرًا على الاستماع».
+اكتب السرد وحده بلا عنوان للقسم داخل القصة وبلا ملاحظات تحريرية. فصحى سهلة بجمل منطوقة قصيرة وواضحة، بنبرة بالغة غير طفولية، دافئة ومتصلة، وتزداد هدوءًا بحسب المرحلة. ابدأ بمشهد وحافظ على الشخصية والمهمة الواحدة؛ التاريخ يدخل لأن الشخصية ترى أو تستخدم أو تحتاج أو تمر بشيء، لا كقائمة ولا كمحاضرة. قلّل الأسماء والتواريخ (أكثر هدوءًا كلما اقتربنا من النهاية)، واشرح كل مصطلح جديد فورًا بجملة قصيرة أو احذفه، واربط المشاهد بانتقالات واضحة مع إعادة سياق خفيفة (من هي الشخصية وأين وما المهمة) ليسهل الرجوع بعد شرود. حوار قصير طبيعي عند الحاجة يقل في النصف الأخير ولا ألغاز فيه. الشخصية الخيالية المركّبة مسموحة لكن لا تُقدَّم كشخصية تاريخية حقيقية، ولا تخترع حوارات أو أفكارًا أو أفعالًا لشخصية تاريخية حقيقية. العالم المحيط (الأماكن والحرف والمواد والأدوات والطعام...) من المصدر المعرفي فقط؛ لا تخترع تفصيلة تاريخية غير مدعومة لتحسين الحبكة. صِغ المسائل المختلف عليها بحذر. فضول لطيف بلا لغز ولا cliffhanger ولا ذروة ولا twist. تجنب الإثارة والدموية والخاتمة من نوع «شكرًا على الاستماع».
 """
         if chapter_path.exists():
             chapter = chapter_path.read_text(encoding="utf-8").strip()
@@ -1078,7 +1136,7 @@ def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path)
 {rules}
 
 أكمل القسم التالي من قصة تاريخية للنوم بفقرات جديدة تأتي بعد نهايته مباشرة، بنحو {request_words} كلمة عربية.
-أكمل من نهاية النص مباشرة؛ لا تلخص ولا تكرر ما سبق ولا تضف عنوانًا ولا خاتمة ولا شكرًا. أضف فقط تفاصيل يدعمها المصدر المعرفي، دون حشو ودون أسماء أو تواريخ لمجرد زيادة الكلمات. حافظ على المرحلة {section.get('phase', '')} وعلى الخيط السردي نفسه ونبرة هادئة بالغة، ولا تخترع شخصية أو حوارًا.
+أكمل من نهاية النص مباشرة؛ لا تلخص ولا تكرر ما سبق ولا تضف عنوانًا ولا خاتمة ولا شكرًا. أضف فقط تفاصيل يدعمها المصدر المعرفي، دون حشو ودون أسماء أو تواريخ لمجرد زيادة الكلمات. حافظ على المرحلة {section.get('phase', '')} وعلى الشخصية والمهمة نفسهما ونبرة هادئة بالغة، دون فتح أسئلة جديدة كبيرة ودون تقديم الشخصية الخيالية كحقيقة تاريخية.
 
 الموضوع: {topic['topic_ar']}
 القسم: {section.get('title', '')} — {section.get('brief', '')}
@@ -1532,6 +1590,8 @@ PIPELINE SCENE RENDER: Generate the historical scene with a natural uncluttered 
         "thumbnail_text": packaging["thumbnail_text"],
         "thumbnail_prompt": thumbnail_prompt,
         "story_format": topic.get("story_format", ""),
+        "narrative_identity": topic.get("narrative_identity", quest_rules.IDENTITY),
+        **{key: topic[key] for key in (*quest_rules.PREMISE_FIELDS, "penalty_flags") if topic.get(key)},
         "thumbnail_scene_type": topic.get("family") or "historical-place-immersion",
         "historical_setting": f"{topic.get('location_ar', '')} — {topic.get('period_ar', '')}".strip(" —"),
         "youtube_packaging_status": "passed",

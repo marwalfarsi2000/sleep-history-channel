@@ -14,7 +14,7 @@ import research_alignment as ra
 
 TOPIC = {
     "slug": "tripoli-lybia-karamanli-daily-life", "topic_ar": "الحياة اليومية في طرابلس الغرب", "period_ar": "القرن الثامن عشر",
-    "location_ar": "طرابلس", "story_format": "PLACE_IMMERSION",
+    "location_ar": "طرابلس", "story_format": "CRAFT_QUEST",
     "angle_ar": "عائلة تحضّر خيوط الصوف وتصبغها وتنسج السجاد", "narrative_follow": "عائلة تنسج الصوف",
     "soft_narrative_spine": "صبغ الخيوط والزيوت العطرية", "gentle_curiosity": "كيف صُبغت الخيوط؟",
     "key_elements": ["السجاد", "الصوف", "صبغ الخيوط", "الزيوت العطرية"],
