@@ -37,6 +37,7 @@ def main(argv: list[str] | None = None) -> int:
         result.update(status="FAIL", error_code=exc.code, error=str(exc)[:300])
         (OUT / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(f"SUNBURST_LIVE_TEST=FAIL {exc.code}")
+        print(f"SUNBURST_LIVE_TEST_ERROR={str(exc)[:300]}")  # HTTP status + provider message; the key is redacted upstream
         return 1
     final = story / sunburst.THUMBNAIL_FILE
     shutil.copy2(final, OUT / "2_sunburst_thumbnail.jpg")

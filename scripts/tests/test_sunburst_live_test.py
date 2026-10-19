@@ -48,7 +48,7 @@ def test_exactly_one_request_and_a_reviewable_result(frame, monkeypatch, capsys)
     assert "test-key" not in json.dumps(result)
 
 
-def test_failure_is_reported_once_without_retry(frame, monkeypatch):
+def test_failure_is_reported_once_without_retry(frame, monkeypatch, capsys):
     calls = []
 
     def net(method, url, headers, body, timeout):
@@ -58,6 +58,8 @@ def test_failure_is_reported_once_without_retry(frame, monkeypatch):
     assert live.main([str(frame)]) == 1
     assert len(calls) == 1
     assert json.loads(Path("sunburst-live-test/result.json").read_text(encoding="utf-8"))["error_code"] == "VERCEL_BAD_REQUEST"
+    printed = capsys.readouterr().out
+    assert "SUNBURST_LIVE_TEST_ERROR=VERCEL_BAD_REQUEST: HTTP 400 unsupported parameter" in printed and "test-key" not in printed
 
 
 def test_workflow_is_manual_single_attempt_and_read_only():
