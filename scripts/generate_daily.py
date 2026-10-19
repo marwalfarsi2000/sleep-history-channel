@@ -523,7 +523,7 @@ def is_valid_topic_candidate(item: dict) -> bool:
     return not quest_rules.premise_errors(item)
 
 
-def choose_topic(history: list[dict]) -> dict:
+def choose_topic(history: list[dict], retry_feedback: str = "") -> dict:
     prior = "\n".join(
         f"- {item.get('topic', item.get('slug', ''))} | {item.get('angle', '')} | "
         f"{item.get('period_ar', '')} | {item.get('location_ar', '')} | {item.get('key_elements', [])}"
@@ -548,6 +548,10 @@ def choose_topic(history: list[dict]) -> dict:
 
 بنك الأفكار القوية غير المستخدمة؛ لا تكررها بصياغة أخرى لأن النظام سيعيد إدخالها في المنافسة تلقائيًا:
 {saved_summary}
+
+{f'''تصحيح إلزامي من المحاولة السابقة:
+{retry_feedback}
+أنشئ دفعة مصححة تعالج هذا النقص تحديدًا. إذا كان النقص في العائلات السردية، استخدم أربع قيم family مختلفة على الأقل بوضوح، مع الحفاظ على صلاحية كل Story Premise.'''.strip() if retry_feedback else ''}
 
 أعد JSON فقط:
 {{"candidates":[{{
@@ -585,7 +589,10 @@ def choose_topic(history: list[dict]) -> dict:
         )
     families = {str(item.get("family", "")).strip().casefold() for item in eligible if item.get("family")}
     if len(families) < MIN_NARRATIVE_FAMILIES:
-        raise RuntimeError(f"TOPIC_DISCOVERY_FAILED: fewer than {MIN_NARRATIVE_FAMILIES} narrative families")
+        raise RuntimeError(
+            f"TOPIC_DISCOVERY_FAILED: fewer than {MIN_NARRATIVE_FAMILIES} narrative families "
+            f"({len(families)} found: {sorted(families)})"
+        )
     topic = pick_topic_by_format(eligible, history)
     topic["narrative_identity"] = quest_rules.IDENTITY
     topic["slug"] = safe_slug(str(topic.get("slug", "")))
@@ -659,7 +666,7 @@ def choose_valid_topic(history: list[dict], attempts: int = 3) -> dict:
     last_error: RuntimeError | None = None
     for _attempt in range(attempts):
         try:
-            return choose_topic(history)
+            return choose_topic(history, retry_feedback=str(last_error or ""))
         except RuntimeError as exc:
             if not any(code in str(exc) for code in ("TOPIC_GATE_REJECTED", "TOPIC_DISCOVERY_FAILED")):
                 raise
@@ -710,7 +717,7 @@ def search_brave(query: str, key: str) -> list[dict]:
 def search_firecrawl(query: str, key: str) -> list[dict]:
     data = _http_json(
         "https://api.firecrawl.dev/v2/search",
-        headers={"Authorization": f"Bearer {key}"},
+        headers={"Authorization": f"Bearer {key}"} if key else {},
         body={"query": query[:500], "limit": 6, "scrapeOptions": {"formats": [{"type": "markdown"}]}},
         timeout=180,
     )
@@ -763,6 +770,32 @@ def _collect_sources(topic: dict) -> tuple[str, list[dict]]:
             print(f"Research sources collected via {name} ({len(results)} results)", file=sys.stderr, flush=True)
             return name, results[:10]
         failures.append(f"{name}: only {len(results)} usable results")
+    # Firecrawl officially permits a low-rate keyless search request. Use one
+    # minimal query only after every configured free provider is unavailable or
+    # insufficient; no Authorization header is sent when the key is empty.
+    keyless_query = next(filter(None, queries), "")
+    if keyless_query:
+        try:
+            run_summary.count("search")
+            results = [
+                item for item in search_firecrawl(keyless_query, "")
+                if str(item.get("url") or "").startswith("https://")
+                and str(item.get("excerpt") or "").strip()
+            ]
+            domains = {
+                urllib.parse.urlparse(item["url"]).netloc.lower().removeprefix("www.")
+                for item in results
+            }
+            if len(results) >= 3 and len(domains) >= 2:
+                print(
+                    f"Research sources collected via firecrawl_keyless ({len(results)} results; 1 query)",
+                    file=sys.stderr, flush=True,
+                )
+                return "firecrawl_keyless", results[:10]
+            failures.append(f"firecrawl_keyless: only {len(results)} usable results")
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as error:
+            code = getattr(error, "code", "")
+            failures.append(f"firecrawl_keyless: {type(error).__name__} {code}".strip())
     raise RuntimeError("GROUNDED_RESEARCH_UNAVAILABLE: all search providers failed (" + "; ".join(failures) + ")")
 
 

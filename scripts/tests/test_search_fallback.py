@@ -27,6 +27,38 @@ def _quota_error() -> urllib.error.HTTPError:
 
 
 class SearchFallbackTests(unittest.TestCase):
+    def test_firecrawl_keyless_omits_authorization_and_requests_scraped_text(self):
+        response = {"data": {"web": [{
+            "title": "Museum", "url": "https://museum.org/pottery", "markdown": "documented evidence",
+        }]}}
+        with mock.patch.object(generate_daily, "_http_json", return_value=response) as request:
+            results = generate_daily.search_firecrawl("Samanid pottery", "")
+        self.assertEqual(results[0]["excerpt"], "documented evidence")
+        self.assertEqual(request.call_args.kwargs["headers"], {})
+        self.assertEqual(request.call_args.kwargs["body"]["limit"], 6)
+        self.assertIn("markdown", str(request.call_args.kwargs["body"]["scrapeOptions"]))
+
+    def test_keyless_fallback_uses_one_query_and_requires_source_text(self):
+        keyless = mock.Mock(return_value=[
+            *_results("museum.org", "university.edu", "unesco.org"),
+            {"title": "Empty", "url": "https://archive.org/empty", "excerpt": ""},
+        ])
+        providers = (("exa", "EXA_API_KEY", mock.Mock()),)
+        with mock.patch.object(generate_daily, "SEARCH_PROVIDERS", providers), \
+             mock.patch.object(generate_daily, "load_secrets", return_value={}), \
+             mock.patch.object(generate_daily, "search_firecrawl", keyless):
+            provider, results = generate_daily._collect_sources(TOPIC)
+        self.assertEqual(provider, "firecrawl_keyless")
+        self.assertEqual(len(results), 3)
+        keyless.assert_called_once_with(TOPIC["search_query_en"], "")
+
+    def test_keyless_failure_remains_fail_closed(self):
+        with mock.patch.object(generate_daily, "SEARCH_PROVIDERS", ()), \
+             mock.patch.object(generate_daily, "load_secrets", return_value={}), \
+             mock.patch.object(generate_daily, "search_firecrawl", return_value=[]):
+            with self.assertRaisesRegex(RuntimeError, "firecrawl_keyless: only 0 usable results"):
+                generate_daily._collect_sources(TOPIC)
+
     def test_exhausted_provider_moves_to_next_in_order(self):
         exa = mock.Mock(side_effect=_quota_error())
         brave = mock.Mock(return_value=_results("museum.org", "university.edu", "unesco.org"))
@@ -52,7 +84,8 @@ class SearchFallbackTests(unittest.TestCase):
     def test_all_providers_failing_stays_fail_closed(self):
         providers = (("exa", "EXA_API_KEY", mock.Mock(side_effect=_quota_error())),)
         with mock.patch.object(generate_daily, "SEARCH_PROVIDERS", providers), \
-             mock.patch.object(generate_daily, "load_secrets", return_value={"EXA_API_KEY": "a"}):
+             mock.patch.object(generate_daily, "load_secrets", return_value={"EXA_API_KEY": "a"}), \
+             mock.patch.object(generate_daily, "search_firecrawl", return_value=[]):
             with self.assertRaisesRegex(RuntimeError, "GROUNDED_RESEARCH_UNAVAILABLE"):
                 generate_daily._collect_sources(TOPIC)
 
