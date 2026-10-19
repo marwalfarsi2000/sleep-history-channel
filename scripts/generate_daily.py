@@ -256,7 +256,19 @@ def gemini(prompt: str, *, json_mode: bool = False, search: bool = False,
 
 def parse_json(text: str) -> dict:
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.I | re.S)
-    return json.loads(cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError as error:
+        if error.msg != "Extra data":
+            raise
+        value, end = json.JSONDecoder().raw_decode(cleaned)
+        trailing = cleaned[end:].strip()
+        # A prose note after one complete JSON value is harmless model chatter.
+        # A second structured value is ambiguous and must remain fail-closed.
+        trailing_without_fence = re.sub(r"^```(?:json)?\s*", "", trailing, flags=re.I)
+        if trailing_without_fence.startswith(("{", "[")):
+            raise
+        return value
 
 
 def safe_slug(value: str) -> str:
