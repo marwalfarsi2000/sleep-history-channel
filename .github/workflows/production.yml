@@ -52,7 +52,6 @@ jobs:
           sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          npm ci --ignore-scripts
       - name: Restore latest failed-run checkpoint
         id: restore
         env:
@@ -68,8 +67,6 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
           CANVA_THUMBNAIL_WEBHOOK_URL: ${{ secrets.CANVA_THUMBNAIL_WEBHOOK_URL }}
-          PUTER_AUTH_TOKEN: ${{ secrets.PUTER_AUTH_TOKEN }}
-          PUTER_FREE_ONLY_VERIFIED: ${{ vars.PUTER_FREE_ONLY_VERIFIED }}
           IAS3_ACCESS_KEY: ${{ secrets.IAS3_ACCESS_KEY }}
           IAS3_SECRET_KEY: ${{ secrets.IAS3_SECRET_KEY }}
           GOOGLE_CLOUD_TTS_API_KEY: ${{ secrets.GOOGLE_CLOUD_TTS_API_KEY }}

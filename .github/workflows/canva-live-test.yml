@@ -1,14 +1,9 @@
 name: Canva Live Test
 
-# One manual, single-attempt Canva (n8n) thumbnail  (reference = a frame of an already reviewed episode video).
-# Read-only for the episode; nothing is published. The result image is uploaded as an artifact for owner review.
+# One manual, single-attempt Canva thumbnail through n8n: Lucid Origin background -> template autofill -> export.
+# Nothing is published and no episode is touched. The result image is uploaded as an artifact and sent to Telegram.
 on:
   workflow_dispatch:
-    inputs:
-      archive_identifier:
-        description: Internet Archive item whose video supplies the clean reference frame (read only)
-        required: true
-        default: lan-tukmil-alqissa-20261019-tripoli-lybia-karamanli-d
 
 permissions:
   contents: read
@@ -16,7 +11,7 @@ permissions:
 jobs:
   live:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,30 +20,22 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Extract a clean reference frame (read only)
-        env:
-          ARCHIVE_IDENTIFIER: ${{ inputs.archive_identifier }}
-        run: |
-          curl -sSL --retry 3 -o /tmp/reference.mp4 "https://archive.org/download/${ARCHIVE_IDENTIFIER}/14_video_final.mp4"
-          ffmpeg -y -loglevel error -ss 10 -i /tmp/reference.mp4 -frames:v 1 /tmp/reference_frame.png
       - name: Single Canva thumbnail
         env:
           CANVA_THUMBNAIL_WEBHOOK_URL: ${{ secrets.CANVA_THUMBNAIL_WEBHOOK_URL }}
-        run: PYTHONPATH=scripts python scripts/canva_live_test.py /tmp/reference_frame.png
+        run: PYTHONPATH=scripts python scripts/canva_live_test.py
       - name: Send the image to Telegram
         if: always()
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          if [ -f canva-live-test/2_canva_thumbnail.jpg ]; then
+          if [ -f canva-live-test/canva_thumbnail.jpg ]; then
             curl -sS -o /dev/null -w "telegram_http=%{http_code}\n" "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
-              -F "chat_id=${TELEGRAM_CHAT_ID}" -F "document=@canva-live-test/2_canva_thumbnail.jpg" \
-              -F "caption=Canva live test (single thumbnail)" || echo "telegram_send_failed"
+              -F "chat_id=${TELEGRAM_CHAT_ID}" -F "document=@canva-live-test/canva_thumbnail.jpg" \
+              -F "caption=Canva live test (Lucid Origin + template, single thumbnail)" || echo "telegram_send_failed"
           else
             echo "no image to send"
           fi

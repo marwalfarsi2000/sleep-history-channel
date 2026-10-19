@@ -471,41 +471,29 @@ def _write_metadata(metadata_path: Path, metadata: dict) -> None:
     temporary_metadata.replace(metadata_path)
 
 
-def build_final_thumbnail(story: Path, background: Path, thumbnail_text: str) -> tuple[dict, str]:
-    """Final thumbnail. Order: Canva (via the n8n workflow: upload, autofill, export), Puter if enabled, then the existing free path.
+def build_final_thumbnail(story: Path, background: Path, thumbnail_text: str, thumbnail_prompt: str = "") -> tuple[dict, str]:
+    """Final thumbnail, made entirely in Canva: Lucid Origin background -> template autofill (HOOK_TEXT) -> export.
 
-    Text is never drawn over a Canva or Puter result, and 10_background.png (the video background) always stays text-free.
-    There is no paid fallback.
+    There is no fallback: no Cloudflare image, no Puter, no Pillow text. A Canva failure stops the run with a CANVA_* error.
+    10_background.png (the video background) is never touched and stays text-free.
     """
     thumbnail = story / "11_thumbnail_base.jpg"
-    with Image.open(background) as source:
-        base = source.convert("RGB")
     if not thumbnail_text:
         # Backward compatibility for review regeneration of episodes made before the packaging automation existed.
-        base.resize((1280, 720), Image.Resampling.LANCZOS).save(thumbnail, format="JPEG", quality=94, optimize=True)
+        with Image.open(background) as source:
+            source.convert("RGB").resize((1280, 720), Image.Resampling.LANCZOS).save(
+                thumbnail, format="JPEG", quality=94, optimize=True)
         return {}, "legacy_no_text"
     import canva_thumbnail
-    import puter_thumbnail
-    puter_error = "PUTER_DISABLED"
-    if canva_thumbnail.enabled():
-        try:
-            return canva_thumbnail.generate(story, thumbnail_text), "passed"
-        except canva_thumbnail.CanvaError as exc:
-            puter_error = f"CANVA_FAILED:{exc.code}"
-            print(f"Canva thumbnail unavailable ({exc.code}); trying the next provider", flush=True)
-    if puter_thumbnail.enabled():
-        try:
-            return puter_thumbnail.generate(story, thumbnail_text), "passed"
-        except puter_thumbnail.PuterError as exc:
-            puter_error = exc.code
-            print(f"Puter thumbnail unavailable ({exc.code}); using the existing free thumbnail path", flush=True)
-    render_thumbnail(base, thumbnail, thumbnail_text)  # existing free path
-    return {
-        "thumbnail_generation_provider": "local_pillow_fallback",
-        "thumbnail_text_render_method": "pillow_overlay_fallback",
-        "thumbnail_puter_status": puter_error,
-        "thumbnail_text_ocr_verified": False,
-    }, "fallback_overlay"
+    scene = ""
+    scene_path = story / "08_image_prompt_en.txt"
+    if scene_path.exists():
+        scene = scene_path.read_text(encoding="utf-8")
+    try:
+        prompt = canva_thumbnail.build_background_prompt(thumbnail_prompt, scene)
+        return canva_thumbnail.generate(story, thumbnail_text, prompt), "passed"
+    except canva_thumbnail.CanvaError as exc:
+        raise RuntimeError(f"{exc.code}: {canva_thumbnail.redact(str(exc))}") from exc
 
 
 def reusable_background(story: Path, metadata: dict, original_prompt: str) -> bool:
@@ -539,7 +527,7 @@ def generate(story: Path, seed: int | None = None) -> None:
     if reusable_background(story, metadata, original_prompt):
         print("Reusing the accepted background; generating only the final thumbnail", flush=True)
         background, thumbnail = story / "10_background.png", story / "11_thumbnail_base.jpg"
-        thumbnail_record, thumbnail_status = build_final_thumbnail(story, background, thumbnail_text)
+        thumbnail_record, thumbnail_status = build_final_thumbnail(story, background, thumbnail_text, str(metadata.get("thumbnail_prompt", "")))
         metadata.update(thumbnail_record)
         metadata.update({
             "thumbnail_path": str(thumbnail),
@@ -633,7 +621,7 @@ def generate(story: Path, seed: int | None = None) -> None:
         "image_sha256": hashlib.sha256(background.read_bytes()).hexdigest(),
     })
     _write_metadata(metadata_path, metadata)  # the accepted background survives a thumbnail failure
-    thumbnail_record, thumbnail_status = build_final_thumbnail(story, background, thumbnail_text)
+    thumbnail_record, thumbnail_status = build_final_thumbnail(story, background, thumbnail_text, str(metadata.get("thumbnail_prompt", "")))
     metadata.update(thumbnail_record)
     metadata.update({
         "thumbnail_sha256": hashlib.sha256(thumbnail.read_bytes()).hexdigest(),
