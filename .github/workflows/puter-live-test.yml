@@ -1,6 +1,6 @@
 name: Puter Live Test
 
-# One manual, single-attempt Puter / Sunburst generation (quality low) (reference = a frame of an already reviewed episode video).
+# One manual, single-attempt Puter / Sunburst generation  (reference = a frame of an already reviewed episode video).
 # Read-only for the episode; nothing is published. The result image is uploaded as an artifact for owner review.
 on:
   workflow_dispatch:
@@ -9,6 +9,14 @@ on:
         description: Internet Archive item whose video supplies the clean reference frame (read only)
         required: true
         default: lan-tukmil-alqissa-20261019-tripoli-lybia-karamanli-d
+      quality:
+        description: Image quality for this single test image
+        required: true
+        default: medium
+      allowance_only_confirmed:
+        description: Type yes to confirm this one image may only draw on the free monthly Puter allowance
+        required: true
+        default: "no"
 
 permissions:
   contents: read
@@ -39,8 +47,22 @@ jobs:
       - name: Single Puter generation
         env:
           PUTER_AUTH_TOKEN: ${{ secrets.PUTER_AUTH_TOKEN }}
-          PUTER_FREE_ONLY_VERIFIED: ${{ vars.PUTER_FREE_ONLY_VERIFIED }}
+          PUTER_FREE_ONLY_VERIFIED: ${{ (inputs.allowance_only_confirmed == 'yes' || vars.PUTER_FREE_ONLY_VERIFIED == '1') && '1' || '' }}
+          PUTER_TEST_QUALITY: ${{ inputs.quality }}
         run: PYTHONPATH=scripts python scripts/puter_live_test.py /tmp/reference_frame.png
+      - name: Send the image to Telegram
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -f puter-live-test/2_puter_thumbnail.jpg ]; then
+            curl -sS -o /dev/null -w "telegram_http=%{http_code}\n" "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
+              -F "chat_id=${TELEGRAM_CHAT_ID}" -F "document=@puter-live-test/2_puter_thumbnail.jpg" \
+              -F "caption=Puter / Sunburst live test (single image)" || echo "telegram_send_failed"
+          else
+            echo "no image to send"
+          fi
       - name: Upload result for owner review
         if: always()
         uses: actions/upload-artifact@v4

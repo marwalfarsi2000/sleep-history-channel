@@ -1,4 +1,4 @@
-"""One live Puter / Sunburst generation for owner approval (manual workflow, single attempt, quality low).
+"""One live Puter / Sunburst generation for owner approval (manual workflow, single attempt; quality from PUTER_TEST_QUALITY, default medium).
 
 The reference is a clean frame of an already reviewed episode video (read only); nothing is changed or published.
 Outputs go to ``puter-live-test/`` and are uploaded as a workflow artifact. The Node adapter refuses to run unless the
@@ -8,6 +8,7 @@ account is marked free-only verified, so an unverified account never reaches the
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -17,7 +18,7 @@ from PIL import Image
 import puter_thumbnail as puter
 
 TEST_PHRASE = "داخل ورشة سمرقند"
-TEST_QUALITY = "low"
+TEST_QUALITY = os.environ.get("PUTER_TEST_QUALITY") or "medium"
 OUT = Path("puter-live-test")
 
 
