@@ -1,5 +1,9 @@
 name: Sleep History Targeted Review Repair
 
+# Resumable across runners: every completed unit (background, thumbnail, each TTS chunk, narration, audio mix,
+# video) is uploaded as an immutable checkpoint artifact; the next run restores and verifies them and only
+# produces what is missing. Internet Archive is touched only after every output has passed QC.
+
 on:
   workflow_dispatch:
     inputs:
@@ -16,13 +20,27 @@ permissions:
   contents: write
 
 concurrency:
-  group: sleep-history-production
+  group: repair-review-${{ inputs.identifier }}
   cancel-in-progress: false
 
 jobs:
   repair:
     runs-on: ubuntu-latest
     timeout-minutes: 355
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_TTS_VOICE_ID: ${{ secrets.GEMINI_TTS_VOICE_ID }}
+      GEMINI_TTS_VOICE_NAME: ${{ secrets.GEMINI_TTS_VOICE_NAME }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
+      IAS3_ACCESS_KEY: ${{ secrets.IAS3_ACCESS_KEY }}
+      IAS3_SECRET_KEY: ${{ secrets.IAS3_SECRET_KEY }}
+      PINK_NOISE_URL: ${{ secrets.PINK_NOISE_URL }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
       - name: Ensure automation-state branch and hydrate runtime state
@@ -36,42 +54,213 @@ jobs:
           python-version: "3.13"
           cache: pip
       - name: Install dependencies
-        id: install
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Repair review item (audio mix, thumbnail, video only)
-        id: apply
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_TTS_VOICE_ID: ${{ secrets.GEMINI_TTS_VOICE_ID }}
-          GEMINI_TTS_VOICE_NAME: ${{ secrets.GEMINI_TTS_VOICE_NAME }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
-          IAS3_ACCESS_KEY: ${{ secrets.IAS3_ACCESS_KEY }}
-          IAS3_SECRET_KEY: ${{ secrets.IAS3_SECRET_KEY }}
-          PINK_NOISE_URL: ${{ secrets.PINK_NOISE_URL }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          if [ "${{ inputs.dry_run }}" = "true" ]; then EXTRA="--dry-run"; else EXTRA=""; fi
-          python scripts/repair_review.py --identifier "${{ inputs.identifier }}" $EXTRA
-      - name: Preserve diagnostic logs after failure
-        if: failure()
-        uses: actions/upload-artifact@v4
+      - name: Repair unit 1
+        id: u1
+        uses: ./.github/actions/repair-unit
         with:
-          name: sleep-history-repair-failure-${{ github.run_id }}
-          path: |
-            logs/*.log
-            stories/*/12_audio_narration.mp3
-            .runtime/run_summary.json
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 30
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 2
+        id: u2
+        if: steps.u1.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 3
+        id: u3
+        if: steps.u2.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 4
+        id: u4
+        if: steps.u3.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 5
+        id: u5
+        if: steps.u4.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 6
+        id: u6
+        if: steps.u5.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 7
+        id: u7
+        if: steps.u6.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 8
+        id: u8
+        if: steps.u7.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 9
+        id: u9
+        if: steps.u8.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 10
+        id: u10
+        if: steps.u9.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 11
+        id: u11
+        if: steps.u10.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 12
+        id: u12
+        if: steps.u11.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 13
+        id: u13
+        if: steps.u12.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 14
+        id: u14
+        if: steps.u13.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 15
+        id: u15
+        if: steps.u14.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 16
+        id: u16
+        if: steps.u15.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 17
+        id: u17
+        if: steps.u16.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 18
+        id: u18
+        if: steps.u17.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 19
+        id: u19
+        if: steps.u18.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 20
+        id: u20
+        if: steps.u19.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 21
+        id: u21
+        if: steps.u20.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 22
+        id: u22
+        if: steps.u21.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 23
+        id: u23
+        if: steps.u22.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 24
+        id: u24
+        if: steps.u23.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 25
+        id: u25
+        if: steps.u24.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 26
+        id: u26
+        if: steps.u25.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 27
+        id: u27
+        if: steps.u26.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Repair unit 28
+        id: u28
+        if: steps.u27.outputs.more == 'true'
+        uses: ./.github/actions/repair-unit
+        with:
+          identifier: ${{ inputs.identifier }}
+          dry_run: ${{ inputs.dry_run }}
+      - name: Report repair status
+        if: always()
+        run: |
+          echo "unit 28 status: ${{ steps.u28.outputs.status }} / more: ${{ steps.u28.outputs.more }}"
+          if [ "${{ steps.u28.outputs.more }}" = "true" ]; then
+            echo "::warning::REPAIR_CONTINUES_NEXT_RUN: unit budget used up; checkpoints are saved, dispatch again to continue"
+          fi
       - name: Persist state to automation-state branch
         if: always() && inputs.dry_run != 'true'
         run: python scripts/git_sync.py

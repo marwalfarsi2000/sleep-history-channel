@@ -76,12 +76,11 @@ class RepairPathTests(unittest.TestCase):
                           "build_metadata_files", "run_packaging"):
             self.assertNotIn(forbidden, self.source)
 
-    def test_tts_only_runs_without_clean_narration_and_never_pays(self):
-        self.assertIn("12_audio_narration.mp3", self.source)
-        self.assertIn("tts_cloud_engines = lambda: []", self.source)
-        self.assertIn("REPAIR_STOPPED_SAFELY", self.source)
-        reuse_branch = self.source.split("if narration.exists()")[1].split("else:")[0]
-        self.assertNotIn("synthesize", reuse_branch)
+    def test_tts_is_gemini_only_and_stops_safely_when_quota_ends(self):
+        self.assertIn("_gemini_tts_models()", self.source)
+        self.assertIn("REPAIR_WAITING_FOR_TTS_QUOTA", self.source)
+        for forbidden in ("tts_cloud_engines", "GOOGLE_CLOUD", "google_cloud", "edge_tts", "youtube_publish"):
+            self.assertNotIn(forbidden, self.source)
 
     def test_prompt_sanitiser_removes_dark_area_requests(self):
         old = ("A lantern lit alley at night. Reserve a clean dark negative-space area occupying approximately "
