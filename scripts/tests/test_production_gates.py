@@ -62,6 +62,39 @@ class ProductionGateTests(unittest.TestCase):
         self.assertEqual(final, corrected)
         self.assertEqual(report["status"], "PASS")
 
+    def test_fact_check_accepts_single_object_wrapped_in_list(self):
+        story = " ".join(["قصة"] * 5000)
+        first = [{
+            "status": "PASS", "verified": [], "uncertain": [], "corrected": [],
+            "unsupported_critical": [], "fiction_smuggling": [],
+            "fictional_presented_as_documented": [],
+        }]
+        second = {
+            "status": "PASS", "remaining_errors": [], "unsupported_critical": [],
+            "uncertain_presented_as_fact": [], "fiction_smuggling": [],
+            "fictional_presented_as_documented": [], "corrections_applied": True,
+        }
+        with mock.patch.object(generate_daily, "gemini", side_effect=[
+            (json.dumps(first), []), (json.dumps(second), []),
+        ]):
+            final, report = generate_daily.fact_check_story(
+                {"topic_ar": "موضوع"}, "بحث موثق", story
+            )
+        self.assertEqual(final, story)
+        self.assertIsInstance(report["pass_1"], dict)
+        self.assertEqual(report["status"], "PASS")
+
+    def test_fact_check_retries_then_fails_closed_on_invalid_list_shape(self):
+        invalid = json.dumps([{"status": "PASS"}, {"status": "PASS"}])
+        with mock.patch.object(
+            generate_daily, "gemini", side_effect=[(invalid, []), (invalid, [])]
+        ) as gemini_mock:
+            with self.assertRaisesRegex(RuntimeError, "FACT_CHECK_SCHEMA_FAILED"):
+                generate_daily.fact_check_story(
+                    {"topic_ar": "موضوع"}, "بحث موثق", "قصة"
+                )
+        self.assertEqual(gemini_mock.call_count, 2)
+
     def test_tts_prepare_rejects_missing_upstream_passes(self):
         with tempfile.TemporaryDirectory() as directory:
             story = Path(directory)
