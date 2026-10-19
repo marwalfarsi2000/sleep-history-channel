@@ -92,7 +92,7 @@
   "sentence_pause_strategy": "punctuation_and_blank_line",
   "diacritization_review_passes": 2,
   "background_audio_file": "assets/audio/pink-noise.m4a",
-  "background_audio_volume": 0.15,
+  "background_audio_volume": 0.03,
   "archive_identifier_prefix": "lan-tukmil-alqissa",
   "archive_creator": "لن تُكمل هذه القصة",
   "archive_collection": "opensource_movies",

@@ -92,7 +92,7 @@ class PromptValidationTests(unittest.TestCase):
         rules = (ROOT / "config" / "youtube_packaging_rules.md").read_text(encoding="utf-8")
         self.assertNotIn("Include the exact Arabic thumbnail text", rules)
         self.assertIn("do NOT include the Arabic `thumbnail_text`", rules)
-        self.assertIn("25-35%", rules)
+        self.assertNotIn("25-35%", rules)
         self.assertIn("deterministic renderer", rules)
         # Rest of the visual identity is kept.
         for kept in ("Low-key night lighting", "Palette: deep midnight navy", "16:9 YouTube thumbnail. Original composition."):
@@ -136,7 +136,7 @@ class PackagingCacheAndImagePromptTests(unittest.TestCase):
     def test_image_prompt_file_never_contains_thumbnail_text(self):
         source = inspect.getsource(generate_daily.build_metadata_files)
         self.assertIn("thumbnail_prompt_text_conflicts(thumbnail_prompt", source)
-        self.assertIn("PIPELINE SCENE RENDER: Generate the historical scene and reserved dark text area only", source)
+        self.assertIn("PIPELINE SCENE RENDER: Generate the historical scene with a natural uncluttered text-safe area integrated into the scene only", source)
         # A prompt that still carries the label is refused before any 08_image_prompt file is written.
         self.assertTrue(generate_daily.thumbnail_prompt_text_conflicts(SAMARKAND_BAD, LABEL))
         self.assertFalse(generate_daily.thumbnail_prompt_text_conflicts(BACKGROUND_ONLY, LABEL))

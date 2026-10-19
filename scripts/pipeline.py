@@ -1386,10 +1386,14 @@ def voice_metadata() -> dict:
         "sentence_pause_strategy": SETTINGS.get("sentence_pause_strategy", "punctuation_and_blank_line"),
     }
 
+def background_volume_percent() -> float:
+    return round(float(SETTINGS.get("background_audio_volume", 0.03)) * 100, 2)
+
+
 def mix_background_audio(narration: Path, output: Path) -> None:
     import background_audio
     background = background_audio.ensure_background_audio(ROOT, SETTINGS.get("background_audio_file")).resolve()
-    volume = float(SETTINGS.get("background_audio_volume", 0.15))
+    volume = float(SETTINGS.get("background_audio_volume", 0.03))
     if not 0.0 <= volume <= 1.0:
         raise RuntimeError(f"Invalid background_audio_volume: {volume}")
     exact_duration = duration(narration)
@@ -2048,7 +2052,7 @@ def validate(story: Path):
     chunk_models = json.loads(chunk_models_path.read_text(encoding="utf-8")) if chunk_models_path.exists() else {}
     models_used = sorted(set(chunk_models.values()))
     from state_machine import State, transition_state
-    meta=json.loads((story/"15_metadata.json").read_text(encoding="utf-8")); meta.update(audio_duration_seconds=round(ad,2),video_duration_seconds=round(vd,2),word_count=arabic_words((story/"05_story_clean.md").read_text(encoding="utf-8")),**voice_metadata(),tts_models_used=models_used,tts_normalization_status="passed",speech_safe_validation_status="passed",audio_generation_status="passed",audio_qc_status="passed",video_assembly_status="passed",video_qc_status="passed",metadata_validation_status="passed",clean_story_sha256=file_sha256(story/"05_story_clean.md"),tts_normalized_sha256=file_sha256(story/"05b_story_tts_normalized.md"),tts_api_sha256=file_sha256(story/"07_story_tts_api.md"),audio_sha256=file_sha256(story/"12_audio_full.mp3"),image_sha256=file_sha256(story/"10_background.png"),thumbnail_sha256=file_sha256(story/"11_thumbnail_base.jpg"),video_sha256=file_sha256(video_path),background_audio="pink noise",background_audio_volume_percent=15,narration_audio_path=str(story/"12_audio_narration.mp3"),audio_path=str(story/"12_audio_full.mp3"),video_path=str(story/"14_video_final.mp4"),thumbnail_path=str(story/"11_thumbnail_base.jpg"),approval_status=State.MEDIA_READY,publish_status="not_published")
+    meta=json.loads((story/"15_metadata.json").read_text(encoding="utf-8")); meta.update(audio_duration_seconds=round(ad,2),video_duration_seconds=round(vd,2),word_count=arabic_words((story/"05_story_clean.md").read_text(encoding="utf-8")),**voice_metadata(),tts_models_used=models_used,tts_normalization_status="passed",speech_safe_validation_status="passed",audio_generation_status="passed",audio_qc_status="passed",video_assembly_status="passed",video_qc_status="passed",metadata_validation_status="passed",clean_story_sha256=file_sha256(story/"05_story_clean.md"),tts_normalized_sha256=file_sha256(story/"05b_story_tts_normalized.md"),tts_api_sha256=file_sha256(story/"07_story_tts_api.md"),audio_sha256=file_sha256(story/"12_audio_full.mp3"),image_sha256=file_sha256(story/"10_background.png"),thumbnail_sha256=file_sha256(story/"11_thumbnail_base.jpg"),video_sha256=file_sha256(video_path),background_audio="pink noise",background_audio_volume_percent=background_volume_percent(),narration_audio_path=str(story/"12_audio_narration.mp3"),audio_path=str(story/"12_audio_full.mp3"),video_path=str(story/"14_video_final.mp4"),thumbnail_path=str(story/"11_thumbnail_base.jpg"),approval_status=State.MEDIA_READY,publish_status="not_published")
     (story/"15_metadata.json").write_text(json.dumps(meta,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     (story/"17_status.md").write_text(
         f"# الحالة\n\n- الحالة الحالية: `{State.MEDIA_READY}`\n- النشر: `not_published`\n- بانتظار مراجعة Marwa واعتماد صريح قبل النشر.\n",
@@ -2068,14 +2072,14 @@ def package(story: Path):
     run_summary.stage("package")
     from state_machine import State
     meta=json.loads((story/"15_metadata.json").read_text(encoding="utf-8"))
-    meta.update(audio_duration_seconds=round(duration(story/"12_audio_full.mp3"),2),video_duration_seconds=round(duration(story/"14_video_final.mp4"),2),word_count=arabic_words((story/"05_story_clean.md").read_text(encoding="utf-8")),**voice_metadata(),background_audio="pink noise",background_audio_volume_percent=15,narration_audio_path=str(story/"12_audio_narration.mp3"),audio_path=str(story/"12_audio_full.mp3"),video_path=str(story/"14_video_final.mp4"),thumbnail_path=str(story/"11_thumbnail_base.jpg"),approval_status=State.MEDIA_READY,publish_status="not_published")
+    meta.update(audio_duration_seconds=round(duration(story/"12_audio_full.mp3"),2),video_duration_seconds=round(duration(story/"14_video_final.mp4"),2),word_count=arabic_words((story/"05_story_clean.md").read_text(encoding="utf-8")),**voice_metadata(),background_audio="pink noise",background_audio_volume_percent=background_volume_percent(),narration_audio_path=str(story/"12_audio_narration.mp3"),audio_path=str(story/"12_audio_full.mp3"),video_path=str(story/"14_video_final.mp4"),thumbnail_path=str(story/"11_thumbnail_base.jpg"),approval_status=State.MEDIA_READY,publish_status="not_published")
     (story/"15_metadata.json").write_text(json.dumps(meta,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     (story/"17_status.md").write_text(
         f"# الحالة\n\n- الحالة الحالية: `{State.MEDIA_READY}`\n- النشر: `not_published`\n- بانتظار مراجعة Marwa واعتماد صريح قبل النشر.\n",
         encoding="utf-8",
     )
     def md(name): return html.escape((story/name).read_text(encoding="utf-8"))
-    page=f'''<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><title>{html.escape(meta['title'])}</title><style>body{{font-family:Segoe UI,Tahoma,sans-serif;background:#f4efe5;color:#4f4035;max-width:1050px;margin:auto;padding:32px;line-height:1.9}}img{{width:100%;border-radius:18px}}.card{{background:#fffaf0;padding:24px;margin:18px 0;border:1px solid #cec7b6;border-radius:16px}}pre{{white-space:pre-wrap;font:inherit}}a{{color:#826d5c}}</style><h1>{html.escape(meta['title'])}</h1><img src="10_background.png"><div class="card"><b>الموضوع:</b> {html.escape(meta['topic'])}<br><b>الكلمات:</b> {meta.get('word_count',0)}<br><b>مدة الصوت:</b> {meta.get('audio_duration_seconds',0)} ثانية<br><b>الخلفية الصوتية:</b> Pink Noise بنسبة 15%<br><b>الحالة:</b> pending_approval<br><a href="12_audio_narration.mp3">صوت الراوي فقط</a> · <a href="12_audio_full.mp3">الصوت المخلوط</a> · <a href="13_audio_review.opus">نسخة المراجعة</a> · <a href="14_video_final.mp4">الفيديو</a> · <a href="11_thumbnail_base.jpg">Thumbnail</a></div><h2>النص</h2><div class="card"><pre>{md('05_story_clean.md')}</pre></div><h2>وصف YouTube</h2><div class="card"><pre>{md('02_description.txt')}</pre></div><h2>المصادر</h2><div class="card"><pre>{md('03_sources.md')}</pre></div></html>'''
+    page=f'''<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><title>{html.escape(meta['title'])}</title><style>body{{font-family:Segoe UI,Tahoma,sans-serif;background:#f4efe5;color:#4f4035;max-width:1050px;margin:auto;padding:32px;line-height:1.9}}img{{width:100%;border-radius:18px}}.card{{background:#fffaf0;padding:24px;margin:18px 0;border:1px solid #cec7b6;border-radius:16px}}pre{{white-space:pre-wrap;font:inherit}}a{{color:#826d5c}}</style><h1>{html.escape(meta['title'])}</h1><img src="10_background.png"><div class="card"><b>الموضوع:</b> {html.escape(meta['topic'])}<br><b>الكلمات:</b> {meta.get('word_count',0)}<br><b>مدة الصوت:</b> {meta.get('audio_duration_seconds',0)} ثانية<br><b>الخلفية الصوتية:</b> Pink Noise بنسبة {background_volume_percent():g}%<br><b>الحالة:</b> pending_approval<br><a href="12_audio_narration.mp3">صوت الراوي فقط</a> · <a href="12_audio_full.mp3">الصوت المخلوط</a> · <a href="13_audio_review.opus">نسخة المراجعة</a> · <a href="14_video_final.mp4">الفيديو</a> · <a href="11_thumbnail_base.jpg">Thumbnail</a></div><h2>النص</h2><div class="card"><pre>{md('05_story_clean.md')}</pre></div><h2>وصف YouTube</h2><div class="card"><pre>{md('02_description.txt')}</pre></div><h2>المصادر</h2><div class="card"><pre>{md('03_sources.md')}</pre></div></html>'''
     (story/"00_package.html").write_text(page,encoding="utf-8")
 
 

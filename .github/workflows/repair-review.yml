@@ -1,0 +1,76 @@
+name: Sleep History Targeted Review Repair
+
+on:
+  workflow_dispatch:
+    inputs:
+      identifier:
+        description: Internet Archive identifier of the REVIEW_PENDING item to repair
+        required: true
+      dry_run:
+        description: Rebuild and validate only; upload nothing
+        required: false
+        default: "false"
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: sleep-history-production
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure automation-state branch and hydrate runtime state
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/state_store.py ensure
+          python3 scripts/state_store.py hydrate
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install dependencies
+        id: install
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Repair review item (audio mix, thumbnail, video only)
+        id: apply
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_TTS_VOICE_ID: ${{ secrets.GEMINI_TTS_VOICE_ID }}
+          GEMINI_TTS_VOICE_NAME: ${{ secrets.GEMINI_TTS_VOICE_NAME }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
+          IAS3_ACCESS_KEY: ${{ secrets.IAS3_ACCESS_KEY }}
+          IAS3_SECRET_KEY: ${{ secrets.IAS3_SECRET_KEY }}
+          PINK_NOISE_URL: ${{ secrets.PINK_NOISE_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then EXTRA="--dry-run"; else EXTRA=""; fi
+          python scripts/repair_review.py --identifier "${{ inputs.identifier }}" $EXTRA
+      - name: Preserve diagnostic logs after failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sleep-history-repair-failure-${{ github.run_id }}
+          path: |
+            logs/*.log
+            .runtime/run_summary.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Persist state to automation-state branch
+        if: always() && inputs.dry_run != 'true'
+        run: python scripts/git_sync.py
