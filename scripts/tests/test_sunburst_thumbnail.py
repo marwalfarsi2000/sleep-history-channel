@@ -23,7 +23,7 @@ TEXT = "أزقة طرابلس البيضاء"
 KEY = "test-gateway-key-0123456789-not-real"
 
 
-def noisy_png(size=(1536, 1024), fmt="PNG") -> bytes:
+def noisy_png(size=(1920, 1080), fmt="PNG") -> bytes:
     image = Image.effect_noise(size, 80).convert("RGB")
     buffer = io.BytesIO()
     image.save(buffer, format=fmt)
@@ -75,6 +75,8 @@ def test_exact_model_secret_and_endpoint(story, monkeypatch):
     assert call["headers"]["Authorization"] == f"Bearer {KEY}"
     assert b'name="model"\r\n\r\nopenai/gpt-image-2.5-sunburst\r\n' in call["body"]
     assert b'"models"' not in call["body"]  # no fallback model list
+    assert b'name="size"\r\n\r\n1920x1080\r\n' in call["body"] and b'name="quality"\r\n\r\nmedium\r\n' in call["body"]
+    assert gateway.IMAGE_SIZE == "1920x1080" and gateway.IMAGE_QUALITY == "medium"
 
 
 def test_the_text_free_background_is_the_reference_image(story, monkeypatch):
@@ -98,24 +100,52 @@ def test_prompt_contains_the_exact_arabic_phrase_and_forbids_everything_else(sto
     assert TEXT.encode("utf-8") in net.calls[0]["body"]
 
 
-def test_final_thumbnail_is_1280x720_jpeg_at_the_expected_path_and_background_is_untouched(story, monkeypatch):
+def test_final_thumbnail_is_1920x1080_jpeg_at_the_expected_path_and_background_is_untouched(story, monkeypatch):
     before = (story / "10_background.png").read_bytes()
     record = run(story, Net(), monkeypatch)
     thumbnail = story / "11_thumbnail_base.jpg"
     with Image.open(thumbnail) as image:
-        assert image.size == (1280, 720) and image.format == "JPEG"
+        assert image.size == (1920, 1080) and image.format == "JPEG"
     assert (story / "10_background.png").read_bytes() == before  # the video background stays text-free
     assert record["thumbnail_generation_provider"] == "vercel_ai_gateway"
     assert record["thumbnail_model"] == "openai/gpt-image-2.5-sunburst"
     assert record["thumbnail_text_render_method"] == "native_in_generated_image"
     assert record["thumbnail_text_ocr_verified"] is False  # honest: no automatic Arabic spelling check
     assert record["thumbnail_attempts"] == 1
+    assert record["thumbnail_size"] == "1920x1080" and record["thumbnail_generation_quality"] == "medium"
+    assert thumbnail.stat().st_size <= 2_000_000  # YouTube's thumbnail limit, met by compression only
 
 
-def test_non_16_9_output_is_cropped_deterministically_not_distorted():
-    for size in ((1536, 1024), (1024, 1024), (1920, 1080), (2000, 700)):
-        image = sunburst.finalize_image(noisy_png(size))
-        assert image.size == (1280, 720)
+def test_the_model_image_is_used_exactly_as_returned_with_no_resize_or_crop(story, monkeypatch):
+    returned = Image.effect_noise((1920, 1080), 40).convert("RGB")
+    buffer = io.BytesIO()
+    returned.save(buffer, format="PNG")
+    run(story, Net([ok_body(buffer.getvalue())]), monkeypatch)
+    with Image.open(story / "11_thumbnail_base.jpg") as saved:
+        assert saved.size == (1920, 1080)
+    assert sunburst.decode_image(buffer.getvalue()).size == (1920, 1080)
+
+
+@pytest.mark.parametrize("size", [(1536, 1024), (1280, 720), (1024, 1024)])
+def test_a_wrong_size_is_rejected_not_silently_resized(size):
+    with pytest.raises(ValueError):
+        sunburst.decode_image(noisy_png(size))
+
+
+def test_wrong_size_candidates_are_retried_then_stop_after_four(story, monkeypatch):
+    net = Net([ok_body(noisy_png((1536, 1024)))])
+    with pytest.raises(gateway.GatewayError):
+        run(story, net, monkeypatch)
+    assert len(net.calls) == 4 and not (story / "11_thumbnail_base.jpg").exists()
+
+
+def test_jpeg_is_compressed_not_resized_to_fit_youtubes_2mb_limit(tmp_path):
+    big = Image.effect_noise((1920, 1080), 90).convert("RGB")
+    path = tmp_path / "t.jpg"
+    quality = sunburst.save_jpeg(big, path)
+    assert path.stat().st_size <= 2_000_000 and quality in sunburst.JPEG_QUALITIES
+    with Image.open(path) as saved:
+        assert saved.size == (1920, 1080)
 
 
 def test_first_valid_candidate_stops_generation(story, monkeypatch):
@@ -140,11 +170,11 @@ def test_a_later_good_candidate_succeeds_without_extra_calls(story, monkeypatch)
     assert len(net.calls) == 2 and record["thumbnail_attempts"] == 2
 
 
-def test_rejected_size_tries_the_next_size_without_using_an_attempt(story, monkeypatch):
-    net = Net([err_body(400, "invalid size"), ok_body()])
-    record = run(story, net, monkeypatch)
-    assert record["thumbnail_attempts"] == 1 and len(net.calls) == 2
-    assert b"1536x864" in net.calls[0]["body"] and b"1536x1024" in net.calls[1]["body"]
+def test_a_rejected_request_stops_immediately_without_retries_or_another_size(story, monkeypatch):
+    net = Net([err_body(400, "invalid size")])
+    with pytest.raises(gateway.GatewayError) as caught:
+        run(story, net, monkeypatch)
+    assert caught.value.code == "VERCEL_BAD_REQUEST" and len(net.calls) == 1
 
 
 @pytest.mark.parametrize("status,message", [(402, "payment required"), (429, "insufficient credits"),
@@ -187,7 +217,8 @@ def test_no_text_is_drawn_by_the_new_thumbnail_path():
     for module in (sunburst, gateway):
         source = inspect.getsource(module)
         for forbidden in ("ImageDraw", ".text(", "rounded_rectangle", "drawtext", "arabic_reshaper", "Pango",
-                          "api.openai.com", "BYOK", "google", "pollinations", "cloudflare"):
+                          "api.openai.com", "BYOK", "google", "pollinations", "cloudflare", ".resize(", ".crop(",
+                          "1280", "720"):
             assert forbidden not in source, (module.__name__, forbidden)
     final = inspect.getsource(image_generate.build_final_thumbnail)
     for forbidden in ("render_thumbnail", "ImageDraw", ".text("):

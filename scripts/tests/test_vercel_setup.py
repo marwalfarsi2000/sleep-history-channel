@@ -247,3 +247,19 @@ def test_running_the_flows_leaves_the_working_tree_untouched():
     setup.save_secret(KEY, which=lambda name: "gh", runner=Runner())
     after = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True, check=True).stdout
     assert before == after
+
+
+def test_secret_is_set_on_the_explicit_origin_repository_and_the_page_says_which():
+    origin = subprocess.CompletedProcess([], 0, stdout="https://github.com/marwalfarsi2000/sleep-history-channel.git\n", stderr="")
+    runner = Runner(extra={"git remote get-url": origin})
+    result = setup.save_secret(KEY, which=lambda name: "gh", runner=runner)
+    argv = next(call[0] for call in runner.calls if call[0][:3] == ["gh", "secret", "set"])
+    assert argv == ["gh", "secret", "set", "AI_GATEWAY_API_KEY", "--repo", "marwalfarsi2000/sleep-history-channel"]
+    assert result["ok"] and "marwalfarsi2000/sleep-history-channel" in result["message"] and KEY not in json.dumps(result)
+
+
+@pytest.mark.parametrize("url,slug", [("git@github.com:owner/repo.git", "owner/repo"), ("https://github.com/owner/repo", "owner/repo"),
+                                      ("https://example.com/x/y.git", None), ("", None)])
+def test_repo_slug_parsing(url, slug):
+    runner = Runner(extra={"git remote get-url": subprocess.CompletedProcess([], 0, stdout=url, stderr="")})
+    assert setup.repo_slug(runner) == slug
