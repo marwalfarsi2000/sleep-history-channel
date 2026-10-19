@@ -177,3 +177,15 @@ def test_workflows_pass_the_webhook_secret_via_env_only():
         assert "printenv" not in text and "set -x" not in text
     for name in ("production.yml", "review.yml"):
         assert "PUTER" not in (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+
+
+def test_live_test_script_reports_pass_and_keeps_the_image(tmp_path, monkeypatch, capsys):
+    import canva_live_test
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(canva.URL_ENV, URL)
+    monkeypatch.setattr(canva, "transport", Net())
+    monkeypatch.setattr(canva_live_test, "OUT", Path("canva-live-test"))
+    assert canva_live_test.main() == 0
+    assert "CANVA_LIVE_TEST=PASS size=1280x720" in capsys.readouterr().out
+    assert (tmp_path / "canva-live-test" / "canva_thumbnail.jpg").is_file()
+    assert json.loads((tmp_path / "canva-live-test" / "result.json").read_text(encoding="utf-8"))["status"] == "PASS"
