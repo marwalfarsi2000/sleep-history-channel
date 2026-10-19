@@ -43,8 +43,6 @@ def render_thumbnail(base: Image.Image, path: Path, text: str) -> None:
     canvas = base.resize((1280, 720), Image.Resampling.LANCZOS).convert("RGBA")
     overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    box = (55, 205, 535, 515)
-    draw.rounded_rectangle(box, radius=32, fill=(5, 13, 25, 178), outline=(224, 210, 174, 72), width=2)
     max_width, max_height = 410, 210
     font = _thumbnail_font(108)
     shaped_text = text
@@ -62,7 +60,12 @@ def render_thumbnail(base: Image.Image, path: Path, text: str) -> None:
         bounds = draw.textbbox((0, 0), shaped_text, font=font, **text_options)
         if bounds[2] - bounds[0] <= max_width and bounds[3] - bounds[1] <= max_height:
             break
-    draw.text(
+    shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).text(
+        (299, 365), shaped_text, font=font, fill=(0, 0, 0, 170), anchor="mm", **text_options, stroke_width=3,
+    )
+    overlay = Image.alpha_composite(overlay, shadow.filter(ImageFilter.GaussianBlur(6)))
+    ImageDraw.Draw(overlay).text(
         (295, 360), shaped_text, font=font, fill=(241, 233, 211, 255),
         anchor="mm", **text_options,
         stroke_width=2, stroke_fill=(8, 12, 20, 210),

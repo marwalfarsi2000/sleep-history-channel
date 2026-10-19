@@ -1299,7 +1299,7 @@ def packaging_field_issues(package: dict, topic: dict, recent: list[dict]) -> di
         # A positive text request is invalid even when "no text" also appears:
         # the Arabic label is drawn later by the deterministic renderer.
         issues["thumbnail_prompt"] = (
-            "must be a background-only prompt with a reserved dark area; it " + "; ".join(conflicts)
+            "must be a background-only prompt with a natural uncluttered text-safe area; it " + "; ".join(conflicts)
         )
     return issues
 
@@ -1509,7 +1509,7 @@ def build_metadata_files(story: Path, topic: dict, research: str, sources: list[
         raise RuntimeError("Thumbnail prompt must be background-only: it asks the image model to render text")
     image_prompt = thumbnail_prompt + """
 
-PIPELINE SCENE RENDER: Generate the historical scene and reserved dark text area only. Do not render letters, words, typography, logos, or watermarks; the exact Arabic label will be overlaid deterministically after generation."""
+PIPELINE SCENE RENDER: Generate the historical scene with a natural uncluttered text-safe area integrated into the scene only. Do not render letters, words, typography, logos, or watermarks; the exact Arabic label will be overlaid deterministically after generation. Do not create a panel, box, card, banner, frame, solid dark patch or artificial rectangle."""
 
     write(story / "01_title.txt", title)
     write(story / "02_description.txt", description)
