@@ -160,6 +160,16 @@ class RulesAndDocsConsistencyTests(unittest.TestCase):
         self.assertRegex(source, r"production_rules\([^)]*65")
         self.assertIn("quest_rules", source)
 
+    def test_story_writing_rules_do_not_ban_fictional_quest_events(self) -> None:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import generate_daily
+        sent = generate_daily.production_rules(23, 65)
+        for banned in ("- أحداث مخترعة", "أحداث مخترعة.", "ممنوع اختراع الأحداث", "ممنوع اختراع أحداث\n"):
+            self.assertNotIn(banned, sent)
+        self.assertRegex(sent, r"اختراع أحداث تاريخية وتقديمها كحقائق")
+        self.assertIn("PLAUSIBLE FICTION, VERIFIED WORLD", sent)
+        self.assertRegex(sent, r"مسموح: أحداث وأفعال الشخصية المركبة الخيالية")
+
     def test_scores_dimensions_are_ten(self) -> None:
         self.assertEqual(len(quest_rules.SCORE_NAMES), 10)
 
