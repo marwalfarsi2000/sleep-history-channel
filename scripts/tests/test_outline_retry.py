@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import itertools
 import json
 import sys
 import tempfile
@@ -11,13 +12,17 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import generate_daily
+from quest_fixtures import quest_decorate
 
-TOPIC = {"topic_ar": "ت", "angle_ar": "ز", "story_format": "JOURNEY"}
+TOPIC = {"topic_ar": "ت", "angle_ar": "ز", "story_format": "JOURNEY_QUEST"}
+
+
+_PLACES = itertools.count(1)
 
 
 def scene(n: int = 1) -> dict:
     return {
-        "place_or_anchor": f"مكان {n}", "action": "نقترب", "main_idea": f"فكرة {n}",
+        "place_or_anchor": f"مكان {n}-{next(_PLACES)}", "action": "نقترب", "main_idea": f"فكرة {n}",
         "gentle_question": "من يعبر؟", "transition": "ثم ندخل",
     }
 
@@ -26,10 +31,10 @@ def outline(count: int = 8) -> list[dict]:
     phases = list(generate_daily.STORY_PHASES)
     chosen = [phases[min(i * len(phases) // count, len(phases) - 1)] for i in range(count)]
     chosen[0], chosen[-1] = phases[0], phases[-1]
-    return [
+    return quest_decorate([
         {"title": f"قسم {i}", "phase": phase, "brief": "x", "scenes": [scene(1), scene(2)], "target_words": 800}
         for i, phase in enumerate(chosen)
-    ]
+    ])
 
 
 def reply(sections) -> tuple[str, list]:

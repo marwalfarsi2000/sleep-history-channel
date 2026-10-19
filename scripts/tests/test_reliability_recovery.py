@@ -570,14 +570,18 @@ def test_review_command_failures_keep_the_original_cause_for_telegram(monkeypatc
 TRIPOLI = {
     "slug": "tripoli-lybia-karamanli-daily-life", "topic_ar": "الحياة اليومية في طرابلس الغرب خلال العصر القره مانلي",
     "angle_ar": "عائلة تحضّر الصوف وتصبغه وتنسج السجاد", "period_ar": "القرن الثامن عشر", "location_ar": "طرابلس",
-    "story_format": "PLACE_IMMERSION", "narrative_follow": "عائلة تنسج الصوف", "soft_narrative_spine": "صبغ الخيوط",
+    "story_format": "CRAFT_QUEST", "narrative_follow": "عائلة تنسج الصوف", "soft_narrative_spine": "صبغ الخيوط",
     "gentle_curiosity": "كيف صُبغت الخيوط؟", "key_elements": ["السجاد", "الصوف", "الزيوت العطرية"],
 }
 
 
 def section(i: int, scenes: int = 2, words: int = 750) -> dict:
     phases = ["CALM_HOOK", "EXPLORATION", "EXPLORATION", "SETTLE", "SETTLE", "UNWIND", "SOFT_FADE"]
-    return {"title": f"قسم {i}", "phase": phases[i], "brief": "ب", "target_words": words, "scenes": [
+    states = ["introduced", "in_progress", "in_progress", "nearly_solved", "nearly_solved", "resolved", "aftermath"]
+    opened = [1, 1, 0, 0, 0, 0, 0]
+    return {"title": f"قسم {i}", "phase": phases[i], "brief": "ب", "target_words": words,
+            "quest_beat": f"خطوة {i}", "quest_state": states[i], "new_questions_opened": opened[i],
+            "dialogue_level": "none" if i >= 5 else "light", "named_characters": ["يوسف"], "scenes": [
         {"place_or_anchor": f"م{i}{n}", "action": "نقترب", "main_idea": f"ف{i}{n}", "gentle_question": "؟",
          "transition": "ثم"} for n in range(scenes)]}
 

@@ -12,36 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import generate_daily
 
 
-SCORE_NAMES = (
-    "gentle_engagement", "low_cognitive_arousal", "narrative_flow",
-    "sensory_potential", "reentry_tolerance", "low_stakes",
-    "gradual_unwind_potential", "novelty_variety",
-)
-
-
-def candidate(index: int, family: str, score: int, story_format: str = "JOURNEY") -> dict:
-    return {
-        "topic_ar": f"موضوع {index}",
-        "angle_ar": f"زاوية {index}",
-        "slug": f"topic-{index}",
-        "search_query_en": f"historical topic {index}",
-        "period_ar": "فترة تاريخية",
-        "location_ar": "مدينة تاريخية",
-        "family": family,
-        "story_format": story_format,
-        "key_elements": ["السوق", "الحرفة"],
-        "reason_ar": "مناسب للنوم",
-        "narrative_follow": "مسار يوم هادئ",
-        "soft_narrative_spine": "من الفجر إلى المساء",
-        "gentle_curiosity": "كيف يبدأ العمل اليومي؟",
-        "attentional_anchor": "حرفي يسير في المدينة",
-        "sensory_potential_notes": "الضوء والأصوات البعيدة",
-        "tension_risks": [],
-        "reentry_plan": "مشاهد مستقلة مترابطة",
-        "long_form_capacity": "أماكن وحرف متنوعة بلا حشو",
-        "difference_from_recent": "عائلة ومكان مختلفان",
-        "scores": {name: score for name in SCORE_NAMES},
-    }
+from quest_fixtures import SCORE_NAMES, candidate, gate as quest_gate  # noqa: E402
 
 
 class SleepFirstSelectionTests(unittest.TestCase):
@@ -54,29 +25,7 @@ class SleepFirstSelectionTests(unittest.TestCase):
             candidate(5, "ordinary-life", 4),
             candidate(6, "seasonal-rhythm", 5),
         ]
-        gate = {
-            "status": "PASS",
-            "language": True,
-            "religion": True,
-            "sleep": True,
-            "quality": True,
-            "universality": True,
-            "non_duplicate": True,
-            "soft_narrative_spine": True,
-            "gentle_curiosity": True,
-            "attentional_anchoring": True,
-            "reentry_tolerance": True,
-            "gradual_unwind": True,
-            "long_form_without_filler": True,
-            "clear_narrative_thread": True,
-            "scene_openable": True,
-            "divisible_into_scenes": True,
-            "understandable_without_prior_knowledge": True,
-            "gradually_calmable": True,
-            "not_a_fact_list": True,
-            "scores": {name: 5 for name in SCORE_NAMES},
-            "reasons": [],
-        }
+        gate = quest_gate()
         with tempfile.TemporaryDirectory() as directory:
             bank_path = Path(directory) / "topic_candidate_bank.json"
             bank_path.write_text("[]", encoding="utf-8")
@@ -97,6 +46,8 @@ class SleepFirstSelectionTests(unittest.TestCase):
         self.assertGreaterEqual(selected["discovery_family_count"], 4)
         self.assertIn("# 62. SLEEP-FIRST", gemini.call_args_list[0].args[0])
         self.assertIn("# 62. SLEEP-FIRST", gemini.call_args_list[1].args[0])
+        self.assertIn("# 65. IMMERSIVE LOW-STAKES HISTORICAL QUEST", gemini.call_args_list[0].args[0])
+        self.assertIn("# 65. IMMERSIVE LOW-STAKES HISTORICAL QUEST", gemini.call_args_list[1].args[0])
         statuses = {item["slug"]: item["bank_status"] for item in saved}
         self.assertEqual(statuses["topic-6"], "selected")
         self.assertEqual(statuses["topic-5"], "queued")

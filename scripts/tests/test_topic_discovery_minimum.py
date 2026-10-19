@@ -10,8 +10,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import generate_daily
-from test_sleep_first_selection import SCORE_NAMES, candidate
-from test_engagement_first_storytelling import GATE
+from quest_fixtures import SCORE_NAMES, candidate, gate
+
+GATE = gate()
 
 
 def fresh(count: int, families: int, score: int = 4) -> list[dict]:
@@ -79,7 +80,7 @@ class TopicDiscoveryMinimumTests(unittest.TestCase):
             banked(10, "a", "selected", 5), banked(11, "b", "rejected", 5),
             banked(12, "c", "queued", 5), banked(13, "d", "queued", 5),
         ]
-        history = [{"slug": "topic-12", "story_format": "HOW_IT_WORKED"}]
+        history = [{"slug": "topic-12", "story_format": "MARKET_QUEST"}]
         with self.assertRaisesRegex(RuntimeError, "fewer than 4 valid"):
             run(fresh(2, 2), bank, history)
         # Selected/rejected/used entries never win even with top scores.
@@ -94,10 +95,10 @@ class TopicDiscoveryMinimumTests(unittest.TestCase):
 
     def test_invalid_candidates_are_dropped_before_counting(self) -> None:
         items = fresh(5, 5)
-        items[0]["scores"]["novelty_variety"] = 9
+        items[0]["scores"]["variety"] = 9
         run(items)
         items = fresh(4, 4)
-        items[0]["scores"]["novelty_variety"] = 9
+        items[0]["scores"]["variety"] = 9
         with self.assertRaisesRegex(RuntimeError, "fewer than 4 valid"):
             run(items)
 

@@ -1,4 +1,4 @@
-"""RESEARCH_TOPIC_ALIGNMENT_GATE: the saved research must support the episode's narrative spine.
+"""RESEARCH_TOPIC_ALIGNMENT_GATE: the saved research must support the historical WORLD of the episode.
 
 Topic selection can pick an attractive angle (a craft, a product, a family
 routine) that the research then fails to document. This gate runs after
@@ -16,8 +16,11 @@ from pathlib import Path
 PASS, REANCHOR_REQUIRED, RESEARCH_INSUFFICIENT = "PASS", "REANCHOR_REQUIRED", "RESEARCH_INSUFFICIENT"
 STATUSES = (PASS, REANCHOR_REQUIRED, RESEARCH_INSUFFICIENT)
 CHECKED_FIELDS = (
-    "topic_ar", "angle_ar", "narrative_follow", "soft_narrative_spine", "gentle_curiosity", "key_elements",
+    "topic_ar", "angle_ar", "period_ar", "location_ar", "key_elements", "immersion_opportunities",
+    "narrative_follow", "soft_narrative_spine", "gentle_curiosity",
 )
+# The fictional layer: not checked against sources (it is invented), kept as context and left untouched by re-anchoring.
+FICTION_CONTEXT_FIELDS = ("character_ar", "protagonist_kind", "small_want_ar", "quest_ar")
 REANCHORED_FIELDS = ("angle_ar", "narrative_follow", "soft_narrative_spine", "gentle_curiosity", "key_elements")
 RESEARCH_LIMIT = 45000
 METADATA_KEYS = (
@@ -37,6 +40,10 @@ def topic_view(topic: dict) -> dict:
     return {field: _plain(topic.get(field)) for field in CHECKED_FIELDS if topic.get(field)}
 
 
+def fiction_view(topic: dict) -> dict:
+    return {field: _plain(topic.get(field)) for field in FICTION_CONTEXT_FIELDS if topic.get(field)}
+
+
 def input_hash(topic: dict, research: str) -> str:
     payload = json.dumps(topic_view(topic), ensure_ascii=False, sort_keys=True) + "\n" + research
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -44,18 +51,21 @@ def input_hash(topic: dict, research: str) -> str:
 
 def build_check_prompt(topic: dict, research: str) -> str:
     return f"""أنت بوابة مواءمة بين موضوع حلقة تاريخية ونتائج البحث المحفوظ لها.
-مهمتك: هل تدعم المصادر وخريطة الادعاءات فعلًا العناصر التي ستُبنى عليها الحلقة؟ لا تحكم من معرفتك العامة؛ احكم فقط مما ورد في البحث.
+مهمتك: هل تدعم المصادر وخريطة الادعاءات فعلًا **عناصر العالم التاريخي** (المكان والفترة والأسواق والحرف والمواد والأدوات والطعام والنقل وغيرها) التي ستتحرك فيها الحكاية؟ لا تحكم من معرفتك العامة؛ احكم فقط مما ورد في البحث. الحلقة حكاية بشخصية خيالية مركّبة ومهمة صغيرة: لا تطلب مصدرًا يثبت أن الشخصية فعلت شيئًا، بل افحص فقط هل العالم الذي ستتحرك فيه موثق وهل المهمة ممكنة تاريخيًا فيه.
 
-عناصر الحلقة:
+عناصر العالم التاريخي (تُفحص):
 {json.dumps(topic_view(topic), ensure_ascii=False, indent=2)}
+
+الطبقة الخيالية (للسياق فقط ولا تُفحص مصدريًا):
+{json.dumps(fiction_view(topic), ensure_ascii=False, indent=2)}
 
 البحث (يتضمن خريطة الادعاءات والمصادر):
 {research[:RESEARCH_LIMIT]}
 
 أعد JSON فقط:
-{{"status":"PASS أو REANCHOR_REQUIRED أو RESEARCH_INSUFFICIENT","supported_elements":["عناصر مدعومة بالمصادر"],"unsupported_elements":["عناصر في الموضوع/الزاوية/العمود السردي لا تثبتها المصادر"],"reason":"سبب موجز"}}
-PASS: كل العناصر الأساسية (العمود السردي وما نتبعه والفضول اللطيف والعناصر الرئيسية) مدعومة.
-REANCHOR_REQUIRED: المكان والفترة مدعومان لكن بعض عناصر الزاوية غير موثقة، ويوجد في البحث ما يكفي لبناء زاوية هادئة بديلة.
+{{"status":"PASS أو REANCHOR_REQUIRED أو RESEARCH_INSUFFICIENT","supported_elements":["عناصر مدعومة بالمصادر"],"unsupported_elements":["عناصر من العالم التاريخي لا تثبتها المصادر"],"reason":"سبب موجز"}}
+PASS: كل عناصر العالم التاريخي الأساسية مدعومة والمهمة ممكنة تاريخيًا.
+REANCHOR_REQUIRED: المكان والفترة مدعومان لكن بعض عناصر العالم (حرفة أو مادة أو سوق...) غير موثقة، ويوجد في البحث ما يكفي لإعادة بناء المهمة على ما هو موثق مع بقاء الشخصية والمهمة الصغيرة.
 RESEARCH_INSUFFICIENT: البحث لا يكفي حتى لزاوية بديلة موثقة."""
 
 
@@ -66,7 +76,7 @@ def build_reanchor_prompt(topic: dict, research: str, unsupported: list, support
 الفترة: {topic.get('period_ar', '')} — المكان: {topic.get('location_ar', '')}
 العناصر غير المدعومة (أزلها كليًا): {json.dumps(unsupported, ensure_ascii=False)}
 عناصر مدعومة: {json.dumps(supported, ensure_ascii=False)}
-الصيغة المطلوبة للحلقة: {topic.get('story_format', '')} — هادئة للنوم، بلا شخصيات مخترعة.
+نكهة المهمة: {topic.get('story_format', '')} — حكاية هادئة منخفضة المخاطر. أبقِ الشخصية ({topic.get('character_ar', '')}) والمهمة الصغيرة كما هما: غيّر فقط عناصر العالم التاريخي غير الموثقة إلى ما تدعمه المصادر، بلا شخصيات تاريخية مخترعة وبلا لغز أو خطر.
 
 البحث:
 {research[:RESEARCH_LIMIT]}
