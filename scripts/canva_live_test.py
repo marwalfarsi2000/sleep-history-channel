@@ -42,11 +42,12 @@ def main() -> int:
     shutil.copy2(final, OUT / "canva_thumbnail.jpg")
     with Image.open(final) as image:
         size = list(image.size)
-    result.update(status="PASS", **record, final_size=size, final_bytes=final.stat().st_size, mime="image/jpeg",
+    final_bytes = final.stat().st_size  # read before the working folder is removed
+    result.update(status="PASS", **record, final_size=size, final_bytes=final_bytes, mime="image/jpeg",
                   text_drawn_by_code=False, fallback_used=False)
     (OUT / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     shutil.rmtree(story, ignore_errors=True)
-    print(f"CANVA_LIVE_TEST=PASS size={size[0]}x{size[1]} bytes={final.stat().st_size}")
+    print(f"CANVA_LIVE_TEST=PASS size={size[0]}x{size[1]} bytes={final_bytes}")
     return 0 if size == [1280, 720] else 1
 
 
