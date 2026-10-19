@@ -1,0 +1,49 @@
+name: Sunburst Live Test
+
+# One manual, single-attempt Sunburst generation (reference = a frame of an already reviewed episode video).
+# Read-only for the episode; nothing is published. The result image is uploaded as an artifact for owner review.
+on:
+  workflow_dispatch:
+    inputs:
+      archive_identifier:
+        description: Internet Archive item whose video supplies the clean reference frame (read only)
+        required: true
+        default: lan-tukmil-alqissa-20261019-tripoli-lybia-karamanli-d
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Extract a clean reference frame (read only)
+        env:
+          ARCHIVE_IDENTIFIER: ${{ inputs.archive_identifier }}
+        run: |
+          curl -sSL --retry 3 -o /tmp/reference.mp4 "https://archive.org/download/${ARCHIVE_IDENTIFIER}/14_video_final.mp4"
+          ffmpeg -y -loglevel error -ss 10 -i /tmp/reference.mp4 -frames:v 1 /tmp/reference_frame.png
+      - name: Single Sunburst generation
+        env:
+          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+        run: PYTHONPATH=scripts python scripts/sunburst_live_test.py /tmp/reference_frame.png
+      - name: Upload result for owner review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sunburst-live-test-${{ github.run_id }}
+          path: sunburst-live-test
+          retention-days: 14
+          if-no-files-found: warn
