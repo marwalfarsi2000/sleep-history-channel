@@ -50,10 +50,11 @@ try {
     const { init } = require('@heyputer/puter.js/src/init.cjs');
     const puter = init(token);
 
-    // Never start a generation that the free monthly allowance cannot cover.
-    const usage = await puter.auth.getMonthlyUsage();
-    const remaining = usage?.allowanceInfo?.remaining;
-    if (!(typeof remaining === 'number' && remaining > 0)) fail('PUTER_FREE_LIMIT', 'no free allowance remaining');
+    // Never start a generation that the free monthly allowance cannot clearly cover (purchased credits are never used).
+    const readRemaining = async () => (await puter.auth.getMonthlyUsage())?.allowanceInfo?.remaining;
+    const before = await readRemaining();
+    const minimum = Number(process.env.PUTER_MIN_ALLOWANCE || 50);
+    if (!(typeof before === 'number' && before >= minimum)) fail('PUTER_FREE_ALLOWANCE_EXHAUSTED', `allowance ${before} below required ${minimum}`);
 
     const reference = readFileSync(referencePath).toString('base64');
     const result = await puter.ai.txt2img({
@@ -79,11 +80,13 @@ try {
         fail('PUTER_BAD_RESPONSE', 'unrecognised image result');
     }
     writeFileSync(outPath, bytes);
-    console.log(JSON.stringify({ ok: true, bytes: bytes.length }));
+    let after = null;
+    try { after = await readRemaining(); } catch { /* the image is already saved */ }
+    console.log(JSON.stringify({ ok: true, bytes: bytes.length, allowance_before: before, allowance_after: after }));
     process.exit(0); // puter.js leaves sockets open
 } catch (error) {
     const { status, code, message } = errorInfo(error);
     const funds = status === 402 || code === 'insufficient_funds' || error?.metadata?.usage_limited === true;
     const auth = status === 401 || code === 'token_auth_failed' || code === 'forbidden';
-    fail(funds ? 'PUTER_FREE_LIMIT' : auth ? 'PUTER_AUTH_FAILED' : 'PUTER_REQUEST_FAILED', `${status ?? ''} ${code ?? ''} ${message}`);
+    fail(funds ? 'PUTER_FREE_ALLOWANCE_EXHAUSTED' : auth ? 'PUTER_AUTH_FAILED' : 'PUTER_REQUEST_FAILED', `${status ?? ''} ${code ?? ''} ${message}`);
 }

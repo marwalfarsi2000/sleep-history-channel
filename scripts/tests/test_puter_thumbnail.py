@@ -101,11 +101,11 @@ def test_never_more_than_four_attempts(story, monkeypatch):
 
 
 def test_free_limit_stops_immediately(story, monkeypatch):
-    fake = adapter([{"ok": False, "code": "PUTER_FREE_LIMIT", "detail": "402"}])
+    fake = adapter([{"ok": False, "code": "PUTER_FREE_ALLOWANCE_EXHAUSTED", "detail": "402"}])
     monkeypatch.setattr(puter, "run_adapter", fake)
     with pytest.raises(puter.PuterError) as info:
         puter.generate(story, TEXT)
-    assert info.value.code == "PUTER_FREE_LIMIT" and len(fake.calls) == 1
+    assert info.value.code == "PUTER_FREE_ALLOWANCE_EXHAUSTED" and len(fake.calls) == 1
 
 
 def test_routing_uses_puter_and_never_draws_text_afterwards(story, monkeypatch):
@@ -117,7 +117,7 @@ def test_routing_uses_puter_and_never_draws_text_afterwards(story, monkeypatch):
 
 
 def test_puter_failure_falls_back_to_the_existing_free_path_only(story, monkeypatch):
-    monkeypatch.setattr(puter, "run_adapter", adapter([{"ok": False, "code": "PUTER_FREE_LIMIT", "detail": ""}]))
+    monkeypatch.setattr(puter, "run_adapter", adapter([{"ok": False, "code": "PUTER_FREE_ALLOWANCE_EXHAUSTED", "detail": ""}]))
     called = []
 
     def fake_render(base, path, text):
@@ -126,7 +126,7 @@ def test_puter_failure_falls_back_to_the_existing_free_path_only(story, monkeypa
     monkeypatch.setattr(image_generate, "render_thumbnail", fake_render)
     record, status = image_generate.build_final_thumbnail(story, story / "10_background.png", TEXT)
     assert called == [TEXT] and status == "fallback_overlay"
-    assert record["thumbnail_generation_provider"] == "local_pillow_fallback" and record["thumbnail_puter_status"] == "PUTER_FREE_LIMIT"
+    assert record["thumbnail_generation_provider"] == "local_pillow_fallback" and record["thumbnail_puter_status"] == "PUTER_FREE_ALLOWANCE_EXHAUSTED"
 
 
 def test_not_free_only_verified_never_reaches_puter(story, monkeypatch):
@@ -182,3 +182,10 @@ def test_video_background_stays_text_free(story, monkeypatch):
     monkeypatch.setattr(puter, "run_adapter", adapter([noisy()]))
     image_generate.build_final_thumbnail(story, story / "10_background.png", TEXT)
     assert (story / "10_background.png").read_bytes() == before
+
+
+def test_adapter_source_guards_allowance_and_never_retries_402():
+    text = (ROOT / "scripts" / "generate_image_puter.mjs").read_text(encoding="utf-8")
+    assert "getMonthlyUsage" in text and "PUTER_MIN_ALLOWANCE" in text and "PUTER_FREE_ALLOWANCE_EXHAUSTED" in text
+    assert "status === 402" in text and "insufficient_funds" in text
+    assert "allowance_before" in text and "allowance_after" in text
