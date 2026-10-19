@@ -24,7 +24,7 @@ FREE_ONLY_FLAG = "PUTER_FREE_ONLY_VERIFIED"
 QUALITY = "medium"
 ADAPTER = Path(__file__).resolve().parent / "generate_image_puter.mjs"
 MAX_ATTEMPTS = shared.MAX_SUNBURST_THUMBNAIL_ATTEMPTS
-STOP_CODES = {"PUTER_AUTH_MISSING", "PUTER_AUTH_FAILED", "PUTER_FREE_LIMIT", "PUTER_FREE_ONLY_NOT_GUARANTEED", "PUTER_BAD_ARGS"}
+STOP_CODES = {"PUTER_AUTH_MISSING", "PUTER_AUTH_FAILED", "PUTER_FREE_ALLOWANCE_EXHAUSTED", "PUTER_FREE_ONLY_NOT_GUARANTEED", "PUTER_BAD_ARGS"}
 RETRYABLE = {"PUTER_REQUEST_FAILED", "PUTER_BAD_RESPONSE"}
 
 
@@ -42,6 +42,9 @@ def enabled() -> bool:
 def redact(text: str) -> str:
     token = os.environ.get(SECRET_NAME, "")
     return text.replace(token, "***") if token else text
+
+
+LAST_RUN: dict = {}  # allowance numbers of the latest adapter call (no secrets), for the live-test report
 
 
 def run_adapter(args: list[str], timeout: int) -> dict:
@@ -65,6 +68,7 @@ def edit_image(prompt: str, reference_png: bytes, timeout: int = 600) -> bytes:
             result = run_adapter([str(work / "reference.png"), str(work / "prompt.txt"), str(work / "out.png"), QUALITY], timeout)
         except subprocess.TimeoutExpired as exc:
             raise PuterError("PUTER_REQUEST_FAILED", "adapter timed out") from exc
+        LAST_RUN.update({k: result.get(k) for k in ("allowance_before", "allowance_after")})
         if not result.get("ok"):
             raise PuterError(str(result.get("code", "PUTER_REQUEST_FAILED")), redact(str(result.get("detail", ""))))
         out = work / "out.png"

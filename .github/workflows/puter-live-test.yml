@@ -12,7 +12,7 @@ on:
       quality:
         description: Image quality for this single test image
         required: true
-        default: medium
+        default: low
       allowance_only_confirmed:
         description: Type yes to confirm this one image may only draw on the free monthly Puter allowance
         required: true
