@@ -91,6 +91,7 @@ def run_repair(identifier: str, upload: bool) -> None:
     import image_generate
     import pipeline
     from PIL import Image
+    from state_machine import State
 
     meta_remote = archive_storage.archive_metadata(identifier)
     files = {item.get("name"): item for item in meta_remote.get("files", [])}
@@ -195,6 +196,8 @@ def run_repair(identifier: str, upload: bool) -> None:
     metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
     metadata.update(audio_sha256=pipeline.file_sha256(story / "12_audio_full.mp3"))
     (story / "15_metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (story / "17_status.md").write_text(
+        f"# الحالة\n\n- الحالة الحالية: `{State.GENERATING}`\n", encoding="utf-8")  # validate() requires it; package() rewrites it
     pipeline.validate(story)
     pipeline.package(story)
     metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))

@@ -67,6 +67,7 @@ jobs:
           name: sleep-history-repair-failure-${{ github.run_id }}
           path: |
             logs/*.log
+            stories/*/12_audio_narration.mp3
             .runtime/run_summary.json
           include-hidden-files: true
           if-no-files-found: warn
