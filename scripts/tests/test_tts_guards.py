@@ -46,6 +46,15 @@ class TtsGuardTests(unittest.TestCase):
             " ".join(pipeline.speech_safe_violations("بلغ طوله م.")),
         )
 
+    def test_kam_as_an_ordinary_word_is_not_an_abbreviation(self):
+        self.assertEqual(pipeline.speech_safe_violations("كم من الوقت استغرقت القافلة في الطريق؟"), [])
+        self.assertEqual(pipeline.speech_safe_violations("لا يعرف أحد كم يوما بقيت القافلة هناك."), [])
+        self.assertIn(
+            "ambiguous abbreviation",
+            " ".join(pipeline.speech_safe_violations("قطعت القافلة ثلاثمئة كم في الصحراء.")),
+        )
+        self.assertIn("raw number", " ".join(pipeline.speech_safe_violations("قطعت 300 كم")))
+
     def test_tts_normalizer_creates_spoken_form_and_checkpoints_it(self):
         source = "في سنة 1258 م، قطع المسافر 3.5 km."
         spoken = "في سنة ألف ومئتين وثمانية وخمسين ميلادية، قطع المسافر ثلاثة كيلومترات ونصف."

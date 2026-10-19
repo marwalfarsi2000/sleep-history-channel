@@ -191,7 +191,9 @@ def speech_safe_violations(text: str) -> list[str]:
         (r"[()\[\]{}]", "parenthetical or bracketed text"),
         (r"[\"“”«»]", "quotation marks requiring spoken context"),
         (r"(?:\.{3,}|[!؟?]{2,})", "repeated punctuation"),
-        (r"(?<![\w])(?:هـ|ق\.?م\.?|سم|كم|كغ|د\.|أ\.?د\.?|ص|م)(?![\w])", "ambiguous abbreviation"),
+        (r"(?<![\w])(?:هـ|ق\.?م\.?|سم|كغ|د\.|أ\.?د\.?|ص|م)(?![\w])", "ambiguous abbreviation"),
+        # "كم" is also an ordinary word ("how many"); it is only the kilometre abbreviation right after a number word.
+        (r"(?<![\w])(?:واحد|اثنين|اثنان|ثلاث\w*|أربع\w*|خمس\w*|ست\w*|سبع\w*|ثمان\w*|تسع\w*|عشر\w*|مئة|مائة|مئتين|مئتان|ألف|ألفين|مليون)\s+كم(?![\w])", "ambiguous abbreviation"),
     )
     violations: list[str] = []
     for pattern, label in checks:
