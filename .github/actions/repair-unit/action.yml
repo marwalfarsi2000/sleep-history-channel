@@ -1,0 +1,39 @@
+name: Repair unit
+description: Run the next missing repair unit and publish its checkpoint snapshot as an immutable artifact.
+inputs:
+  identifier:
+    description: Internet Archive identifier of the REVIEW_PENDING item
+    required: true
+  dry_run:
+    description: Rebuild and validate only; upload nothing to Internet Archive
+    required: false
+    default: "false"
+outputs:
+  more:
+    description: "true when another unit remains in this run"
+    value: ${{ steps.unit.outputs.more }}
+  status:
+    description: CONTINUE, COMPLETE or REPAIR_WAITING_FOR_TTS_QUOTA
+    value: ${{ steps.unit.outputs.status }}
+runs:
+  using: composite
+  steps:
+    - name: Run next repair unit
+      id: unit
+      shell: bash
+      env:
+        REPAIR_IDENTIFIER: ${{ inputs.identifier }}
+        REPAIR_DRY_RUN: ${{ inputs.dry_run }}
+      run: |
+        if [ "$REPAIR_DRY_RUN" = "true" ]; then EXTRA="--dry-run"; else EXTRA=""; fi
+        python scripts/repair_review.py --identifier "$REPAIR_IDENTIFIER" $EXTRA
+    - name: Upload checkpoint snapshot
+      if: always() && steps.unit.outputs.snapshot != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.unit.outputs.snapshot }}
+        path: repair-snapshot
+        include-hidden-files: true
+        retention-days: 30
+        compression-level: 0
+        if-no-files-found: error
