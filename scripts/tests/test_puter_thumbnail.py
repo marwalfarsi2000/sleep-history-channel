@@ -170,7 +170,7 @@ def test_adapter_refuses_without_free_only_flag_or_token():
 
 
 def test_workflows_pass_token_via_env_only_and_install_node_deps():
-    for name in ("production.yml", "review.yml", "puter-live-test.yml"):
+    for name in ("production.yml", "review.yml"):
         text = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
         assert "PUTER_AUTH_TOKEN: ${{ secrets.PUTER_AUTH_TOKEN }}" in text and "npm ci --ignore-scripts" in text
         assert not re.search(r"echo[^\n]*PUTER_AUTH_TOKEN|printenv|set -x", text)

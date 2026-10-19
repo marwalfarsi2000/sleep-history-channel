@@ -472,9 +472,9 @@ def _write_metadata(metadata_path: Path, metadata: dict) -> None:
 
 
 def build_final_thumbnail(story: Path, background: Path, thumbnail_text: str) -> tuple[dict, str]:
-    """Final thumbnail. Order: Puter (GPT Image 2.5 Sunburst, Arabic phrase rendered inside the image) then the existing free path.
+    """Final thumbnail. Order: Canva (via the n8n workflow: upload, autofill, export), Puter if enabled, then the existing free path.
 
-    Text is never drawn over a Puter result, and 10_background.png (the video background) always stays text-free.
+    Text is never drawn over a Canva or Puter result, and 10_background.png (the video background) always stays text-free.
     There is no paid fallback.
     """
     thumbnail = story / "11_thumbnail_base.jpg"
@@ -484,8 +484,15 @@ def build_final_thumbnail(story: Path, background: Path, thumbnail_text: str) ->
         # Backward compatibility for review regeneration of episodes made before the packaging automation existed.
         base.resize((1280, 720), Image.Resampling.LANCZOS).save(thumbnail, format="JPEG", quality=94, optimize=True)
         return {}, "legacy_no_text"
+    import canva_thumbnail
     import puter_thumbnail
     puter_error = "PUTER_DISABLED"
+    if canva_thumbnail.enabled():
+        try:
+            return canva_thumbnail.generate(story, thumbnail_text), "passed"
+        except canva_thumbnail.CanvaError as exc:
+            puter_error = f"CANVA_FAILED:{exc.code}"
+            print(f"Canva thumbnail unavailable ({exc.code}); trying the next provider", flush=True)
     if puter_thumbnail.enabled():
         try:
             return puter_thumbnail.generate(story, thumbnail_text), "passed"
