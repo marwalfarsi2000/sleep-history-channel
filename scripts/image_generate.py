@@ -465,6 +465,38 @@ def generate_pollinations(prompt: str, api_key: str, seed: int) -> tuple[bytes, 
         raise
 
 
+def _write_metadata(metadata_path: Path, metadata: dict) -> None:
+    temporary_metadata = metadata_path.with_name(metadata_path.name + ".tmp")
+    temporary_metadata.write_text(json.dumps(metadata, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+    temporary_metadata.replace(metadata_path)
+
+
+def build_final_thumbnail(story: Path, background: Path, thumbnail_text: str) -> tuple[dict, str]:
+    """Final thumbnail: GPT Image 2.5 Sunburst edits the text-free background and renders the Arabic phrase itself.
+
+    No text is drawn afterwards, so 10_background.png (the video background) stays text-free.
+    """
+    thumbnail = story / "11_thumbnail_base.jpg"
+    if thumbnail_text:
+        import sunburst_thumbnail
+        return sunburst_thumbnail.generate(story, thumbnail_text), "passed"
+    # Backward compatibility for review regeneration of episodes made before the packaging automation existed.
+    with Image.open(background) as source:
+        source.convert("RGB").resize((1280, 720), Image.Resampling.LANCZOS).save(
+            thumbnail, format="JPEG", quality=94, optimize=True)
+    return {}, "legacy_no_text"
+
+
+def reusable_background(story: Path, metadata: dict, original_prompt: str) -> bool:
+    """A background that already passed the accuracy gate for this exact prompt is not generated (or paid for) again."""
+    background = story / "10_background.png"
+    return (
+        background.is_file() and metadata.get("image_generation_status") == "passed"
+        and metadata.get("image_prompt_sha256") == hashlib.sha256(original_prompt.encode("utf-8")).hexdigest()
+        and metadata.get("image_sha256") == hashlib.sha256(background.read_bytes()).hexdigest()
+    )
+
+
 def generate(story: Path, seed: int | None = None) -> None:
     secret_values = load_secrets()
     provider = SETTINGS.get("image_provider", "pollinations")
@@ -483,6 +515,19 @@ def generate(story: Path, seed: int | None = None) -> None:
         model_id = SETTINGS.get("pollinations_image_model", "microsoft/mai-image-2.6")
 
     original_prompt = prompt_path.read_text(encoding="utf-8").strip()
+    if reusable_background(story, metadata, original_prompt):
+        print("Reusing the accepted background; generating only the final thumbnail", flush=True)
+        background, thumbnail = story / "10_background.png", story / "11_thumbnail_base.jpg"
+        thumbnail_record, thumbnail_status = build_final_thumbnail(story, background, thumbnail_text)
+        metadata.update(thumbnail_record)
+        metadata.update({
+            "thumbnail_path": str(thumbnail),
+            "thumbnail_sha256": hashlib.sha256(thumbnail.read_bytes()).hexdigest(),
+            "thumbnail_text_render_status": thumbnail_status,
+        })
+        _write_metadata(metadata_path, metadata)
+        print(json.dumps({"status": "ok", "provider": "reused_background", "model": metadata.get("image_model", "")}))
+        return
     legacy_prompt = (
         "Premium photorealistic editorial historical reconstruction, museum-quality material accuracy, "
         "natural human proportions, cinematic wide establishing shot, realistic architectural depth, "
@@ -537,18 +582,7 @@ def generate(story: Path, seed: int | None = None) -> None:
                 raise
             image = prepare_image(image_bytes, temporary)
         background = story / "10_background.png"
-        thumbnail = story / "11_thumbnail_base.jpg"
         image.save(background, format="PNG", optimize=True)
-        if thumbnail_text:
-            render_thumbnail(image, thumbnail, thumbnail_text)
-            thumbnail_status = "passed"
-        else:
-            # Backward compatibility for review regeneration of episodes made
-            # before the packaging automation existed.
-            image.resize((1280, 720), Image.Resampling.LANCZOS).save(
-                thumbnail, format="JPEG", quality=94, optimize=True
-            )
-            thumbnail_status = "legacy_no_text"
         LAST_ATTEMPT.update(provider=actual_provider, model=actual_model)
         accuracy = historical_accuracy_gate(background, original_prompt, secret_values)
     finally:
@@ -563,6 +597,7 @@ def generate(story: Path, seed: int | None = None) -> None:
         "- ملاحظة تاريخية: إعادة بناء بصرية مولدة آليًا وليست مرجعًا أثريًا حرفيًا.\n",
         encoding="utf-8",
     )
+    thumbnail = story / "11_thumbnail_base.jpg"
     metadata.update({
         "image_provider": actual_provider,
         "image_model": actual_model,
@@ -575,12 +610,15 @@ def generate(story: Path, seed: int | None = None) -> None:
         "image_accuracy_gate": accuracy,
         "image_prompt_sha256": hashlib.sha256(original_prompt.encode("utf-8")).hexdigest(),
         "image_sha256": hashlib.sha256(background.read_bytes()).hexdigest(),
+    })
+    _write_metadata(metadata_path, metadata)  # the accepted background survives a thumbnail failure
+    thumbnail_record, thumbnail_status = build_final_thumbnail(story, background, thumbnail_text)
+    metadata.update(thumbnail_record)
+    metadata.update({
         "thumbnail_sha256": hashlib.sha256(thumbnail.read_bytes()).hexdigest(),
         "thumbnail_text_render_status": thumbnail_status,
     })
-    temporary_metadata = metadata_path.with_name(metadata_path.name + ".tmp")
-    temporary_metadata.write_text(json.dumps(metadata, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
-    temporary_metadata.replace(metadata_path)
+    _write_metadata(metadata_path, metadata)
     print(json.dumps({"status": "ok", "provider": actual_provider, "model": actual_model, "seed": seed}))
 
 
