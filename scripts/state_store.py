@@ -36,7 +36,7 @@ RUNTIME_FILES = (
     "pronunciation_dictionary.json",
 )
 PUSH_ATTEMPTS = 4
-CHECKPOINT_DIR = "checkpoints"
+CHECKPOINT_PREFIX = "checkpoint--"  # the branch tree is flat (git mktree of blobs): no "/" in names
 CHECKPOINT_MAX_FILE_BYTES = 400_000
 CHECKPOINT_MAX_TOTAL_BYTES = 3_000_000
 CHECKPOINT_TEXT_SUFFIXES = (".json", ".md", ".txt")
@@ -124,10 +124,13 @@ def _write_blob(content: str) -> str:
     return _git("hash-object", "-w", "--stdin", input=content).stdout.strip()
 
 
-def _commit_files(files: dict[str, str], parent: str | None, message: str) -> tuple[str, str]:
+def _commit_files(files: dict[str, str | None], parent: str | None, message: str) -> tuple[str, str]:
     entries = _tree_entries(parent)
     for name, content in files.items():
-        entries[name] = _write_blob(content)
+        if content is None:  # delete
+            entries.pop(name, None)
+        else:
+            entries[name] = _write_blob(content)
     spec = "".join(f"100644 blob {sha}\t{name}\n" for name, sha in sorted(entries.items()))
     tree = _git("mktree", input=spec).stdout.strip()
     args = ["commit-tree", tree, "-m", message]
@@ -380,6 +383,26 @@ def _story_episode_states(root: Path) -> dict[str, dict]:
     return states
 
 
+def _unfinished_story_checkpoints(root: Path) -> dict[str, str | None]:
+    """``{branch file name: bundle JSON}`` for unfinished stories; ``None`` retires a finished story's bundle."""
+    files: dict[str, str | None] = {}
+    for story in sorted(root.glob("stories/*")):
+        metadata = story / "15_metadata.json"
+        status = ""
+        if metadata.exists():
+            try:
+                status = str(json.loads(metadata.read_text(encoding="utf-8")).get("approval_status") or "")
+            except (OSError, json.JSONDecodeError):
+                status = ""
+        if status in ("", "GENERATING", "generating", "drafting"):
+            bundle = collect_story_checkpoint(story)
+            if bundle:
+                files[checkpoint_file(story.name)] = json.dumps(bundle, ensure_ascii=False, separators=(",", ":"))
+        elif status in ("MEDIA_READY", "REVIEW_PENDING", "APPROVED_FOR_PUBLISH", "PUBLISHING", "PUBLISHED", "REJECTED"):
+            files[checkpoint_file(story.name)] = None  # the review copy lives on Internet Archive now
+    return files
+
+
 def persist_all() -> bool:
     """Push local runtime catalogues and story episode records to automation-state."""
     local_files = {}
@@ -388,18 +411,7 @@ def persist_all() -> bool:
         if path.exists():
             local_files[name] = path.read_text(encoding="utf-8")
     episodes = _story_episode_states(ROOT)
-    for story in sorted(ROOT.glob("stories/*")):
-        metadata = story / "15_metadata.json"
-        status = ""
-        if metadata.exists():
-            try:
-                status = str(json.loads(metadata.read_text(encoding="utf-8")).get("approval_status") or "")
-            except (OSError, json.JSONDecodeError):
-                status = ""
-        if status in ("", "GENERATING", "generating", "drafting"):  # unfinished: keep a durable copy
-            bundle = collect_story_checkpoint(story)
-            if bundle:
-                local_files[checkpoint_file(story.name)] = json.dumps(bundle, ensure_ascii=False, separators=(",", ":"))
+    checkpoints = _unfinished_story_checkpoints(ROOT)
 
     def mutate(read):
         changes = dict(local_files)
@@ -412,11 +424,18 @@ def persist_all() -> bool:
             changes[STATE_FILE] = _dump(current)
         return changes
 
-    return _update_remote(mutate, "Persist runtime state")
+    ok = _update_remote(mutate, "Persist runtime state")
+    if checkpoints:
+        # Best effort and separate: a checkpoint problem must never block the catalogue update above.
+        try:
+            _update_remote(lambda read: dict(checkpoints), "Persist story checkpoints")
+        except Exception as exc:
+            print(f"WARNING: story checkpoint persistence failed: {exc}", file=sys.stderr)
+    return ok
 
 
 def checkpoint_file(story_name: str) -> str:
-    return f"{CHECKPOINT_DIR}/{story_name}.json"
+    return f"{CHECKPOINT_PREFIX}{story_name}.json"
 
 
 def collect_story_checkpoint(story: Path) -> dict | None:

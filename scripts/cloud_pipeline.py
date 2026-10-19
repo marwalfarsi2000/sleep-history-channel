@@ -484,6 +484,10 @@ def main() -> None:
     parser.add_argument("--resume-only", action="store_true", help="produce: only finish an unfinished episode")
     args = parser.parse_args()
     state_store.ensure_hydrated()
+    if args.command == "produce":
+        # Hydration restores the branch copy of the history; retire zombie records again so they persist.
+        import restore_failure_checkpoint
+        restore_failure_checkpoint.migrate_history(ROOT)
     run_summary.start(workflow="cloud_pipeline", action=args.command, archive_identifier=args.identifier or "")
     try:
         result = dispatch_command(args, parser)

@@ -277,8 +277,9 @@ def test_save_story_checkpoint_writes_one_bundle_file_to_automation_state(tmp_pa
         return True
     with mock.patch.object(state_store, "_update_remote", fake_update):
         assert state_store.save_story_checkpoint(story)
-    assert list(captured) == [f"checkpoints/{story.name}.json"]
-    assert json.loads(captured[f"checkpoints/{story.name}.json"])["story"] == story.name
+    name = f"checkpoint--{story.name}.json"
+    assert list(captured) == [name] and "/" not in name
+    assert json.loads(captured[name])["story"] == story.name
 
 
 def test_expired_artifacts_fall_back_to_the_durable_checkpoint(tmp_path, monkeypatch):

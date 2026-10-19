@@ -768,16 +768,68 @@ def pronunciation_validate(clean_story: str, annotated: str, story: Path) -> str
     )
     return revised
 
+CLAUSE_BOUNDARY = re.compile(r"(?<=[،,:؛;—–…])\s+")
+MAX_OVERLONG_SENTENCES = 30      # more than this is a systemic text problem, not a stray run-on
+MAX_WORD_LEVEL_SPLITS = 3        # a split with no punctuation at all is the last resort
+LAST_CHUNK_REPAIRS: list[dict] = []
+
+
+def _pack(parts: list[str], limit: int) -> list[str]:
+    pieces, current = [], ""
+    for part in parts:
+        if current and len(current) + 1 + len(part) > limit:
+            pieces.append(current)
+            current = part
+        else:
+            current = f"{current} {part}".strip()
+    if current:
+        pieces.append(current)
+    return pieces
+
+
+def split_overlong_sentence(sentence: str, limit: int) -> tuple[list[str], str]:
+    """Split a run-on at clause punctuation first, then at word boundaries. Returns (pieces, kind)."""
+    clauses = [part.strip() for part in CLAUSE_BOUNDARY.split(sentence) if part.strip()]
+    if all(len(clause) <= limit for clause in clauses) and len(clauses) > 1:
+        return _pack(clauses, limit), "clause"
+    words = sentence.split()
+    return _pack(words, limit), "word"
+
+
 def split_chunks(text: str, limit: int = 2600) -> list[str]:
+    """Chunks that respect sentence boundaries.
+
+    A sentence longer than the limit is repaired locally instead of stopping the episode: it is
+    split at clause punctuation (،  :  ؛  —  …), and only as a last resort at a word boundary.
+    Every repair is recorded in ``LAST_CHUNK_REPAIRS``; a systemic problem still fails closed.
+    """
+    LAST_CHUNK_REPAIRS.clear()
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip() and not p.lstrip().startswith("#")]
     out, current = [], ""
     for paragraph in paragraphs:
         sentences = [s.strip() for s in re.split(r"(?<=[.!؟؛])\s+", paragraph) if s.strip()]
+        expanded: list[str] = []
         for sentence in sentences:
-            if len(sentence) > limit:
+            if len(sentence) <= limit:
+                expanded.append(sentence)
+                continue
+            pieces, kind = split_overlong_sentence(sentence, limit)
+            if any(len(piece) > limit for piece in pieces):  # a single unbroken token: nothing safe to cut
                 raise RuntimeError(
-                    f"TTS_CHUNKING_FAILED: sentence exceeds {limit} characters; refusing to split it"
+                    f"TTS_CHUNKING_FAILED: sentence exceeds {limit} characters; refusing to split it "
+                    f"({len(sentence)} characters starting {sentence[:60]!r})"
                 )
+            LAST_CHUNK_REPAIRS.append({"kind": kind, "characters": len(sentence), "pieces": len(pieces),
+                                       "starts_with": sentence[:60]})
+            words_level = sum(1 for item in LAST_CHUNK_REPAIRS if item["kind"] == "word")
+            if len(LAST_CHUNK_REPAIRS) > MAX_OVERLONG_SENTENCES or words_level > MAX_WORD_LEVEL_SPLITS:
+                raise RuntimeError(
+                    f"TTS_CHUNKING_FAILED: sentence exceeds {limit} characters and cannot be split safely "
+                    f"({len(sentence)} characters starting {sentence[:60]!r}; {len(LAST_CHUNK_REPAIRS)} overlong "
+                    f"sentences, {words_level} without any punctuation)"
+                )
+            expanded.extend(pieces)
+        for sentence in expanded:
             separator = "\n\n" if current else ""
             if current and len(current) + len(sentence) + len(separator) > limit:
                 out.append(current.strip()); current = ""
@@ -1453,6 +1505,11 @@ def prepare(story: Path):
         else SETTINGS.get("tts_chunk_char_limit", 2600)
     )
     chunks = split_chunks(clean, limit=chunk_limit)
+    if LAST_CHUNK_REPAIRS:
+        print(f"TTS_CHUNKING_REPAIRS={len(LAST_CHUNK_REPAIRS)} {json.dumps(LAST_CHUNK_REPAIRS, ensure_ascii=False)[:400]}", flush=True)
+        (story / "logs").mkdir(exist_ok=True)
+        (story / "logs" / "tts_chunking_repairs.json").write_text(
+            json.dumps(LAST_CHUNK_REPAIRS, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     maximum_chunks = int(SETTINGS.get("max_tts_chunks_per_episode", 40))
     if len(chunks) > maximum_chunks:
         raise RuntimeError(
