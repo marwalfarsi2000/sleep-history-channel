@@ -18,6 +18,8 @@ import uuid
 BASE_URL = "https://ai-gateway.vercel.sh/v1"
 MODEL = "openai/gpt-image-2.5-sunburst"
 SECRET_NAME = "AI_GATEWAY_API_KEY"
+IMAGE_SIZE = "1920x1080"  # production thumbnail size, used as returned (no final resize)
+IMAGE_QUALITY = "medium"
 
 KEY_MISSING = "VERCEL_KEY_MISSING"
 AUTH_FAILED = "VERCEL_AUTH_FAILED"
@@ -126,10 +128,10 @@ def encode_multipart(fields: dict[str, str], files: dict[str, tuple[str, bytes, 
     return f"multipart/form-data; boundary={boundary}", b"\r\n".join(lines)
 
 
-def edit_image(key: str, prompt: str, reference_png: bytes, size: str, timeout: float = 600) -> bytes:
+def edit_image(key: str, prompt: str, reference_png: bytes, timeout: float = 600) -> bytes:
     """One billable request: the reference image plus the prompt, fixed model, returns the generated image bytes."""
     content_type, body = encode_multipart(
-        {"model": MODEL, "prompt": prompt, "size": size, "n": "1"},
+        {"model": MODEL, "prompt": prompt, "size": IMAGE_SIZE, "quality": IMAGE_QUALITY, "n": "1"},
         {"image": ("reference.png", reference_png, "image/png")})
     headers = {**_auth_headers(key), "Content-Type": content_type}
     status, response = transport("POST", f"{BASE_URL}/images/edits", headers, body, timeout)

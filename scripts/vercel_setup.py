@@ -39,6 +39,21 @@ MSG_BAD_KEY = "المفتاح فارغ أو بصيغة غير صالحة. ألص
 MSG_SAVE_FAILED = "تعذّر حفظ المفتاح في GitHub Secrets. تأكدي من صلاحيات الحساب على المستودع ثم أعيدي المحاولة."
 
 
+REMOTE_PATTERN = re.compile(r"github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$")
+
+
+def repo_slug(runner=subprocess.run) -> str | None:
+    """owner/repo of this checkout's ``origin``; the secret is set on exactly this repository, never on a guess."""
+    result = runner(["git", "remote", "get-url", "origin"], capture_output=True, text=True, cwd=ROOT, check=False, shell=False)
+    match = REMOTE_PATTERN.search((result.stdout or "").strip()) if result.returncode == 0 else None
+    return f"{match.group(1)}/{match.group(2)}" if match else None
+
+
+def _repo_args(runner) -> list[str]:
+    slug = repo_slug(runner)
+    return ["--repo", slug] if slug else []
+
+
 def valid_key_shape(key: object) -> bool:
     return isinstance(key, str) and 8 <= len(key) <= 512 and key.isascii() and key.isprintable() and not any(c.isspace() for c in key)
 
@@ -62,14 +77,18 @@ def save_secret(key: object, which=shutil.which, runner=subprocess.run) -> dict:
         return {"ok": False, "message": MSG_NO_AUTH, "owner_action": ACTION_NO_AUTH}
     payload = bytearray(str(key).encode("ascii"))
     try:
-        result = runner(["gh", "secret", "set", SECRET_NAME], input=payload, capture_output=True, cwd=ROOT,
+        repo = _repo_args(runner)
+        result = runner(["gh", "secret", "set", SECRET_NAME, *repo], input=payload, capture_output=True, cwd=ROOT,
                         check=False, shell=False)
     finally:
         for index in range(len(payload)):  # best-effort scrub of our own copy
             payload[index] = 0
         del payload
     # only the exit code is used: the CLI output is never printed or returned
-    return {"ok": True, "message": MSG_SAVED} if result.returncode == 0 else {"ok": False, "message": MSG_SAVE_FAILED}
+    if result.returncode != 0:
+        return {"ok": False, "message": MSG_SAVE_FAILED}
+    where = f"\nالمستودع: {repo[1]}" if repo else ""
+    return {"ok": True, "message": MSG_SAVED + where}
 
 
 def run_connection_test(which=shutil.which, runner=subprocess.run, sleep=time.sleep, timeout: int = 240) -> dict:
@@ -80,13 +99,13 @@ def run_connection_test(which=shutil.which, runner=subprocess.run, sleep=time.sl
     if state == "unauthenticated":
         return {"ok": False, "message": MSG_NO_AUTH, "owner_action": ACTION_NO_AUTH}
     started = time.time()
-    if runner(["gh", "workflow", "run", TEST_WORKFLOW], capture_output=True, cwd=ROOT, check=False, shell=False).returncode:
+    if runner(["gh", "workflow", "run", TEST_WORKFLOW, *_repo_args(runner)], capture_output=True, cwd=ROOT, check=False, shell=False).returncode:
         return {"ok": False, "message": "تعذّر تشغيل اختبار الاتصال في GitHub Actions (هل دُمج الـ workflow في main؟)."}
     run_id = None
     while time.time() - started < timeout:
         sleep(5)
         listing = runner(["gh", "run", "list", f"--workflow={TEST_WORKFLOW}", "--limit", "1", "--json",
-                          "databaseId,status,conclusion,createdAt"], capture_output=True, text=True, cwd=ROOT,
+                          "databaseId,status,conclusion,createdAt", *_repo_args(runner)], capture_output=True, text=True, cwd=ROOT,
                          check=False, shell=False)
         try:
             latest = json.loads(listing.stdout or "[]")[0]
@@ -97,7 +116,7 @@ def run_connection_test(which=shutil.which, runner=subprocess.run, sleep=time.sl
             break
     if run_id is None:
         return {"ok": False, "message": "انتهت مهلة اختبار الاتصال دون نتيجة."}
-    log = runner(["gh", "run", "view", str(run_id), "--log"], capture_output=True, text=True, cwd=ROOT,
+    log = runner(["gh", "run", "view", str(run_id), "--log", *_repo_args(runner)], capture_output=True, text=True, cwd=ROOT,
                  check=False, shell=False).stdout or ""
     found = dict(RESULT_LINE.findall(log))  # the workflow prints status codes only, never the key
     auth, model = found.get("VERCEL_AUTH", "FAIL"), found.get("SUNBURST_MODEL", "NOT_TESTED")
