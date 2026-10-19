@@ -344,5 +344,88 @@
     "alignment_reason": "المصادر تؤكد الإطار الزمني والمكاني وعمارة البيوت ذات الفناء الداخلي في طرابلس خلال العصر القرمانلي، لكنها تنص بوضوح على أن تفاصيل الصناعات الحرفية مثل تحضير الزيوت العطرية وصناعة السجاد والصوف لم تذكر بشكل تفصيلي صريح في النصوص المتاحة، مما يتطلب إعادة توجيه السرد ليتطابق مع ما تدعمه المصادر حصريًا. Angle re-anchored on supported elements.",
     "archive_identifier": "lan-tukmil-alqissa-20261019-tripoli-lybia-karamanli-d",
     "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261019-tripoli-lybia-karamanli-d"
+  },
+  {
+    "slug": "alula-oasis-caravans-history",
+    "topic": "رحلة القوافل عبر واحة العلا القديمة على طريق التجارة القديم",
+    "angle": "تتبع رحلة قافلة استراحة هادئة تحت ظلال واحة العلا والنخيل العالية في العصر اللحياني، مع التركيز على توزيع المياه والتربة الزراعية.",
+    "story_path": "stories/2026-10-19_alula-oasis-caravans-history",
+    "created_at": "2026-10-19T13:13:21.517563+04:00",
+    "status": "GENERATING",
+    "topic_ar": "رحلة القوافل عبر واحة العلا القديمة على طريق التجارة القديم",
+    "angle_ar": "تتبع رحلة قافلة استراحة هادئة تحت ظلال واحة العلا والنخيل العالية في العصر اللحياني، مع التركيز على توزيع المياه والتربة الزراعية.",
+    "search_query_en": "alula history ancient oasis trade route Lihyanite period",
+    "period_ar": "القرن الخامس قبل الميلاد",
+    "location_ar": "العلا، المملكة العربية السعودية",
+    "family": "طرق التجارة والواحات",
+    "story_format": "JOURNEY",
+    "key_elements": [
+      "ظلال واحة النخيل",
+      "قنوات الري المنحوتة في الصخر",
+      "استراحة المسافرين والجمال",
+      "المنحوتات الصخرية البسيطة",
+      "سكون الصحراء ليلاً"
+    ],
+    "reason_ar": "يقدم زاوية تاريخية مبكرة في شبه الجزيرة العربية تركز على الواحات وسكون الصحراء وراحة القوافل.",
+    "narrative_follow": "وصول القوافل إلى الواحة واختيار أماكن الاستراحة تحت الظلال",
+    "soft_narrative_spine": "التحول البطيء من حرارة الصحراء المفتوحة إلى برودة الواحة وظلالها",
+    "gentle_curiosity": "كيف كانت تنظم واحة العلا توزيع المياه بين الحقول والقوافل المارة؟",
+    "attentional_anchor": "صوت حفيف سعف النخيل في نسيم المساء",
+    "sensory_potential_notes": "برودة الظل، طعم الماء العذب، رائحة التراب النديين",
+    "tension_risks": [
+      "مشقة السفر في الصحراء يمكن تجنبها بالتركيز حصرياً على الواحة والراحة"
+    ],
+    "reentry_plan": "العودة عبر متابعة خطوط الظل المتمددة بين أشجار النخيل",
+    "long_form_capacity": "كافٍ لاستعراض تفاصيل العمارة الحجرية القديمة ونظم الري في الواحات",
+    "difference_from_recent": "يختلف عن واحة الموتس وظفار بكونه يركز على العصور القديمة المبكرة في شمال الجزيرة العربية",
+    "scores": {
+      "gentle_engagement": 5,
+      "low_cognitive_arousal": 5,
+      "narrative_flow": 5,
+      "sensory_potential": 5,
+      "reentry_tolerance": 5,
+      "low_stakes": 5,
+      "gradual_unwind_potential": 5,
+      "novelty_variety": 5
+    },
+    "selection_gate": {
+      "status": "PASS",
+      "language": true,
+      "religion": true,
+      "sleep": true,
+      "quality": true,
+      "universality": true,
+      "non_duplicate": true,
+      "soft_narrative_spine": true,
+      "gentle_curiosity": true,
+      "attentional_anchoring": true,
+      "reentry_tolerance": true,
+      "gradual_unwind": true,
+      "long_form_without_filler": true,
+      "clear_narrative_thread": true,
+      "scene_openable": true,
+      "divisible_into_scenes": true,
+      "understandable_without_prior_knowledge": true,
+      "gradually_calmable": true,
+      "not_a_fact_list": true,
+      "scores": {
+        "gentle_engagement": 5,
+        "low_cognitive_arousal": 5,
+        "narrative_flow": 5,
+        "sensory_potential": 5,
+        "reentry_tolerance": 5,
+        "low_stakes": 5,
+        "gradual_unwind_potential": 5,
+        "novelty_variety": 5
+      },
+      "reasons": [
+        "الموضوع يقدم زاوية تاريخية مبكرة فريدة في شمال الجزيرة العربية (العصر اللحياني) وتركز على الواحات وسكون الصحراء وراحة القوافل.",
+        "غير مكرر مقارنة بالحلقات السابقة التي ركزت على العصور الإسلامية اللاحقة أو مناطق أخرى مثل واحة الموتس.",
+        "يحقق شروط الهدوء والاندماج الهادئ والقدرة على النوم والابتعاد عن التوتر والصراعات.",
+        "يوفر تفاصيل حسية غنية وعناصر واضحة لبناء مشاهد متصلة وقابلة للفهم بلا معرفة مسبقة."
+      ]
+    },
+    "research_topic_alignment_status": "PASS",
+    "alignment_reason": "جميع العناصر الواردة في موضوع الحلقة وزاويتها وعناصرها الرئيسية مدعومة بشكل كامل بالمصادر وخريطة الادعاءات، مثل توثيق واحة العلا وديدان ولحيان في القرن الخامس قبل الميلاد، وجود قنوات الري المائية، حركة القوافل والإبل على طريق التجارة القديم، واستراحة التجار."
   }
 ]
