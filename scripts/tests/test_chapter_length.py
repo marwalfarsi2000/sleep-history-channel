@@ -81,13 +81,23 @@ class ChapterLengthTests(unittest.TestCase):
         self.assertIn("UNWIND", prompt)
         self.assertIn("فكرة خاصة", prompt)
 
+    def test_small_deficit_requests_a_real_continuation_instead_of_tiny_patch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / "chapter_01.md").write_text(words(748), encoding="utf-8")
+            story, gemini = self.draft([(words(250), [])], folder)
+        self.assertEqual(gemini.call_count, 1)
+        self.assertGreaterEqual(generate_daily.word_count(story), 765)
+        self.assertIn("بنحو 250 كلمة عربية", gemini.call_args.args[0])
+
     def test_chapter_that_never_reaches_minimum_fails_closed(self):
+        final_count = 702 + (5 * generate_daily.CHAPTER_EXPANSION_ATTEMPTS)
         with tempfile.TemporaryDirectory() as folder:
             (Path(folder) / "chapter_01.md").write_text(words(702), encoding="utf-8")
             with self.assertRaisesRegex(
-                RuntimeError, r"CHAPTER_LENGTH_TARGET_FAILED: chapter 1 has 717 words; minimum acceptable is 765"
+                RuntimeError,
+                rf"CHAPTER_LENGTH_TARGET_FAILED: chapter 1 has {final_count} words; minimum acceptable is 765",
             ) as ctx:
-                self.draft([(words(5), [])] * 3, folder)
+                self.draft([(words(5), [])] * generate_daily.CHAPTER_EXPANSION_ATTEMPTS, folder)
         self.assertEqual(ctx.exception.gemini.call_count, generate_daily.CHAPTER_EXPANSION_ATTEMPTS)
 
     def test_old_600_threshold_is_gone(self):
