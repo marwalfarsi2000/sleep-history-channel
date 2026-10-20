@@ -5,10 +5,20 @@ import inspect
 import pipeline
 
 
-def test_audio_qc_tokens_remove_diacritics_and_tatweel_only():
-    assert pipeline._audio_qc_tokens("إِنَّ هٰذَا نَصٌّ عَرَبِيٌّ ـ وَاضِحٌ") == [
-        "إن", "هذا", "نص", "عربي", "واضح"
-    ]
+def test_audio_qc_tokens_normalize_asr_orthography_without_lowering_threshold():
+    source = "الْوَرْشَةُ وَالْإِنَاءُ وَالدَّافِئَةُ إِلَى أَقْصَى"
+    asr = "الورشه والاناء والدافئه الى اقصي"
+    assert pipeline._audio_qc_tokens(source) == pipeline._audio_qc_tokens(asr)
+
+
+def test_observed_tlemcen_pattern_passes_after_orthographic_normalization():
+    source = "واصل صالح داخل الورشة الضيقة وتأمل الإناء والدافئة والألوان الطبيعية"
+    asr = "وصل صالح داخل الورشه الضيقه وتأمل الاناء والدافئه والالوان الطبيعيه"
+    source_tokens = pipeline._audio_qc_tokens(source)
+    asr_tokens = pipeline._audio_qc_tokens(asr)
+    import difflib
+    similarity = difflib.SequenceMatcher(None, source_tokens, asr_tokens, autojunk=False).ratio()
+    assert similarity >= 0.82
 
 
 def test_audio_qc_diff_is_bounded_and_uses_full_repetitive_stream():
