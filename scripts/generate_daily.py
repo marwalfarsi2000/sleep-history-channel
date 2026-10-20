@@ -303,6 +303,7 @@ OUTLINE_MAX_MODEL_CALLS = 4
 OUTLINE_RETRY_MAX = OUTLINE_MAX_MODEL_CALLS
 MIN_OUTLINE_TARGET_WORDS = 5500
 CHAPTER_EXPANSION_ATTEMPTS = 5
+STORY_QUALITY_REPAIR_ATTEMPTS = 2
 
 
 def chapter_minimum_words(target_words: int) -> int:
@@ -916,10 +917,18 @@ STORY_QUALITY_ENGAGEMENT_GATES = (
 )
 
 
+class StoryQualityGateRejected(RuntimeError):
+    """Structured quality rejection so the caller can repair only the failing scope."""
+
+    def __init__(self, details: dict):
+        self.details = details
+        super().__init__("STORY_QUALITY_GATE_REJECTED: " + json.dumps(details, ensure_ascii=False))
+
+
 def validate_story_quality(topic: dict, story_text: str) -> dict:
     deterministic = quest_rules.story_text_errors(story_text)
     if deterministic:
-        raise RuntimeError("STORY_QUALITY_GATE_REJECTED: " + json.dumps({"deterministic": deterministic}, ensure_ascii=False))
+        raise StoryQualityGateRejected({"deterministic": deterministic})
     quest = {
         key: topic.get(key) for key in (
             "character_ar", "protagonist_kind", "small_want_ar", "quest_ar", "one_sentence_summary_ar",
@@ -949,8 +958,199 @@ def validate_story_quality(topic: dict, story_text: str) -> dict:
         *STORY_QUALITY_ENGAGEMENT_GATES,
     )
     if result.get("status") != "PASS" or not all(result.get(name) is True for name in gates):
-        raise RuntimeError("STORY_QUALITY_GATE_REJECTED: " + json.dumps(result, ensure_ascii=False))
+        raise StoryQualityGateRejected(result)
     return result
+
+
+def _story_split_at_fraction(text: str, fraction: float) -> tuple[str, str]:
+    tokens = list(re.finditer(r"\S+", text))
+    if len(tokens) < 2:
+        return "", text
+    index = max(1, min(len(tokens) - 1, int(len(tokens) * fraction)))
+    cut = tokens[index].start()
+    return text[:cut].rstrip(), text[cut:].lstrip()
+
+
+def _quality_repair_scope(details: dict) -> str | None:
+    deterministic = [str(item) for item in (details.get("deterministic") or [])]
+    issues = [str(item) for item in (details.get("issues") or [])]
+    false_gates = [str(key) for key, value in details.items() if value is False]
+    signal = " ".join([*deterministic, *issues, *false_gates]).lower()
+
+    if any(token in signal for token in (
+        "encyclopedic opening", "calm_hook", "first_listen_comprehension",
+        "teen_first_listen_comprehension",
+    )):
+        return "opening"
+    if any(token in signal for token in (
+        "curiosity does not decay", "mystery", "twist", "shock", "cliffhanger",
+        "ending", "gradual_unwind", "density_drops_toward_end",
+        "last_fifth_calmer_than_first_half", "no_late_new_question",
+        "quiet_post_resolution", "can_sleep_before_the_end",
+    )):
+        return "ending"
+    # Semantic quality failures can still be repaired, but only after the gate has
+    # named concrete issues. A bare rejection is not enough evidence to rewrite.
+    if issues or false_gates:
+        return "full"
+    return None
+
+
+def _quality_repair_prompt(
+    *, topic: dict, research: str, scope: str, details: dict,
+    target_text: str, context_before: str = "",
+) -> str:
+    common = f"""أنت مصلح جودة محدود الصلاحية لقصة نوم تاريخية.
+سبب الرفض:
+{json.dumps(details, ensure_ascii=False)}
+
+الموضوع: {topic.get('topic_ar', '')}
+الزاوية: {topic.get('angle_ar', '')}
+المهمة:
+{quest_brief(topic)}
+
+قواعد إلزامية:
+- أصلح فقط سبب الرفض المذكور، ولا تعِد اختراع القصة من الصفر.
+- لا تضف حقيقة تاريخية جديدة ولا اسمًا جديدًا ولا تاريخًا جديدًا.
+- حافظ على ترتيب الأحداث والحقائق والشخصية والمهمة الموجودة.
+- لا تختصر النص اختصارًا كبيرًا ولا تضف حشوًا.
+- لا تضف عنوانًا أو ملاحظات تحريرية.
+- أخرج النص المصحح فقط.
+"""
+    if scope == "ending":
+        return common + f"""
+هذه هي نهاية القصة فقط. أعد كتابة هذا المقطع وحده ليصبح أهدأ بوضوح:
+- المهمة تكون محلولة قبل النهاية بوقت كافٍ.
+- لا تفتح أي سؤال جديد ولا تستخدم علامة استفهام إلا إذا كانت جزءًا لا يمكن تجنبه من كلام منقول، والأفضل تحويله إلى جملة تقريرية.
+- لا لغز ولا مفاجأة ولا teaser ولا cliffhanger.
+- قلل الحوار والحركة الجديدة، واجعل آخر المقاطع أعمالًا مألوفة وعودة/ترتيب/إغلاق/هدوء.
+- حافظ على الحقائق والأحداث الموجودة في هذا المقطع دون إضافة ادعاءات جديدة.
+
+سياق سابق لا تعِد كتابته:
+{context_before[-2500:]}
+
+المقطع المطلوب إصلاحه:
+{target_text}
+
+مرجع البحث للاستخدام عند الحاجة فقط، لا لإضافة معلومات جديدة:
+{research[:24000]}
+"""
+    if scope == "opening":
+        return common + f"""
+هذه هي بداية القصة فقط. أعد كتابة هذا المقطع وحده:
+- ابدأ مباشرة بمشهد وشخصية تفعل شيئًا.
+- عرّف المكان والزمن والمهمة الصغيرة تدريجيًا، لا كمقدمة موسوعية.
+- لا ترحيب، لا تقديم للقناة، لا تعليمات تنفس.
+- حافظ على كل الحقائق الموجودة ولا تضف ادعاءات تاريخية جديدة.
+
+المقطع المطلوب إصلاحه:
+{target_text}
+
+ما يأتي بعده للسياق فقط:
+{context_before[:1800]}
+
+مرجع البحث:
+{research[:24000]}
+"""
+    return common + f"""
+أصلح القصة كاملة بأقل تغيير ممكن لمعالجة القضايا المذكورة فقط.
+لا تغيّر أي جزء لا يحتاج إصلاحًا. يجب أن تبقى القصة 5000 كلمة عربية على الأقل.
+
+القصة:
+{target_text[:90000]}
+
+مرجع البحث:
+{research[:30000]}
+"""
+
+
+def repair_story_quality(
+    story: Path,
+    topic: dict,
+    research: str,
+    story_text: str,
+    details: dict,
+    *,
+    attempt: int,
+) -> str:
+    scope = _quality_repair_scope(details)
+    if scope is None:
+        raise StoryQualityGateRejected(details)
+
+    if scope == "ending":
+        preserved, target = _story_split_at_fraction(story_text, 0.75)
+        context = preserved
+        max_tokens = 7000
+    elif scope == "opening":
+        target, preserved = _story_split_at_fraction(story_text, 0.18)
+        context = preserved
+        max_tokens = 5000
+    else:
+        preserved, target, context = "", story_text, ""
+        max_tokens = 16000
+
+    prompt = _quality_repair_prompt(
+        topic=topic, research=research, scope=scope, details=details,
+        target_text=target, context_before=context,
+    )
+    repaired, _ = gemini(prompt, max_tokens=max_tokens, temperature=0.15)
+    repaired = repaired.strip()
+    if not repaired:
+        raise RuntimeError("STORY_QUALITY_REPAIR_FAILED: model returned empty text")
+
+    original_target_words = word_count(target)
+    repaired_target_words = word_count(repaired)
+    if repaired_target_words < max(250, int(original_target_words * 0.70)):
+        raise RuntimeError(
+            f"STORY_QUALITY_REPAIR_FAILED: {scope} repair shrank from "
+            f"{original_target_words} to {repaired_target_words} Arabic words"
+        )
+
+    if scope == "ending":
+        candidate = f"{preserved.rstrip()}\n\n{repaired}"
+    elif scope == "opening":
+        candidate = f"{repaired}\n\n{preserved.lstrip()}"
+    else:
+        candidate = repaired
+
+    if word_count(candidate) < 5000:
+        raise RuntimeError(
+            f"STORY_QUALITY_REPAIR_FAILED: repaired story has {word_count(candidate)} Arabic words"
+        )
+
+    logs = story / "logs"
+    write(logs / f"quality_repair_{attempt:02d}_{scope}.md", repaired)
+    write(logs / f"quality_repair_{attempt:02d}_{scope}.json", json.dumps({
+        "scope": scope, "details": details,
+        "before_words": word_count(story_text), "after_words": word_count(candidate),
+    }, ensure_ascii=False, indent=2))
+    return candidate
+
+
+def ensure_story_quality(
+    story: Path,
+    topic: dict,
+    research: str,
+    story_text: str,
+    *,
+    label: str,
+) -> tuple[str, dict]:
+    candidate = story_text
+    for attempt in range(1, STORY_QUALITY_REPAIR_ATTEMPTS + 2):
+        try:
+            return candidate, validate_story_quality(topic, candidate)
+        except StoryQualityGateRejected as exc:
+            if attempt > STORY_QUALITY_REPAIR_ATTEMPTS:
+                raise
+            print(
+                f"QUALITY_TARGETED_REPAIR attempt {attempt}/{STORY_QUALITY_REPAIR_ATTEMPTS} "
+                f"label={label} scope={_quality_repair_scope(exc.details)}",
+                file=sys.stderr, flush=True,
+            )
+            candidate = repair_story_quality(
+                story, topic, research, candidate, exc.details, attempt=attempt
+            )
+    raise RuntimeError("STORY_QUALITY_REPAIR_FAILED: unreachable")
 
 
 def _fact_check_json(prompt: str, *, max_tokens: int) -> dict:
@@ -1060,9 +1260,20 @@ def finalize_story_text(story: Path, topic: dict, research: str, draft: str) -> 
             and manifest.get("fact_check", {}).get("status") == "PASS"
         ):
             return final_path.read_text(encoding="utf-8").strip(), manifest["quality_gate"], manifest["fact_check"]
-    quality = validate_story_quality(topic, draft)
-    final_story, fact_check = fact_check_story(topic, research, draft)
-    final_quality = validate_story_quality(topic, final_story)
+    quality_story, _ = ensure_story_quality(
+        story, topic, research, draft, label="pre_fact_check"
+    )
+    final_story, fact_check = fact_check_story(topic, research, quality_story)
+    fact_checked_story = final_story
+    final_story, final_quality = ensure_story_quality(
+        story, topic, research, final_story, label="post_fact_check"
+    )
+    # If the final quality repair changed fact-checked prose, verify facts again.
+    # A correction pass may alter only factual wording, so quality is checked once
+    # more after it. If that rare cycle still fails, we stop rather than loop.
+    if final_story != fact_checked_story:
+        final_story, fact_check = fact_check_story(topic, research, final_story)
+        final_quality = validate_story_quality(topic, final_story)
     write(final_path, final_story)
     write(manifest_path, json.dumps({
         "draft_sha256": draft_hash,
