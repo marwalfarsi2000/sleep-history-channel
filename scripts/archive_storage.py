@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from internetarchive import ArchiveSession, delete, upload
+from internetarchive import ArchiveSession, upload
 
 
 def get_archive_item(identifier: str, access_key: str = "", secret_key: str = ""):
@@ -25,6 +25,23 @@ def get_archive_item(identifier: str, access_key: str = "", secret_key: str = ""
 ROOT = Path(__file__).resolve().parents[1]
 SETTINGS = json.loads((ROOT / "config" / "settings.json").read_text(encoding="utf-8"))
 ARCHIVE_INDEX = ROOT / "config" / "archive_index.json"
+
+ARCHIVE_REQUIRED_FILENAMES = (
+    "14_video_final.mp4",
+    "11_thumbnail_base.jpg",
+    "01_title.txt",
+    "02_description.txt",
+    "03_sources.md",
+    "04_research_notes.md",
+    "05_story_clean.md",
+    "05b_story_tts_normalized.md",
+    "06_story_tts_annotated.md",
+    "07_story_tts_api.md",
+    "08_image_prompt_en.txt",
+    "15_metadata.json",
+    "16_fact_check.md",
+)
+ARCHIVE_OPTIONAL_FILENAMES = ("08_thumbnail_prompt_en.txt",)
 
 
 def atomic_json(path: Path, value: object) -> None:
@@ -92,28 +109,14 @@ def metadata_for_story(story: Path, identifier: str) -> dict[str, str | list[str
 
 
 def story_files(story: Path) -> dict[str, str]:
-    names = (
-        "14_video_final.mp4",
-        "11_thumbnail_base.jpg",
-        "01_title.txt",
-        "02_description.txt",
-        "03_sources.md",
-        "04_research_notes.md",
-        "05_story_clean.md",
-        "05b_story_tts_normalized.md",
-        "06_story_tts_annotated.md",
-        "07_story_tts_api.md",
-        "08_image_prompt_en.txt",
-        "15_metadata.json",
-        "16_fact_check.md",
-    )
-    missing = [name for name in names if not (story / name).is_file()]
+    missing = [name for name in ARCHIVE_REQUIRED_FILENAMES if not (story / name).is_file()]
     if missing:
         raise RuntimeError("Archive upload is missing files: " + ", ".join(missing))
-    files = {name: str(story / name) for name in names}
-    optional_thumbnail_prompt = story / "08_thumbnail_prompt_en.txt"
-    if optional_thumbnail_prompt.is_file():
-        files[optional_thumbnail_prompt.name] = str(optional_thumbnail_prompt)
+    files = {name: str(story / name) for name in ARCHIVE_REQUIRED_FILENAMES}
+    for name in ARCHIVE_OPTIONAL_FILENAMES:
+        optional = story / name
+        if optional.is_file():
+            files[name] = str(optional)
     return files
 
 
@@ -338,24 +341,36 @@ def upload_story(story: Path) -> dict:
 
 
 def delete_rejected(identifier: str) -> None:
+    """Delete only files owned by this automation from a rejected Archive item.
+
+    internetarchive 5.12.0 routes kwargs on the top-level delete() through
+    get_item(), so passing custom headers there raises TypeError. File.delete()
+    accepts headers directly and cascade_delete removes derivatives safely.
+    """
     access, secret = credentials()
     item = get_archive_item(identifier, access_key=access, secret_key=secret)
-    files = [entry["name"] for entry in (item.item_metadata.get("files") or []) if entry.get("name")]
-    original = [name for name in files if not name.startswith("__")]
-    if original:
-        responses = delete(
-            identifier,
-            files=original,
+    remote_names = {
+        entry["name"]
+        for entry in (item.item_metadata.get("files") or [])
+        if entry.get("name")
+    }
+    owned_names = [
+        name
+        for name in (*ARCHIVE_REQUIRED_FILENAMES, *ARCHIVE_OPTIONAL_FILENAMES)
+        if name in remote_names
+    ]
+    for name in owned_names:
+        response = item.get_file(name).delete(
             cascade_delete=True,
             access_key=access,
             secret_key=secret,
             headers={"x-archive-keep-old-version": "0"},
         )
-        for response in responses if isinstance(responses, list) else [responses]:
-            status = getattr(response, "status_code", 200)
-            if status >= 400:
-                raise RuntimeError(f"Internet Archive delete failed with HTTP {status}")
-
+        status = getattr(response, "status_code", 200)
+        if status >= 400:
+            raise RuntimeError(
+                f"Internet Archive delete failed for {name} with HTTP {status}"
+            )
 
 def set_index_status(identifier: str, status: str, **updates: object) -> None:
     from state_machine import transition_state, normalize_state

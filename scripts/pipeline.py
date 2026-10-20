@@ -1900,17 +1900,46 @@ def background(story: Path, force: bool = False):
     metadata_path = story / "15_metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.exists() else {}
 
-    if not force and can_reuse_stage(story, "background", prompt_hash):
-        print(f"Reusing existing valid background image and thumbnail for {story.name} (prompt hash {prompt_hash[:8]})")
+    thumbnail_text = str(metadata.get("thumbnail_text", "")).strip()
+    thumbnail_input_hash = ""
+    if thumbnail_text:
+        import canva_thumbnail
+        effective_thumbnail_prompt = canva_thumbnail.build_background_prompt(
+            str(metadata.get("thumbnail_prompt", "")).strip(),
+            prompt,
+        )
+        thumbnail_input_hash = canva_thumbnail.input_identity(
+            thumbnail_text,
+            effective_thumbnail_prompt,
+        )
+
+    stage_input_hash = (
+        compute_config_hash({
+            "image_prompt_sha256": prompt_hash,
+            "thumbnail_input_sha256": thumbnail_input_hash,
+        })
+        if thumbnail_input_hash
+        else prompt_hash
+    )
+
+    if not force and can_reuse_stage(story, "background", stage_input_hash):
+        print(
+            f"Reusing existing valid background image and thumbnail for {story.name} "
+            f"(stage hash {stage_input_hash[:8]})"
+        )
         return
 
     if (
         not force and output.exists() and thumbnail.exists() and output.stat().st_size > 250_000
         and (metadata.get("image_generation_status") == "passed" or not metadata_path.exists())
         and (not prompt_hash or metadata.get("image_prompt_sha256") == prompt_hash)
+        and (not thumbnail_input_hash or metadata.get("thumbnail_input_sha256") == thumbnail_input_hash)
+        and (not metadata.get("image_sha256") or metadata.get("image_sha256") == file_sha256(output))
+        and (not metadata.get("thumbnail_sha256") or metadata.get("thumbnail_sha256") == file_sha256(thumbnail))
     ):
         print(f"Reusing existing valid background image and thumbnail for {story.name}")
         return
+
     generator = ROOT / "scripts" / "image_generate.py"
     run([sys.executable, str(generator), str(story)])
 
@@ -1918,8 +1947,7 @@ def background(story: Path, force: bool = False):
         "10_background.png": compute_file_hash(output),
         "11_thumbnail_base.jpg": compute_file_hash(thumbnail),
     }
-    record_stage(story, "background", input_sha256=prompt_hash, output_hashes=output_hashes)
-
+    record_stage(story, "background", input_sha256=stage_input_hash, output_hashes=output_hashes)
 def video_codec() -> list[str]:
     # GitHub-hosted runners expose NVENC in FFmpeg's encoder list but do not
     # provide an NVIDIA GPU. Force the CPU encoder there and retain NVENC on
@@ -2102,6 +2130,29 @@ def completed_artifacts_are_current(story: Path) -> bool:
     if metadata.get("youtube_packaging_status"):
         if metadata.get("youtube_packaging_validation_status") != "passed" or metadata.get("thumbnail_text_render_status") != "passed":
             return False
+
+    # The whole-pipeline fast path must not accept a thumbnail whose Canva inputs
+    # changed after the image stage last ran. File hashes alone only prove the
+    # existing thumbnail is intact, not that it matches the current hook/prompt.
+    thumbnail_text = str(metadata.get("thumbnail_text", "")).strip()
+    if thumbnail_text:
+        import canva_thumbnail
+
+        scene_path = story / "08_image_prompt_en.txt"
+        scene_prompt = scene_path.read_text(encoding="utf-8").strip() if scene_path.exists() else ""
+        try:
+            effective_thumbnail_prompt = canva_thumbnail.build_background_prompt(
+                str(metadata.get("thumbnail_prompt", "")).strip(),
+                scene_prompt,
+            )
+        except canva_thumbnail.CanvaError:
+            return False
+        if metadata.get("thumbnail_input_sha256") != canva_thumbnail.input_identity(
+            thumbnail_text,
+            effective_thumbnail_prompt,
+        ):
+            return False
+
     expected = {
         "clean_story_sha256": story / "05_story_clean.md",
         "tts_normalized_sha256": story / "05b_story_tts_normalized.md",

@@ -254,7 +254,7 @@ def gemini(prompt: str, *, json_mode: bool = False, search: bool = False,
         raise
 
 
-def parse_json(text: str) -> dict:
+def parse_json(text: str) -> object:
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.I | re.S)
     try:
         return json.loads(cleaned)
@@ -269,6 +269,17 @@ def parse_json(text: str) -> dict:
         if trailing_without_fence.startswith(("{", "[")):
             raise
         return value
+
+
+def parse_json_object(text: str, error_code: str) -> dict:
+    """Parse one model JSON object, accepting the common singleton-list wrapper only."""
+    value = parse_json(text)
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list) and len(value) == 1 and isinstance(value[0], dict):
+        return value[0]
+    shape = f"{type(value).__name__}[{len(value)}]" if isinstance(value, list) else type(value).__name__
+    raise ValueError(f"{error_code}: expected one JSON object, got {shape}")
 
 
 def safe_slug(value: str) -> str:
@@ -578,7 +589,7 @@ def choose_topic(history: list[dict], retry_feedback: str = "") -> dict:
 كل مرشح يجب أن يملك مهمة واضحة وافتتاحًا بمشهد (شخصية تفعل شيئًا) لا بمحاضرة، ويقبل التقسيم إلى مشاهد صغيرة مترابطة، ويُفهم دون معرفة تاريخية مسبقة، ويمكن تهدئته تدريجيًا، ويمكن للمستمع أن يسرح فيه ويعود، وألا يكون قائمة حقائق ولا روتينًا بلا هدف.
 """
     text, _ = gemini(prompt, json_mode=True, max_tokens=7000, temperature=0.7)
-    discovery = parse_json(text)
+    discovery = parse_json_object(text, "TOPIC_DISCOVERY_SCHEMA_FAILED")
     candidates = discovery.get("candidates") or []
     # Gemini may return fewer than the preferred six; what matters is enough
     # valid, unused, varied candidates once the saved bank is merged in.
@@ -631,7 +642,7 @@ def choose_topic(history: list[dict], retry_feedback: str = "") -> dict:
     validation_text, _ = gemini(
         validation_prompt, json_mode=True, max_tokens=1200, temperature=0.0
     )
-    validation = parse_json(validation_text)
+    validation = parse_json_object(validation_text, "TOPIC_VALIDATION_SCHEMA_FAILED")
     gate_names = (
         "language", "religion", "sleep", "quality", "universality", "non_duplicate",
         "soft_narrative_spine", "gentle_curiosity", "attentional_anchoring",
@@ -929,7 +940,7 @@ def validate_story_quality(topic: dict, story_text: str) -> dict:
 {story_text[:90000]}
 """
     text, _ = gemini(prompt, json_mode=True, max_tokens=4000, temperature=0.0)
-    result = parse_json(text)
+    result = parse_json_object(text, "STORY_QUALITY_SCHEMA_FAILED")
     gates = (
         "language", "adult_audience", "religion", "sleep", "historical_style",
         "no_dangerous_drift", "soft_narrative_spine", "gentle_curiosity",
@@ -955,12 +966,10 @@ def _fact_check_json(prompt: str, *, max_tokens: int) -> dict:
             max_tokens=max_tokens,
             temperature=0.0,
         )
-        result = parse_json(text)
-        if isinstance(result, dict):
-            return result
-        if isinstance(result, list) and len(result) == 1 and isinstance(result[0], dict):
-            return result[0]
-        last_shape = f"{type(result).__name__}[{len(result)}]" if isinstance(result, list) else type(result).__name__
+        try:
+            return parse_json_object(text, "FACT_CHECK_SCHEMA_FAILED")
+        except ValueError as exc:
+            last_shape = str(exc).split("got ", 1)[-1]
     raise RuntimeError(
         f"FACT_CHECK_SCHEMA_FAILED: expected one JSON object, got {last_shape}"
     )
@@ -1107,7 +1116,7 @@ Premise الحلقة (لا تغيّره):
         final = attempt == OUTLINE_MAX_MODEL_CALLS
         text, _ = gemini(prompt + feedback, json_mode=True, max_tokens=6000, temperature=0.5 if final else 0.3)
         try:
-            result = parse_json(text)
+            result = parse_json_object(text, "OUTLINE_SCHEMA_FAILED")
         except ValueError as exc:  # json.JSONDecodeError is a ValueError
             last_error = f"{type(exc).__name__}: {exc}"[:300]
             print(f"OUTLINE_ATTEMPT={attempt} PARSE=FAIL VALIDATION=NOT_RUN ERROR={last_error}", file=sys.stderr, flush=True)
@@ -1514,7 +1523,7 @@ Return JSON only with exactly these keys: {json.dumps(ask)}
 """
             text, _ = gemini(prompt, json_mode=True, max_tokens=3000, temperature=0.35)
             try:
-                candidate = parse_json(text)
+                candidate = parse_json_object(text, "YOUTUBE_PACKAGING_SCHEMA_FAILED")
             except (ValueError, KeyError):
                 candidate = {}
             for field in ask:
@@ -1545,7 +1554,7 @@ Return JSON only with exactly these keys: {json.dumps(ask)}
 """
         validation_text, _ = gemini(validation_prompt, json_mode=True, max_tokens=1600, temperature=0.0)
         try:
-            validation = parse_json(validation_text)
+            validation = parse_json_object(validation_text, "YOUTUBE_PACKAGING_VALIDATION_SCHEMA_FAILED")
         except (ValueError, KeyError):
             validation = {"status": "FAIL", "failing_fields": list(LLM_PACKAGING_FIELDS), "issues": ["unparseable validation"]}
         if (
