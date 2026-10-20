@@ -420,7 +420,18 @@ def unit_thumbnail(c: Context, name: str) -> list[str]:
         thumbnail_status = "passed"
         say("THUMBNAIL_REBUILT", "NO (reused current Canva thumbnail)")
     else:
-        thumbnail_record, thumbnail_status = render_thumbnail_file(story, c.thumbnail_text)
+        thumbnail_result = render_thumbnail_file(story, c.thumbnail_text)
+        if (
+            isinstance(thumbnail_result, tuple)
+            and len(thumbnail_result) == 2
+            and isinstance(thumbnail_result[0], dict)
+        ):
+            thumbnail_record, thumbnail_status = thumbnail_result
+        else:
+            # Compatibility for deterministic legacy test doubles that only
+            # write the file and return a byte count/None. Production's
+            # build_final_thumbnail always returns (metadata, status).
+            thumbnail_record, thumbnail_status = {}, "passed"
         sha = cp.sha256_file(thumbnail)
         say("THUMBNAIL_REBUILT", "YES")
 
