@@ -102,6 +102,20 @@ DIRECTION_RE = re.compile(r"\[[^\]\n]{1,100}\]")
 DIACRITIZATION_VERSION = "full-v8-speech-normalized-pausal-final-words"
 TTS_NORMALIZATION_VERSION = "arabic-speech-normalizer-v1"
 TTS_AUDIO_CACHE_VERSION = "native-speed-1.0-v3-speech-normalized"
+
+
+class AudioTranscriptMismatch(RuntimeError):
+    """One TTS chunk is decodable but does not faithfully match its source text."""
+
+    def __init__(self, chunk_name: str, similarity: float, length_ratio: float):
+        self.chunk_name = chunk_name
+        self.chunk_stem = Path(chunk_name).stem
+        self.similarity = similarity
+        self.length_ratio = length_ratio
+        super().__init__(
+            f"AUDIO_QC_FAILED: transcript mismatch in {chunk_name} "
+            f"(similarity={similarity:.3f}, length_ratio={length_ratio:.3f})"
+        )
 TTS_RULES_PATH = ROOT / "config" / "tts_speech_normalization_rules.md"
 PRONUNCIATION_DICTIONARY_PATH = ROOT / "config" / "pronunciation_dictionary.json"
 _DIACRITIZATION_LAST_REQUEST_AT = 0.0
@@ -1528,6 +1542,44 @@ def prepare(story: Path):
         (tdir / f"{i:03}.txt").write_text(chunk + "\n", encoding="utf-8")
     print(f"Prepared {len(chunks)} chunks, {arabic_words(clean)} Arabic words, diacritics={diacritic_ratio(annotated):.3f}")
 
+async def regenerate_audio_chunk_for_qc(
+    src: Path,
+    out: Path,
+    provider: str,
+    voice: str,
+    chunk_models: dict[str, str],
+) -> str:
+    """Regenerate only one transcript-mismatched chunk while preserving narrator identity."""
+    text = src.read_text(encoding="utf-8")
+    out.unlink(missing_ok=True)
+
+    if provider == "gemini":
+        if voice.startswith(GOOGLE_CLOUD_PREFIX):
+            candidates = [voice]
+        else:
+            preferred = chunk_models.get(src.name, "")
+            candidates = [model for model in dict.fromkeys([preferred, *_gemini_tts_models()]) if model]
+        for candidate in candidates:
+            try:
+                actual_model = await tts_one(text, out, candidate)
+                return actual_model or candidate
+            except TtsEngineExhausted as exc:
+                print(f"{exc}; trying the next same-narrator model for QC repair", flush=True)
+        raise RuntimeError(
+            f"TTS_WAITING_FOR_QUOTA: cannot regenerate transcript-mismatched chunk {out.name} "
+            "with the current narrator"
+        )
+
+    actual_model = await tts_one(text, out, voice)
+    if actual_model:
+        return actual_model
+    if provider == "fish":
+        return str(SETTINGS.get("fish_model", "s2.1-pro-free"))
+    if provider == "munsit":
+        return str(SETTINGS.get("munsit_model", "faseeh-v1-preview"))
+    return "edge"
+
+
 async def synthesize(story: Path):
     run_summary.stage("synthesize")
     provider = SETTINGS.get("tts_provider", "edge").lower()
@@ -1714,17 +1766,41 @@ async def synthesize(story: Path):
     hash_path.write_text(json.dumps(new_hashes, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
     model_path.write_text(json.dumps(chunk_models, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
     concat = adir / "concat.txt"
-    concat.write_text("".join(f"file '{p.as_posix()}'\n" for p in sorted(adir.glob("*.mp3"))), encoding="utf-8")
     tempo = float(SETTINGS.get("post_tts_tempo", 1.0))
     if tempo != 1.0:
         raise RuntimeError(f"Post-TTS tempo guard failed: expected native 1.0, got {tempo}")
     narration = story / "12_audio_narration.mp3"
-    run([ffmpeg(), "-y", "-f", "concat", "-safe", "0", "-i", str(concat), "-c:a", "libmp3lame", "-b:a", "160k", str(narration)])
     full = story / "12_audio_full.mp3"
-    mix_background_audio(narration, full)
     review = story / "13_audio_review.opus"
-    run([ffmpeg(), "-y", "-i", str(full), "-c:a", "libopus", "-b:a", "48k", str(review)])
-    validate_audio(story)
+    qc_repair_limit = max(0, int(SETTINGS.get("audio_qc_chunk_repair_attempts", 2)))
+    qc_repair_counts: dict[str, int] = {}
+
+    while True:
+        concat.write_text("".join(f"file '{p.as_posix()}'\n" for p in sorted(adir.glob("*.mp3"))), encoding="utf-8")
+        run([ffmpeg(), "-y", "-f", "concat", "-safe", "0", "-i", str(concat), "-c:a", "libmp3lame", "-b:a", "160k", str(narration)])
+        mix_background_audio(narration, full)
+        run([ffmpeg(), "-y", "-i", str(full), "-c:a", "libopus", "-b:a", "48k", str(review)])
+        try:
+            validate_audio(story)
+            break
+        except AudioTranscriptMismatch as exc:
+            attempts = qc_repair_counts.get(exc.chunk_name, 0)
+            if attempts >= qc_repair_limit:
+                raise
+            qc_repair_counts[exc.chunk_name] = attempts + 1
+            src = tdir / f"{exc.chunk_stem}.txt"
+            out = adir / exc.chunk_name
+            if not src.exists():
+                raise RuntimeError(f"AUDIO_QC_FAILED: source text missing for {exc.chunk_name}") from exc
+            print(
+                f"Audio QC targeted repair {qc_repair_counts[exc.chunk_name]}/{qc_repair_limit}: "
+                f"regenerating only {exc.chunk_name}",
+                flush=True,
+            )
+            actual_model = await regenerate_audio_chunk_for_qc(src, out, provider, voice, chunk_models)
+            chunk_models[src.name] = actual_model
+            model_path.write_text(json.dumps(chunk_models, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+
     print("Audio duration", duration(full))
 
     output_hashes = {
@@ -1753,6 +1829,19 @@ def validate_audio(story: Path) -> dict:
         or audio_qc_model not in set(SETTINGS.get("approved_llm_models") or [])
     ):
         raise RuntimeError(f"BLOCKED_COST: unapproved audio QC model {audio_qc_model}")
+
+    logs = story / "logs"
+    logs.mkdir(exist_ok=True)
+    cache_path = logs / "audio_qc_chunk_cache.json"
+    try:
+        transcript_cache = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        transcript_cache = {}
+    if not isinstance(transcript_cache, dict):
+        transcript_cache = {}
+    valid_audio_names = {chunk.name for chunk in audio_chunks}
+    transcript_cache = {name: value for name, value in transcript_cache.items() if name in valid_audio_names}
+
     for chunk in audio_chunks:
         if chunk.stat().st_size <= 1024:
             raise RuntimeError(f"AUDIO_QC_FAILED: empty chunk {chunk.name}")
@@ -1766,9 +1855,28 @@ def validate_audio(story: Path) -> dict:
         stream = (json.loads(stream_probe.stdout).get("streams") or [{}])[0]
         audio_signatures.add((stream.get("codec_name"), stream.get("sample_rate"), stream.get("channels")))
         chunk_durations.append(round(duration(chunk), 3))
-        hashes.append(hashlib.sha256(chunk.read_bytes()).hexdigest())
+        chunk_sha = hashlib.sha256(chunk.read_bytes()).hexdigest()
+        hashes.append(chunk_sha)
         if transcript_qc:
-            source = next(item for item in text_chunks if item.stem == chunk.stem).read_text(encoding="utf-8")
+            source_path = next(item for item in text_chunks if item.stem == chunk.stem)
+            source = source_path.read_text(encoding="utf-8")
+            source_sha = hashlib.sha256(source.encode("utf-8")).hexdigest()
+            cached = transcript_cache.get(chunk.name) if isinstance(transcript_cache.get(chunk.name), dict) else {}
+            if (
+                cached.get("status") == "passed"
+                and cached.get("audio_sha256") == chunk_sha
+                and cached.get("source_sha256") == source_sha
+            ):
+                similarity = float(cached.get("similarity", 1.0))
+                length_ratio = float(cached.get("length_ratio", 1.0))
+                transcript_checks.append({
+                    "chunk": chunk.name,
+                    "similarity": round(similarity, 4),
+                    "length_ratio": round(length_ratio, 4),
+                    "cached": True,
+                })
+                continue
+
             transcript = transcribe_audio_for_qc(chunk, audio_qc_model)
             source_tokens = re.findall(r"[\u0621-\u064A]+|\d+", DIACRITICS_RE.sub("", source))
             transcript_tokens = re.findall(r"[\u0621-\u064A]+|\d+", DIACRITICS_RE.sub("", transcript))
@@ -1776,13 +1884,20 @@ def validate_audio(story: Path) -> dict:
             length_ratio = len(transcript_tokens) / max(len(source_tokens), 1)
             transcript_checks.append({
                 "chunk": chunk.name, "similarity": round(similarity, 4),
-                "length_ratio": round(length_ratio, 4),
+                "length_ratio": round(length_ratio, 4), "cached": False,
             })
             if similarity < float(SETTINGS.get("audio_transcript_similarity_min", 0.82)) or not 0.8 <= length_ratio <= 1.2:
-                raise RuntimeError(
-                    f"AUDIO_QC_FAILED: transcript mismatch in {chunk.name} "
-                    f"(similarity={similarity:.3f}, length_ratio={length_ratio:.3f})"
-                )
+                transcript_cache.pop(chunk.name, None)
+                cache_path.write_text(json.dumps(transcript_cache, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+                raise AudioTranscriptMismatch(chunk.name, similarity, length_ratio)
+            transcript_cache[chunk.name] = {
+                "status": "passed",
+                "audio_sha256": chunk_sha,
+                "source_sha256": source_sha,
+                "similarity": round(similarity, 6),
+                "length_ratio": round(length_ratio, 6),
+            }
+            cache_path.write_text(json.dumps(transcript_cache, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
     duplicates = [index + 2 for index in range(len(hashes) - 1) if hashes[index] == hashes[index + 1]]
     if duplicates:
         raise RuntimeError(f"AUDIO_QC_FAILED: duplicate adjacent chunks {duplicates}")
@@ -1811,15 +1926,12 @@ def validate_audio(story: Path) -> dict:
         "long_silences_seconds": [],
         "transcript_checks": transcript_checks,
     }
-    logs = story / "logs"
-    logs.mkdir(exist_ok=True)
     (logs / "audio_qc.json").write_text(json.dumps(result, indent=2)+"\n", encoding="utf-8")
     metadata_path = story / "15_metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     metadata.update(audio_generation_status="passed", audio_qc_status="passed")
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
     return result
-
 
 QC_RETRY_DELAYS = (10, 30, 60, 120)
 QC_TRANSIENT_CODES = {429, 500, 502, 503, 504}
