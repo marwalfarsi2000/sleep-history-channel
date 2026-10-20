@@ -55,7 +55,7 @@ def run(responses, topic=TOPIC):
 
 class OutlineRetryTests(unittest.TestCase):
     def test_model_call_limit_constant(self) -> None:
-        self.assertEqual(generate_daily.OUTLINE_MAX_MODEL_CALLS, 4)
+        self.assertEqual(generate_daily.OUTLINE_MAX_MODEL_CALLS, 2)
 
     def test_1_valid_first_attempt_single_call(self) -> None:
         good = outline()
@@ -106,21 +106,22 @@ class OutlineRetryTests(unittest.TestCase):
         sections, gem = run([reply(bad)])
         self.assertEqual((gem.call_count, len(sections[1]["scenes"])), (1, 4))
 
-    def test_non_object_responses_are_validation_failures(self) -> None:
-        _, gem = run([("[1, 2]", []), reply([1, 2, 3]), reply(outline())])
-        self.assertEqual(gem.call_count, 3)
+    def test_non_object_responses_fail_after_one_correction(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "OUTLINE_GENERATION_FAILED_AFTER_RETRIES") as ctx:
+            run([("[1, 2]", []), reply([1, 2, 3])])
+        self.assertEqual(ctx.exception.gem.call_count, 2)
 
     def test_6_all_malformed_fail_with_last_error_after_the_call_limit(self) -> None:
         with self.assertRaisesRegex(RuntimeError, r"OUTLINE_GENERATION_FAILED_AFTER_RETRIES: JSONDecodeError") as ctx:
-            run([MALFORMED] * 4)
-        self.assertEqual(ctx.exception.gem.call_count, 4)
+            run([MALFORMED] * 2)
+        self.assertEqual(ctx.exception.gem.call_count, 2)
 
     def test_7_unrepairable_validation_failures_fail_with_last_error(self) -> None:
         with self.assertRaisesRegex(
             RuntimeError, r"OUTLINE_GENERATION_FAILED_AFTER_RETRIES: Outline must contain 7-10 macro sections"
         ) as ctx:
-            run([reply(outline(6))] * 4)
-        self.assertEqual(ctx.exception.gem.call_count, 4)
+            run([reply(outline(6))] * 2)
+        self.assertEqual(ctx.exception.gem.call_count, 2)
 
     def test_8_returns_last_successful_not_an_earlier_attempt(self) -> None:
         first, second = outline(6), outline(10)
@@ -153,13 +154,14 @@ class OutlineRetryTests(unittest.TestCase):
                 generate_daily.make_outline(TOPIC, "بحث")
         self.assertEqual(gem.call_count, 1)
 
-    def test_attempt_logging_is_safe_and_on_stderr(self) -> None:
+    def test_attempt_logging_is_safe_and_stops_after_one_correction(self) -> None:
         with mock.patch("sys.stderr") as err:
-            run([MALFORMED, reply(outline(6)), reply(outline())])
+            with self.assertRaises(RuntimeError):
+                run([MALFORMED, reply(outline(6))])
         written = "".join(call.args[0] for call in err.write.call_args_list)
         self.assertIn("OUTLINE_ATTEMPT=1 PARSE=FAIL VALIDATION=NOT_RUN", written)
         self.assertIn("OUTLINE_ATTEMPT=2 PARSE=PASS VALIDATION=FAIL", written)
-        self.assertIn("OUTLINE_ATTEMPT=3 PARSE=PASS VALIDATION=PASS", written)
+        self.assertNotIn("OUTLINE_ATTEMPT=3", written)
         self.assertNotIn("بحث", written)
 
 
