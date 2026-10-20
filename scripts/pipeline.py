@@ -1811,6 +1811,31 @@ async def synthesize(story: Path):
     record_stage(story, "synthesize", input_sha256=config_hash, output_hashes=output_hashes)
 
 
+def _audio_qc_tokens(text: str) -> list[str]:
+    """Tokenize Arabic ASR/source text for fidelity comparison without changing lexical content."""
+    bare = DIACRITICS_RE.sub("", text).replace("ـ", "")
+    return re.findall(r"[\u0621-\u064A]+|\d+", bare)
+
+
+def _audio_qc_diff(source_tokens: list[str], transcript_tokens: list[str], limit: int = 24) -> list[dict]:
+    """Return a bounded, non-secret token diff for diagnosing transcript mismatches."""
+    matcher = difflib.SequenceMatcher(None, source_tokens, transcript_tokens, autojunk=False)
+    changes = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        changes.append({
+            "tag": tag,
+            "source_range": [i1, i2],
+            "transcript_range": [j1, j2],
+            "source": source_tokens[i1:i2][:20],
+            "transcript": transcript_tokens[j1:j2][:20],
+        })
+        if len(changes) >= limit:
+            break
+    return changes
+
+
 def validate_audio(story: Path) -> dict:
     text_chunks = sorted((story / "tts_chunks").glob("*.txt"))
     audio_chunks = sorted((story / "audio_chunks").glob("*.mp3"))
@@ -1878,9 +1903,11 @@ def validate_audio(story: Path) -> dict:
                 continue
 
             transcript = transcribe_audio_for_qc(chunk, audio_qc_model)
-            source_tokens = re.findall(r"[\u0621-\u064A]+|\d+", DIACRITICS_RE.sub("", source))
-            transcript_tokens = re.findall(r"[\u0621-\u064A]+|\d+", DIACRITICS_RE.sub("", transcript))
-            similarity = difflib.SequenceMatcher(None, source_tokens, transcript_tokens).ratio()
+            source_tokens = _audio_qc_tokens(source)
+            transcript_tokens = _audio_qc_tokens(transcript)
+            # Natural-language token streams are long and intentionally repetitive. Disable
+            # SequenceMatcher's autojunk heuristic so common Arabic words remain valid anchors.
+            similarity = difflib.SequenceMatcher(None, source_tokens, transcript_tokens, autojunk=False).ratio()
             length_ratio = len(transcript_tokens) / max(len(source_tokens), 1)
             transcript_checks.append({
                 "chunk": chunk.name, "similarity": round(similarity, 4),
@@ -1889,6 +1916,20 @@ def validate_audio(story: Path) -> dict:
             if similarity < float(SETTINGS.get("audio_transcript_similarity_min", 0.82)) or not 0.8 <= length_ratio <= 1.2:
                 transcript_cache.pop(chunk.name, None)
                 cache_path.write_text(json.dumps(transcript_cache, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+                failure = {
+                    "chunk": chunk.name,
+                    "audio_sha256": chunk_sha,
+                    "source_sha256": source_sha,
+                    "similarity": round(similarity, 6),
+                    "length_ratio": round(length_ratio, 6),
+                    "source_token_count": len(source_tokens),
+                    "transcript_token_count": len(transcript_tokens),
+                    "transcript": transcript,
+                    "diff": _audio_qc_diff(source_tokens, transcript_tokens),
+                }
+                (logs / f"audio_qc_failure_{chunk.stem}.json").write_text(
+                    json.dumps(failure, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+                )
                 raise AudioTranscriptMismatch(chunk.name, similarity, length_ratio)
             transcript_cache[chunk.name] = {
                 "status": "passed",
