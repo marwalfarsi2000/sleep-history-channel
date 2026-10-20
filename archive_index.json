@@ -203,5 +203,27 @@
     "video_sha256": "a7b361cb8032189cc982bf1030f85040f8efe2180b8560a81873db455443cf23",
     "audio_duration_seconds": 3551.69,
     "video_duration_seconds": 3552.0
+  },
+  {
+    "identifier": "lan-tukmil-alqissa-20261021-aleppo-han-caravansary-ro",
+    "slug": "aleppo-han-caravansary-routine",
+    "title": "استراحة القوافل في خان مراد بحلب العثمانية | قصة تاريخية للنوم 😴",
+    "episode_title_core": "استراحة القوافل في خان مراد بحلب العثمانية",
+    "title_suffix": "قصة تاريخية للنوم 😴",
+    "final_youtube_title": "استراحة القوافل في خان مراد بحلب العثمانية | قصة تاريخية للنوم 😴",
+    "thumbnail_text": "غرف خان مراد",
+    "thumbnail_scene_type": "الأسواق وطرق التجارة",
+    "thumbnail_prompt": "Calm illustrated realism of a 17th-century Ottoman caravanserai courtyard in Aleppo at dusk with subtle painterly texture and premium storybook quality; low-key night lighting with a dim brass lantern casting a warm glow on stone archways, wooden doors, and stacked traveler supplies; palette of deep midnight navy, charcoal, muted warm gold, and aged ivory; one simple memorable scene focusing on a quiet arched corridor; mobile-first strong silhouette, no people, no modern objects, no text or typography of any kind rendered in the image. 16:9 YouTube thumbnail. Original composition. Professional quality.",
+    "historical_setting": "حلب، سوريا — القرن السابع عشر الميلادي",
+    "created_at": "2026-10-21T02:28:55.703788+04:00",
+    "status": "REVIEW_PENDING",
+    "video_filename": "14_video_final.mp4",
+    "item_url": "https://archive.org/details/lan-tukmil-alqissa-20261021-aleppo-han-caravansary-ro",
+    "video_url": "https://archive.org/download/lan-tukmil-alqissa-20261021-aleppo-han-caravansary-ro/14_video_final.mp4",
+    "thumbnail_url": "https://archive.org/download/lan-tukmil-alqissa-20261021-aleppo-han-caravansary-ro/11_thumbnail_base.jpg",
+    "video_size": 74404452,
+    "video_sha256": "0d18117adb6782997bc4e7784cadc055e02251773301319c713838d062b046ae",
+    "audio_duration_seconds": 4798.61,
+    "video_duration_seconds": 4799.0
   }
 ]

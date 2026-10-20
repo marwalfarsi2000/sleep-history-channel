@@ -556,9 +556,8 @@
     "slug": "aleppo-han-caravansary-routine",
     "topic": "تجهيز القوافل واستراحة المسافرين في خان مراد بجهينة وحلب القديمة",
     "angle": "تتبع يوم في حياة مشرف استراحة تجارية (خان) يجهز غرف المسافرين ويرتب مؤونة الخان في حلب خلال العصر العثماني المبكر.",
-    "story_path": "stories/2026-10-20_aleppo-han-caravansary-routine",
     "created_at": "2026-10-20T23:08:59.779939+04:00",
-    "status": "GENERATING",
+    "status": "REVIEW_PENDING",
     "topic_ar": "تجهيز القوافل واستراحة المسافرين في خان مراد بجهينة وحلب القديمة",
     "angle_ar": "تتبع يوم في حياة مشرف استراحة تجارية (خان) يجهز غرف المسافرين ويرتب مؤونة الخان في حلب خلال العصر العثماني المبكر.",
     "search_query_en": "aleppo historical khans caravansary daily life ottoman period trade",
@@ -660,6 +659,8 @@
     "one_sentence_summary_ar": "مشرف خان يرتب غرف الاستراحة لاستقبال قافلة مسافرين متعبة في حلب",
     "narrative_identity": "IMMERSIVE_LOW_STAKES_HISTORICAL_QUEST",
     "research_topic_alignment_status": "PASS",
-    "alignment_reason": "جميع عناصر العالم التاريخي المذكورة في الحبكة مدعومة بشكل مباشر من المصادر وخريطة الادعاءات الخاصة بتنظيم الخانات واستراحة المسافرين في حلب خلال العصر العثماني المبكر."
+    "alignment_reason": "جميع عناصر العالم التاريخي المذكورة في الحبكة مدعومة بشكل مباشر من المصادر وخريطة الادعاءات الخاصة بتنظيم الخانات واستراحة المسافرين في حلب خلال العصر العثماني المبكر.",
+    "archive_identifier": "lan-tukmil-alqissa-20261021-aleppo-han-caravansary-ro",
+    "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261021-aleppo-han-caravansary-ro"
   }
 ]
