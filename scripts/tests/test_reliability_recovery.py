@@ -379,13 +379,25 @@ def test_each_rejection_reason_gets_its_own_instruction():
     assert image_generate.rejection_gate(RuntimeError("IMAGE_ACCURACY_GATE_FAILED: URLError")) == {}
 
 
-def test_corrective_prompt_stays_under_the_provider_limit_and_never_duplicates():
-    long_prompt = "A paper workshop. " * 100
-    tightened = image_generate.tighten_prompt(long_prompt, {"no_text_or_watermark": False, "no_modern_objects": False,
-                                                            "historically_plausible": False, "topic_match": False})
-    assert len(tightened) <= 2048
+def test_corrective_prompt_never_drops_required_guards_or_duplicates():
+    safe_prompt = "A paper workshop. " * 20
+    tightened = image_generate.tighten_prompt(
+        safe_prompt,
+        {
+            "no_text_or_watermark": False,
+            "no_modern_objects": False,
+            "historically_plausible": False,
+            "topic_match": False,
+        },
+    )
+    assert len(tightened) <= image_generate.PROMPT_LIMIT + 1
     again = image_generate.tighten_prompt(tightened, {"no_text_or_watermark": False})
     assert again.count(image_generate.NO_TEXT_EXCLUSION) == 1
+    with pytest.raises(RuntimeError, match="IMAGE_PROMPT_TOO_LONG_FOR_REQUIRED_GUARD"):
+        image_generate.tighten_prompt(
+            "A paper workshop. " * 100,
+            {"no_text_or_watermark": False},
+        )
 
 
 def test_retry_loop_applies_the_targeted_prompt_logs_each_attempt_and_stays_on_the_image_stage(tmp_path):
@@ -405,9 +417,15 @@ def test_retry_loop_applies_the_targeted_prompt_logs_each_attempt_and_stays_on_t
     with mock.patch.dict(image_generate.SETTINGS, {"image_accuracy_retry_attempts": 3}), \
             mock.patch.object(image_generate, "generate", fake_generate):
         image_generate.generate_with_accuracy_retries(story, seed=5)
+    # The prompt file starts as authored; generate() adds mandatory guards to the
+    # provider request. After a quality rejection the persisted retry prompt also
+    # carries all mandatory guards plus the targeted escalation.
     assert image_generate.NO_TEXT_EXCLUSION not in prompts[0]
-    assert image_generate.NO_TEXT_EXCLUSION in prompts[1] and image_generate.MODERN_EXCLUSION not in prompts[1]
-    assert image_generate.MODERN_EXCLUSION in prompts[2] and image_generate.NO_TEXT_EXCLUSION in prompts[2]
+    assert image_generate.NO_TEXT_EXCLUSION in prompts[1]
+    assert image_generate.MODERN_EXCLUSION in prompts[1]
+    assert image_generate.TEXT_FREE_SURFACES in prompts[1]
+    assert image_generate.MODERN_EXCLUSION in prompts[2]
+    assert image_generate.NO_TEXT_EXCLUSION in prompts[2]
     attempts = json.loads((story / "logs/image_attempts.json").read_text(encoding="utf-8"))
     assert [a["outcome"] for a in attempts] == ["quality_rejection", "quality_rejection", "passed"]
     assert all(a["provider"] == "cloudflare_workers_ai" and a["model"] == "flux-1-schnell" for a in attempts)

@@ -54,7 +54,7 @@ class ImageCostGuardTests(unittest.TestCase):
                 image_generate.generate_with_accuracy_retries(Path("story"), seed=100)
         generate.assert_called_once()
 
-    def test_cloudflare_sends_original_prompt_and_supported_fields_only(self):
+    def test_cloudflare_sends_guarded_prompt_and_supported_fields_only(self):
         settings = dict(image_generate.SETTINGS)
         try:
             image_generate.SETTINGS["image_model"] = "@cf/black-forest-labs/flux-1-schnell"
@@ -195,7 +195,9 @@ class ImageCostGuardTests(unittest.TestCase):
                 ):
                     image_generate.generate(story, seed=123)
                 cloudflare.assert_called_once_with(
-                    "ORIGINAL DYNAMIC PROMPT", "account-id", "token"
+                    image_generate.base_generation_prompt("ORIGINAL DYNAMIC PROMPT"),
+                    "account-id",
+                    "token",
                 )
                 with Image.open(story / "10_background.png") as background:
                     self.assertEqual(background.size, (1920, 1080))
@@ -396,9 +398,33 @@ class AccuracyRetryRoutingTests(unittest.TestCase):
             prompts = [call.args[0] for call in cloudflare.call_args_list]
         self.assertEqual(cloudflare.call_count, 3)
         pollinations.assert_not_called()
-        self.assertNotIn("STRICT HISTORICAL EXCLUSION", prompts[0])
-        self.assertIn("STRICT HISTORICAL EXCLUSION", prompts[1])
-        self.assertIn("STRICT HISTORICAL EXCLUSION", prompts[2])
+        self.assertIn("NO TEXT ANYWHERE", prompts[0])
+        self.assertIn("STRICT HISTORICAL EXCLUSION", prompts[0])
+        self.assertIn("TEXT-FREE SURFACES", prompts[1])
+        self.assertIn("TEXT-FREE SURFACES", prompts[2])
+
+    def test_repeated_text_rejection_escalates_without_rewriting_other_constraints(self):
+        gate = {
+            "status": "FAIL",
+            "historically_plausible": True,
+            "no_modern_objects": True,
+            "no_text_or_watermark": False,
+            "topic_match": True,
+            "issues": ["calligraphy on wall"],
+        }
+        first = image_generate.tighten_prompt("A historical caravanserai", gate)
+        second = image_generate.tighten_prompt(first, gate)
+        self.assertIn("NO TEXT ANYWHERE", first)
+        self.assertIn("TEXT-FREE SURFACES", first)
+        self.assertNotIn("COMPOSITION SAFETY", first)
+        self.assertIn("COMPOSITION SAFETY", second)
+        self.assertEqual(second.count("NO TEXT ANYWHERE"), 1)
+        self.assertLessEqual(len(second.strip()), image_generate.PROMPT_LIMIT)
+
+    def test_required_image_guard_never_silently_drops_for_prompt_length(self):
+        too_long = "x" * image_generate.PROMPT_LIMIT
+        with self.assertRaisesRegex(RuntimeError, "IMAGE_PROMPT_TOO_LONG_FOR_REQUIRED_GUARD"):
+            image_generate.base_generation_prompt(too_long)
 
     def test_quality_rejection_is_not_a_provider_failure(self):
         cloudflare = mock.Mock(return_value=(b"x", {}))
