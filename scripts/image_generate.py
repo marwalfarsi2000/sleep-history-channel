@@ -537,13 +537,14 @@ def generate(story: Path, seed: int | None = None) -> None:
         _write_metadata(metadata_path, metadata)
         print(json.dumps({"status": "ok", "provider": "reused_background", "model": metadata.get("image_model", "")}))
         return
+    guarded_prompt = base_generation_prompt(original_prompt)
     legacy_prompt = (
         "Premium photorealistic editorial historical reconstruction, museum-quality material accuracy, "
         "natural human proportions, cinematic wide establishing shot, realistic architectural depth, "
         "subtle filmic lighting, detailed tactile materials, professional color grading, full-frame 16:9 composition. "
-        + original_prompt
-        + " Avoid cartoon, vector art, primitive shapes, clipart, fantasy, modern objects, distorted anatomy, "
-        "purple tint, blue tint, text, logos, watermarks, borders, letterboxing and black bars."
+        + guarded_prompt
+        + " Avoid cartoon, vector art, primitive shapes, clipart, distorted anatomy, purple tint, blue tint, "
+        "borders, letterboxing and black bars."
     )
     seed = seed if seed is not None else secrets.randbelow(2_147_483_647)
     temporary = story / "10_background.generating"
@@ -559,7 +560,7 @@ def generate(story: Path, seed: int | None = None) -> None:
                     raise RuntimeError(
                         "CLOUDFLARE_CREDENTIALS_MISSING: CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required"
                     )
-                image_bytes, provider_record = generate_cloudflare(original_prompt, account_id, api_token)
+                image_bytes, provider_record = generate_cloudflare(guarded_prompt, account_id, api_token)
             elif provider == "bytez":
                 api_key = secret_values.get("BYTEZ_API_KEY", "").strip()
                 if not api_key:
@@ -640,12 +641,40 @@ MODERN_EXCLUSION = (
     "or any other modern infrastructure."
 )
 NO_TEXT_EXCLUSION = (
-    "NO TEXT ANYWHERE: no letters, no words, no numbers, no signs, no inscriptions, no calligraphy, "
-    "no logos, no watermarks and no glyph-like markings on any surface."
+    "NO TEXT ANYWHERE: no letters, words, numbers, signs, plaques, inscriptions, calligraphy, logos, "
+    "watermarks or glyph-like markings on any surface."
+)
+TEXT_FREE_SURFACES = (
+    "TEXT-FREE SURFACES: walls, doors, arches, fabrics, crates and shopfronts must be blank and unlettered; "
+    "no carved script, painted script, decorative calligraphy, labels, posters, banners or signboards."
+)
+TEXT_SAFE_COMPOSITION = (
+    "COMPOSITION SAFETY: avoid framed panels, plaques, manuscript pages, banners, shop signs and ornamental "
+    "bands that could resemble writing; use plain stone, wood, plaster and fabric surfaces instead."
 )
 PERIOD_EXCLUSION = "Only period-correct architecture, clothing, tools and materials; no fantasy elements."
 TOPIC_MATCH_REQUIREMENT = "Show the described scene plainly and centrally; do not substitute another place or subject."
-PROMPT_LIMIT = 1990  # Cloudflare refuses prompts over 2048 characters; never truncate silently
+PROMPT_LIMIT = 1990  # reserve headroom under Cloudflare's 2048-character limit
+
+
+def _append_required_prompt_line(prompt: str, line: str) -> str:
+    result = prompt.rstrip()
+    if line in result:
+        return result
+    candidate = f"{result}\n\n{line}" if result else line
+    if len(candidate) > PROMPT_LIMIT:
+        raise RuntimeError(
+            f"IMAGE_PROMPT_TOO_LONG_FOR_REQUIRED_GUARD: {len(candidate)} characters would exceed {PROMPT_LIMIT}"
+        )
+    return candidate
+
+
+def base_generation_prompt(prompt: str) -> str:
+    """Every provider starts with the mandatory safety constraints, not only retries."""
+    result = prompt.strip()
+    for line in (NO_TEXT_EXCLUSION, MODERN_EXCLUSION, PERIOD_EXCLUSION):
+        result = _append_required_prompt_line(result, line)
+    return result
 
 
 def rejection_gate(error: Exception) -> dict:
@@ -679,15 +708,24 @@ def corrective_lines(gate: dict) -> list[str]:
 
 
 def tighten_prompt(prompt: str, gate: dict) -> str:
-    """Append only the missing corrective lines that still fit under the provider's prompt limit."""
-    result = prompt.rstrip()
+    """Escalate the exact rejected property; repeated text failures get stronger scene constraints."""
+    result = base_generation_prompt(prompt)
+    failed = {
+        key for key in ("no_text_or_watermark", "no_modern_objects", "historically_plausible", "topic_match")
+        if gate.get(key) is False
+    }
+    if not failed:
+        failed = {"no_text_or_watermark", "no_modern_objects"}
+
     for line in corrective_lines(gate):
-        if line in result:
-            continue
-        if len(result) + 2 + len(line) > PROMPT_LIMIT:
-            print("Corrective image instruction skipped: the prompt would exceed the provider limit", flush=True)
-            continue
-        result = f"{result}\n\n{line}"
+        result = _append_required_prompt_line(result, line)
+
+    if "no_text_or_watermark" in failed:
+        if TEXT_FREE_SURFACES not in result:
+            result = _append_required_prompt_line(result, TEXT_FREE_SURFACES)
+        elif TEXT_SAFE_COMPOSITION not in result:
+            result = _append_required_prompt_line(result, TEXT_SAFE_COMPOSITION)
+
     return result + "\n"
 
 
