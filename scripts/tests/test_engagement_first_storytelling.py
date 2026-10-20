@@ -230,15 +230,21 @@ class QualityRepairTests(unittest.TestCase):
         story_text = prefix + "\n\n" + busy_tail
         self.assertTrue(any("curiosity does not decay" in e for e in generate_daily.quest_rules.story_text_errors(story_text)))
 
-        repaired_tail = "أغلق إبراهيم النوافذ بهدوء، ورتب الأواني، ثم هدأت أروقة الخان مع المساء. " * 180
         gate_json = json.dumps(self.passing_gate(), ensure_ascii=False)
 
         def fake_gemini(prompt, *args, **kwargs):
+            if "الجمل الاستفهامية المتأخرة" in prompt:
+                count = prompt.count('"index":')
+                replacements = {
+                    "replacements": [
+                        {"index": i, "text": "استمر المساء بهدوء، وبقيت الحركة مألوفة داخل الخان."}
+                        for i in range(count)
+                    ]
+                }
+                return json.dumps(replacements, ensure_ascii=False), []
             if kwargs.get("json_mode"):
                 return gate_json, []
-            self.assertIn("أعد كتابة هذا المقطع وحده ليصبح أهدأ بوضوح", prompt)
-            self.assertIn("لا تفتح أي سؤال جديد", prompt)
-            return repaired_tail, []
+            raise AssertionError("late curiosity repair must not rewrite the whole ending")
 
         with tempfile.TemporaryDirectory() as directory:
             story = Path(directory)
@@ -255,8 +261,30 @@ class QualityRepairTests(unittest.TestCase):
             self.assertTrue(repaired.startswith(prefix[:200]))
             self.assertNotIn("؟", " ".join(repaired.split()[int(len(repaired.split()) * 0.8):]))
             self.assertEqual(generate_daily.quest_rules.story_text_errors(repaired), [])
-            self.assertEqual(gem.call_count, 2)  # one targeted repair + one semantic gate
+            self.assertEqual(gem.call_count, 2)  # one micro-repair + one semantic gate
             self.assertTrue(list((story / "logs").glob("quality_repair_01_ending.*")))
+            preserved, original_tail = generate_daily._story_split_at_fraction(story_text, 0.75)
+            _, repaired_tail = generate_daily._story_split_at_fraction(repaired, 0.75)
+            self.assertTrue(repaired.startswith(preserved[:500]))
+            # The repair is surgical: it removes questions without replacing the
+            # whole ending with a much shorter generated passage.
+            self.assertGreaterEqual(generate_daily.word_count(repaired_tail), int(generate_daily.word_count(original_tail) * 0.92))
+
+    def test_late_question_micro_repair_preserves_non_question_sentences(self) -> None:
+        target = "أغلق إبراهيم الباب بهدوء. هل بقي شيء؟ ثم جلس قرب المصباح. ماذا بعد؟ واستقر الخان."
+        details = {"deterministic": ["curiosity does not decay: x"]}
+        response = json.dumps({
+            "replacements": [
+                {"index": 0, "text": "بدا أن العمل أوشك على الاكتمال."},
+                {"index": 1, "text": "لم يبق إلا هدوء المساء."},
+            ]
+        }, ensure_ascii=False)
+        with mock.patch.object(generate_daily, "gemini", return_value=(response, [])):
+            repaired = generate_daily._repair_late_questions({"topic_ar": "خان"}, target, details)
+        self.assertIn("أغلق إبراهيم الباب بهدوء.", repaired)
+        self.assertIn("ثم جلس قرب المصباح.", repaired)
+        self.assertIn("واستقر الخان.", repaired)
+        self.assertNotRegex(repaired, r"[؟?]")
 
     def test_quality_repair_scope_is_targeted(self) -> None:
         self.assertEqual(
