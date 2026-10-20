@@ -1,6 +1,13 @@
 name: Sleep History Production
 
 on:
+  # Durable resume control for connected automation tools that can commit but cannot
+  # call GitHub's workflow_dispatch API. Updating this one marker never starts a new topic.
+  push:
+    branches:
+      - main
+    paths:
+      - ".ops/resume-only-trigger.json"
   workflow_dispatch:
     inputs:
       trigger_source:
@@ -83,6 +90,9 @@ jobs:
         run: |
           if [[ "${{ inputs.resume_archive_only }}" == "true" ]]; then
             python scripts/cloud_pipeline.py resume-review
+          elif [[ "$EVENT_NAME" == "push" ]]; then
+            # Marker-file pushes are an explicit resume-only control: never start a new episode.
+            python scripts/cloud_pipeline.py produce --resume-only
           elif [[ "$EVENT_NAME" == "schedule" && "$EVENT_SCHEDULE" != "30 8 * * *" ]]; then
             python scripts/cloud_pipeline.py produce --resume-only
           else
