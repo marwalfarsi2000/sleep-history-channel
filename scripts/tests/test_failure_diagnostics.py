@@ -154,8 +154,8 @@ def test_topic_gate_rejection():
 
 
 def test_only_transient_registry_entries_are_immediate_retry():
-    transient = failed(RuntimeError("CLOUDFLARE_NETWORK_ERROR: timeout"), "background")
-    validation = failed(RuntimeError("OUTLINE_GENERATION_FAILED_AFTER_RETRIES: bad"), "outline")
+    transient = registry.diagnose(RuntimeError("CLOUDFLARE_NETWORK_ERROR: timeout"), "background")
+    validation = registry.diagnose(RuntimeError("OUTLINE_GENERATION_FAILED_AFTER_RETRIES: bad"), "outline")
     assert transient["immediate_retry"] is True
     assert validation["immediate_retry"] is False
 
