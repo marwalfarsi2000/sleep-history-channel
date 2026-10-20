@@ -1811,9 +1811,20 @@ async def synthesize(story: Path):
     record_stage(story, "synthesize", input_sha256=config_hash, output_hashes=output_hashes)
 
 
+AUDIO_QC_ORTHOGRAPHY_TABLE = str.maketrans({
+    # ASR frequently returns phonetic Arabic spelling rather than editorial spelling.
+    # These forms do not change the spoken lexical identity we are validating.
+    "أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا",
+    "ة": "ه",
+    "ى": "ي",
+    "ؤ": "و",
+    "ئ": "ي",
+})
+
+
 def _audio_qc_tokens(text: str) -> list[str]:
-    """Tokenize Arabic ASR/source text for fidelity comparison without changing lexical content."""
-    bare = DIACRITICS_RE.sub("", text).replace("ـ", "")
+    """Tokenize Arabic for spoken-fidelity QC, normalizing ASR-only spelling variants."""
+    bare = DIACRITICS_RE.sub("", text).replace("ـ", "").translate(AUDIO_QC_ORTHOGRAPHY_TABLE)
     return re.findall(r"[\u0621-\u064A]+|\d+", bare)
 
 
