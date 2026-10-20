@@ -3,7 +3,7 @@
   "task_id": "sleep-history-resume-tlemcen-20261020",
   "source_failed_run": 39340600425,
   "story": "2026-10-19_tlemcen-zayyanid-textile-dyeing",
-  "reason": "Resume Tlemcen checkpoint with Audio QC diagnostics and autojunk-disabled comparison",
-  "sequence": 2,
-  "previous_failed_run": 39421771000
+  "reason": "Resume Tlemcen after Arabic ASR orthography normalization",
+  "sequence": 3,
+  "previous_failed_run": 39423607469
 }
