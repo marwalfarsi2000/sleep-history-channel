@@ -297,13 +297,13 @@ STORY_FORMATS = quest_rules.QUEST_FLAVORS
 STORY_PHASES = ("CALM_HOOK", "EXPLORATION", "SETTLE", "UNWIND", "SOFT_FADE")  # same names, quest meaning (rules 64-65)
 MIN_MACRO_SECTIONS, MAX_MACRO_SECTIONS = 7, 10
 MAX_SAME_FORMAT_IN_A_ROW = 2
-# Model calls, not blind retries: generate, then up to two targeted corrections that
-# list every error at once, then one full regeneration. Local repair runs before each rejection.
-OUTLINE_MAX_MODEL_CALLS = 4
+# Simple recovery contract: one initial model call + at most one local correction.
+# Validation failures never trigger a second whole-pipeline run inside the same job.
+OUTLINE_MAX_MODEL_CALLS = 2
 OUTLINE_RETRY_MAX = OUTLINE_MAX_MODEL_CALLS
 MIN_OUTLINE_TARGET_WORDS = 5500
-CHAPTER_EXPANSION_ATTEMPTS = 5
-STORY_QUALITY_REPAIR_ATTEMPTS = 2
+CHAPTER_EXPANSION_ATTEMPTS = 1
+STORY_QUALITY_REPAIR_ATTEMPTS = 1
 
 
 def chapter_minimum_words(target_words: int) -> int:
@@ -996,6 +996,68 @@ def _quality_repair_scope(details: dict) -> str | None:
     return None
 
 
+def _is_late_question_failure(details: dict) -> bool:
+    signal = " ".join([
+        *(str(item) for item in (details.get("deterministic") or [])),
+        *(str(item) for item in (details.get("issues") or [])),
+        *(str(key) for key, value in details.items() if value is False),
+    ]).lower()
+    return "curiosity does not decay" in signal or "no_late_new_question" in signal
+
+
+def _question_sentence_spans(text: str) -> list[tuple[int, int, str]]:
+    pattern = re.compile(r"(?:^|(?<=[.!؟?\n]))\s*([^.!؟?\n]*[؟?])", re.MULTILINE)
+    return [
+        (match.start(1), match.end(1), match.group(1).strip())
+        for match in pattern.finditer(text)
+        if match.group(1).strip()
+    ]
+
+
+def _repair_late_questions(topic: dict, target: str, details: dict) -> str:
+    """Repair only late question sentences; every other character stays untouched."""
+    spans = _question_sentence_spans(target)
+    if not spans:
+        raise RuntimeError("STORY_QUALITY_REPAIR_FAILED: no late question sentences were found")
+    prompt = f"""حوّل فقط الجمل الاستفهامية المتأخرة التالية إلى جمل خبرية هادئة تحمل المعنى نفسه قدر الإمكان.
+لا تضف حقيقة أو اسمًا أو حدثًا جديدًا، ولا تستخدم علامة استفهام في البدائل.
+أعد JSON فقط:
+{{"replacements":[{{"index":0,"text":"..."}}]}}
+
+الموضوع: {topic.get('topic_ar', '')}
+سبب الإصلاح: {json.dumps(details, ensure_ascii=False)}
+الجمل:
+{json.dumps([{"index": i, "text": span[2]} for i, span in enumerate(spans)], ensure_ascii=False)}
+"""
+    raw, _ = gemini(prompt, json_mode=True, max_tokens=3000, temperature=0.0)
+    result = parse_json_object(raw, "STORY_QUALITY_REPAIR_SCHEMA_FAILED")
+    replacements = result.get("replacements")
+    if not isinstance(replacements, list):
+        raise RuntimeError("STORY_QUALITY_REPAIR_FAILED: replacements must be a list")
+    mapped: dict[int, str] = {}
+    for item in replacements:
+        if not isinstance(item, dict):
+            continue
+        try:
+            index = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        replacement = str(item.get("text", "")).strip()
+        if 0 <= index < len(spans) and replacement and not re.search(r"[؟?]", replacement):
+            if replacement[-1:] not in ".!…":
+                replacement += "."
+            mapped[index] = replacement
+    if len(mapped) != len(spans):
+        raise RuntimeError(
+            f"STORY_QUALITY_REPAIR_FAILED: expected {len(spans)} replacements, got {len(mapped)}"
+        )
+    repaired = target
+    for index in range(len(spans) - 1, -1, -1):
+        start, end, _ = spans[index]
+        repaired = repaired[:start] + mapped[index] + repaired[end:]
+    return repaired
+
+
 def _quality_repair_prompt(
     *, topic: dict, research: str, scope: str, details: dict,
     target_text: str, context_before: str = "",
@@ -1089,22 +1151,30 @@ def repair_story_quality(
         preserved, target, context = "", story_text, ""
         max_tokens = 16000
 
-    prompt = _quality_repair_prompt(
-        topic=topic, research=research, scope=scope, details=details,
-        target_text=target, context_before=context,
-    )
-    repaired, _ = gemini(prompt, max_tokens=max_tokens, temperature=0.15)
-    repaired = repaired.strip()
-    if not repaired:
-        raise RuntimeError("STORY_QUALITY_REPAIR_FAILED: model returned empty text")
-
     original_target_words = word_count(target)
-    repaired_target_words = word_count(repaired)
-    if repaired_target_words < max(250, int(original_target_words * 0.70)):
-        raise RuntimeError(
-            f"STORY_QUALITY_REPAIR_FAILED: {scope} repair shrank from "
-            f"{original_target_words} to {repaired_target_words} Arabic words"
+    if scope == "ending" and _is_late_question_failure(details):
+        repaired = _repair_late_questions(topic, target, details).strip()
+        repaired_target_words = word_count(repaired)
+        if abs(repaired_target_words - original_target_words) > max(40, int(original_target_words * 0.08)):
+            raise RuntimeError(
+                f"STORY_QUALITY_REPAIR_FAILED: late-question repair changed length too much "
+                f"({original_target_words} -> {repaired_target_words})"
+            )
+    else:
+        prompt = _quality_repair_prompt(
+            topic=topic, research=research, scope=scope, details=details,
+            target_text=target, context_before=context,
         )
+        repaired, _ = gemini(prompt, max_tokens=max_tokens, temperature=0.15)
+        repaired = repaired.strip()
+        if not repaired:
+            raise RuntimeError("STORY_QUALITY_REPAIR_FAILED: model returned empty text")
+        repaired_target_words = word_count(repaired)
+        if repaired_target_words < max(250, int(original_target_words * 0.70)):
+            raise RuntimeError(
+                f"STORY_QUALITY_REPAIR_FAILED: {scope} repair shrank from "
+                f"{original_target_words} to {repaired_target_words} Arabic words"
+            )
 
     if scope == "ending":
         candidate = f"{preserved.rstrip()}\n\n{repaired}"
@@ -1260,18 +1330,16 @@ def finalize_story_text(story: Path, topic: dict, research: str, draft: str) -> 
             and manifest.get("fact_check", {}).get("status") == "PASS"
         ):
             return final_path.read_text(encoding="utf-8").strip(), manifest["quality_gate"], manifest["fact_check"]
-    quality_story, _ = ensure_story_quality(
-        story, topic, research, draft, label="pre_fact_check"
-    )
-    final_story, fact_check = fact_check_story(topic, research, quality_story)
-    fact_checked_story = final_story
+    # One final quality stage only: fact-check first, then validate the exact prose
+    # that will be narrated. The quality stage gets one local repair attempt.
+    final_story, fact_check = fact_check_story(topic, research, draft)
+    before_quality_repair = final_story
     final_story, final_quality = ensure_story_quality(
-        story, topic, research, final_story, label="post_fact_check"
+        story, topic, research, final_story, label="final"
     )
-    # If the final quality repair changed fact-checked prose, verify facts again.
-    # A correction pass may alter only factual wording, so quality is checked once
-    # more after it. If that rare cycle still fails, we stop rather than loop.
-    if final_story != fact_checked_story:
+    # If that single quality repair changed prose, verify facts once more. Do not
+    # start another repair cycle: a remaining quality failure stops with checkpoint.
+    if final_story != before_quality_repair:
         final_story, fact_check = fact_check_story(topic, research, final_story)
         final_quality = validate_story_quality(topic, final_story)
     write(final_path, final_story)
@@ -1422,7 +1490,7 @@ Premise الحلقة:
             # because the model often returned less than a 100-word continuation.
             # Ask for a useful minimum continuation while still staying within the
             # section's target + 150-word envelope for the deficits we permit here.
-            request_words = max(250, missing + 200)
+            request_words = max(350, missing + 300)
             continuation_prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
 {rules}
 
