@@ -2130,6 +2130,29 @@ def completed_artifacts_are_current(story: Path) -> bool:
     if metadata.get("youtube_packaging_status"):
         if metadata.get("youtube_packaging_validation_status") != "passed" or metadata.get("thumbnail_text_render_status") != "passed":
             return False
+
+    # The whole-pipeline fast path must not accept a thumbnail whose Canva inputs
+    # changed after the image stage last ran. File hashes alone only prove the
+    # existing thumbnail is intact, not that it matches the current hook/prompt.
+    thumbnail_text = str(metadata.get("thumbnail_text", "")).strip()
+    if thumbnail_text:
+        import canva_thumbnail
+
+        scene_path = story / "08_image_prompt_en.txt"
+        scene_prompt = scene_path.read_text(encoding="utf-8").strip() if scene_path.exists() else ""
+        try:
+            effective_thumbnail_prompt = canva_thumbnail.build_background_prompt(
+                str(metadata.get("thumbnail_prompt", "")).strip(),
+                scene_prompt,
+            )
+        except canva_thumbnail.CanvaError:
+            return False
+        if metadata.get("thumbnail_input_sha256") != canva_thumbnail.input_identity(
+            thumbnail_text,
+            effective_thumbnail_prompt,
+        ):
+            return False
+
     expected = {
         "clean_story_sha256": story / "05_story_clean.md",
         "tts_normalized_sha256": story / "05b_story_tts_normalized.md",
