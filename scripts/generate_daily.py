@@ -996,6 +996,83 @@ def _quality_repair_scope(details: dict) -> str | None:
     return None
 
 
+def _is_late_question_failure(details: dict) -> bool:
+    signal = " ".join([
+        *(str(item) for item in (details.get("deterministic") or [])),
+        *(str(item) for item in (details.get("issues") or [])),
+        *(str(key) for key, value in details.items() if value is False),
+    ]).lower()
+    return "curiosity does not decay" in signal or "no_late_new_question" in signal
+
+
+def _question_sentence_spans(text: str) -> list[tuple[int, int, str]]:
+    """Return only sentences/clauses that actually contain a question mark."""
+    pattern = re.compile(r"(?:^|(?<=[.!؟?\n]))\s*([^.!؟?\n]*[؟?])", re.MULTILINE)
+    spans: list[tuple[int, int, str]] = []
+    for match in pattern.finditer(text):
+        start, end = match.span(1)
+        sentence = match.group(1).strip()
+        if sentence:
+            spans.append((start, end, sentence))
+    return spans
+
+
+def _repair_late_questions(topic: dict, target: str, details: dict) -> str:
+    spans = _question_sentence_spans(target)
+    if not spans:
+        raise RuntimeError("STORY_QUALITY_REPAIR_FAILED: late-question gate found no question sentences")
+
+    numbered = [{"index": i, "text": sentence} for i, (_, _, sentence) in enumerate(spans)]
+    prompt = f"""أنت تصلح فقط الجمل الاستفهامية المتأخرة في قصة نوم تاريخية.
+سبب الرفض: {json.dumps(details, ensure_ascii=False)}
+الموضوع: {topic.get('topic_ar', '')}
+
+حوّل كل جملة أدناه إلى جملة خبرية هادئة تحمل المعنى نفسه قدر الإمكان.
+قواعد صارمة:
+- لا تضف معلومة أو اسمًا أو حدثًا جديدًا.
+- لا تحذف الفكرة الموجودة.
+- لا تستخدم علامة استفهام عربية أو إنجليزية في البديل.
+- لا تحولها إلى تشويق أو teaser.
+- اجعلها طبيعية داخل سرد نوم بالغ وهادئ.
+- أعد JSON واحدًا فقط بهذا الشكل:
+{{"replacements":[{{"index":0,"text":"..."}}]}}
+
+الجمل:
+{json.dumps(numbered, ensure_ascii=False, indent=2)}
+"""
+    raw, _ = gemini(prompt, json_mode=True, max_tokens=3000, temperature=0.0)
+    result = parse_json_object(raw, "STORY_QUALITY_REPAIR_SCHEMA_FAILED")
+    replacements = result.get("replacements")
+    if not isinstance(replacements, list):
+        raise RuntimeError("STORY_QUALITY_REPAIR_FAILED: replacements must be a list")
+
+    mapped: dict[int, str] = {}
+    for item in replacements:
+        if not isinstance(item, dict):
+            continue
+        try:
+            index = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        replacement = str(item.get("text", "")).strip()
+        if index < 0 or index >= len(spans) or not replacement or re.search(r"[؟?]", replacement):
+            continue
+        if replacement[-1:] not in ".!…":
+            replacement += "."
+        mapped[index] = replacement
+
+    if len(mapped) != len(spans):
+        raise RuntimeError(
+            f"STORY_QUALITY_REPAIR_FAILED: expected {len(spans)} question replacements, got {len(mapped)}"
+        )
+
+    repaired = target
+    for index in range(len(spans) - 1, -1, -1):
+        start, end, _ = spans[index]
+        repaired = repaired[:start] + mapped[index] + repaired[end:]
+    return repaired
+
+
 def _quality_repair_prompt(
     *, topic: dict, research: str, scope: str, details: dict,
     target_text: str, context_before: str = "",
@@ -1089,22 +1166,34 @@ def repair_story_quality(
         preserved, target, context = "", story_text, ""
         max_tokens = 16000
 
-    prompt = _quality_repair_prompt(
-        topic=topic, research=research, scope=scope, details=details,
-        target_text=target, context_before=context,
-    )
-    repaired, _ = gemini(prompt, max_tokens=max_tokens, temperature=0.15)
-    repaired = repaired.strip()
-    if not repaired:
-        raise RuntimeError("STORY_QUALITY_REPAIR_FAILED: model returned empty text")
-
     original_target_words = word_count(target)
-    repaired_target_words = word_count(repaired)
-    if repaired_target_words < max(250, int(original_target_words * 0.70)):
-        raise RuntimeError(
-            f"STORY_QUALITY_REPAIR_FAILED: {scope} repair shrank from "
-            f"{original_target_words} to {repaired_target_words} Arabic words"
+    if scope == "ending" and _is_late_question_failure(details):
+        # Do not rewrite a quarter of a valid story merely to reduce late curiosity.
+        # Replace only the sentences that carry question marks; every other byte of
+        # the ending remains untouched.
+        repaired = _repair_late_questions(topic, target, details).strip()
+        repaired_target_words = word_count(repaired)
+        if abs(repaired_target_words - original_target_words) > max(40, int(original_target_words * 0.08)):
+            raise RuntimeError(
+                f"STORY_QUALITY_REPAIR_FAILED: late-question micro-repair changed length too much "
+                f"({original_target_words} -> {repaired_target_words})"
+            )
+    else:
+        prompt = _quality_repair_prompt(
+            topic=topic, research=research, scope=scope, details=details,
+            target_text=target, context_before=context,
         )
+        repaired, _ = gemini(prompt, max_tokens=max_tokens, temperature=0.15)
+        repaired = repaired.strip()
+        if not repaired:
+            raise RuntimeError("STORY_QUALITY_REPAIR_FAILED: model returned empty text")
+
+        repaired_target_words = word_count(repaired)
+        if repaired_target_words < max(250, int(original_target_words * 0.70)):
+            raise RuntimeError(
+                f"STORY_QUALITY_REPAIR_FAILED: {scope} repair shrank from "
+                f"{original_target_words} to {repaired_target_words} Arabic words"
+            )
 
     if scope == "ending":
         candidate = f"{preserved.rstrip()}\n\n{repaired}"
