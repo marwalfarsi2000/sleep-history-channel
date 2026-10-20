@@ -78,6 +78,29 @@ class TtsGuardTests(unittest.TestCase):
             self.assertTrue((story / "logs" / "tts_normalization.json").exists())
             self.assertEqual(gemini.call_count, 2)
 
+    def test_tts_normalizer_expands_arabic_unit_abbreviation_to_spoken_form(self):
+        source = "بلغ طول اللوح 12 سم."
+        spoken = "بلغ طول اللوح اثني عشر سنتيمترا."
+        semantic_pass = json.dumps({
+            "status": "PASS",
+            "meaning_preserved": True,
+            "context_resolved": True,
+            "natural_spoken_arabic": True,
+            "remaining_ambiguities": [],
+            "issues": [],
+        }, ensure_ascii=False)
+        with tempfile.TemporaryDirectory() as directory:
+            story = Path(directory)
+            (story / "logs").mkdir()
+            with mock.patch.object(
+                pipeline, "gemini", side_effect=[(spoken, []), (semantic_pass, [])]
+            ):
+                result = pipeline.normalize_for_tts(source, story)
+        self.assertEqual(result, spoken)
+        self.assertNotIn("سم", result)
+        self.assertIn("سنتيمتر", result)
+        self.assertEqual(pipeline.speech_safe_violations(result), [])
+
     def test_tts_normalizer_skips_llm_when_text_is_already_speech_safe(self):
         source = "في سنة ألف ومئتين وثمانية وخمسين ميلادية، بدأ الصباح بهدوء."
         with tempfile.TemporaryDirectory() as directory:
@@ -88,13 +111,18 @@ class TtsGuardTests(unittest.TestCase):
             self.assertEqual(result, source)
             gemini.assert_not_called()
 
-    def test_pausal_form_removes_all_marks_from_every_sentence_final_word(self):
+    def test_final_tts_text_removes_all_arabic_diacritics(self):
         source = "في مَدِينَةٍ عَمِيقَةٍ، كانَتِ الرِّحْلَةُ عَمِيقَةً؟ ثُمَّ عادَ المُسَافِرُ!"
         result = pipeline.api_text(source)
-        self.assertIn("مَدِينَةٍ عَمِيقَةٍ،", result)
-        self.assertIn("الرِّحْلَةُ عميقة؟", result)
+        self.assertIn("في مدينة عميقة، كانت الرحلة عميقة؟", result)
         self.assertTrue(result.endswith("المسافر!"))
+        self.assertEqual(pipeline.DIACRITICS_RE.findall(result), [])
         self.assertEqual(pipeline.vocalized_sentence_final_words(result), [])
+        pipeline.require_no_tts_diacritics(result)
+
+    def test_final_tts_diacritic_guard_fails_closed(self):
+        with self.assertRaisesRegex(RuntimeError, "TTS_DIACRITICS_FORBIDDEN"):
+            pipeline.require_no_tts_diacritics("هذا نَصّ مشكول.")
 
     def test_pausal_guard_finds_any_vocalized_sentence_final_word(self):
         self.assertEqual(
