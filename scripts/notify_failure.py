@@ -162,10 +162,18 @@ def _failure_message(summary: dict, stage: str, resume: str, error: str, run_url
         lines.append(f"🔁 حاول النظام الاستئناف تلقائيًا {attempts} مرة دون نجاح.")
     policy = summary.get("recovery_policy") if "recovery_policy" in summary else "LEGACY"
     if policy == failure_registry.AUTO_RECOVERABLE:
-        lines.append("🔄 يستطيع النظام معالجة هذا تلقائيًا." + (
-            f" سيُستأنف من آخر نقطة محفوظة{f' ({html.escape(resume)})' if resume else ''}."
-            if summary.get("checkpoint_saved") else ""
-        ))
+        if summary.get("immediate_retry"):
+            lines.append("🔄 عطل خارجي مؤقت؛ سيحاول النظام مرة واحدة تلقائيًا.")
+        elif summary.get("retryable"):
+            if summary.get("checkpoint_saved"):
+                lines.append(
+                    "💾 تم حفظ نقطة الاستئناف. لن يعيد هذا التشغيل نفس المحاولة؛ "
+                    f"التشغيل المجدول التالي سيكمل من آخر نقطة محفوظة{f' ({html.escape(resume)})' if resume else ''}."
+                )
+            else:
+                lines.append("⏭️ لن يعيد هذا التشغيل المحاولة؛ سيحاول التشغيل المجدول التالي تلقائيًا.")
+        else:
+            lines.append("⛔ استُنفد الإصلاح المحلي؛ لن يُعاد نفس المحتوى تلقائيًا داخل هذا التشغيل.")
     elif policy == failure_registry.OWNER_ACTION:
         action = (known.action_ar if known else "") or str(summary.get("owner_action") or summary.get("recommended_action") or "")
         lines.append(f"👤 يلزم منك: <code>{html.escape(action)}</code>")

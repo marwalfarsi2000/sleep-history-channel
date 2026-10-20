@@ -106,8 +106,8 @@ def test_a_failing_durable_save_never_fails_production(tmp_path, monkeypatch):
 
 # ---- 9/10. bounded automatic recovery ----------------------------------------------------------------
 
-def test_auto_recoverable_failure_is_retried_inside_the_job_from_the_checkpoint(monkeypatch, sleeps):
-    first = failing_produce("OUTLINE_GENERATION_FAILED_AFTER_RETRIES: x")
+def test_only_transient_failure_is_retried_once_inside_the_job(monkeypatch, sleeps):
+    first = failing_produce("CLOUDFLARE_NETWORK_ERROR: timeout")
     calls = []
 
     def sequence():
@@ -120,26 +120,31 @@ def test_auto_recoverable_failure_is_retried_inside_the_job_from_the_checkpoint(
     assert len(calls) == 2 and sleeps == [30]
     summary = run_summary.load()
     assert summary["auto_recovery_attempted"] is True and len(summary["auto_recovery_log"]) == 1
-    assert summary["auto_recovery_log"][0]["error_code"] == "OUTLINE_GENERATION_FAILED_AFTER_RETRIES"
-    assert summary["checkpoint_saved"] is True            # the same checkpoint is reused, not rebuilt
+    assert summary["auto_recovery_log"][0]["error_code"] == "CLOUDFLARE_NETWORK_ERROR"
+    assert summary["checkpoint_saved"] is True
     run_summary.finish()
     assert run_summary.load()["status"] == "success"
 
 
-@pytest.mark.parametrize("message", [
-    "OUTLINE_GENERATION_FAILED_AFTER_RETRIES: x",     # validation, limit 2
-    "CLOUDFLARE_NETWORK_ERROR: timeout",              # transient, capped by the job-wide limit
-])
-def test_recovery_never_loops_forever(monkeypatch, sleeps, message):
-    fake = mock.Mock(side_effect=failing_produce(message))
+def test_transient_recovery_is_one_retry_only(monkeypatch, sleeps):
+    fake = mock.Mock(side_effect=failing_produce("CLOUDFLARE_NETWORK_ERROR: timeout"))
     monkeypatch.setattr(cloud_pipeline, "produce", fake)
     with pytest.raises(RuntimeError):
         cloud_pipeline.produce_with_recovery()
-    assert fake.call_count == 1 + cloud_pipeline.MAX_AUTORECOVERY_ATTEMPTS
-    assert sleeps == [30, 90]
+    assert fake.call_count == 2
+    assert sleeps == [30]
     summary = run_summary.load()
-    assert summary["status"] == "failed" and len(summary["auto_recovery_log"]) == 2
+    assert summary["status"] == "failed" and len(summary["auto_recovery_log"]) == 1
     assert "🔁" in notify_failure.build_message("https://run")
+
+
+def test_validation_failure_is_never_globally_retried(monkeypatch, sleeps):
+    fake = mock.Mock(side_effect=failing_produce("OUTLINE_GENERATION_FAILED_AFTER_RETRIES: x"))
+    monkeypatch.setattr(cloud_pipeline, "produce", fake)
+    with pytest.raises(RuntimeError):
+        cloud_pipeline.produce_with_recovery()
+    assert fake.call_count == 1
+    assert sleeps == []
 
 
 @pytest.mark.parametrize("message, checkpoint", [
@@ -162,11 +167,17 @@ def test_only_safe_failures_are_retried(monkeypatch, sleeps, message, checkpoint
     assert fake.call_count == 1 and sleeps == []
 
 
-def test_topic_discovery_can_retry_without_a_checkpoint(monkeypatch, sleeps):
-    outcomes = [failing_produce("TOPIC_DISCOVERY_FAILED: fewer than 4 valid candidates", checkpoint=False,
-                                stage="topic_selection"), lambda: {"ok": True}]
-    monkeypatch.setattr(cloud_pipeline, "produce", lambda: outcomes.pop(0)())
-    assert cloud_pipeline.produce_with_recovery() == {"ok": True}
+def test_topic_discovery_does_not_blind_retry_without_a_checkpoint(monkeypatch, sleeps):
+    fake = mock.Mock(side_effect=failing_produce(
+        "TOPIC_DISCOVERY_FAILED: fewer than 4 valid candidates",
+        checkpoint=False,
+        stage="topic_selection",
+    ))
+    monkeypatch.setattr(cloud_pipeline, "produce", fake)
+    with pytest.raises(RuntimeError):
+        cloud_pipeline.produce_with_recovery()
+    assert fake.call_count == 1
+    assert sleeps == []
 
 
 def test_recovery_stops_late_in_the_job():
@@ -174,15 +185,15 @@ def test_recovery_stops_late_in_the_job():
                "checkpoint_saved": True, "failed_stage": "outline", "max_attempts": 2}
     assert cloud_pipeline.recovery_decision(summary, 0, 10)[0] is True
     assert cloud_pipeline.recovery_decision(summary, 0, cloud_pipeline.AUTORECOVERY_DEADLINE_SECONDS + 1)[0] is False
-    assert cloud_pipeline.recovery_decision(summary, 2, 10)[0] is False
+    assert cloud_pipeline.recovery_decision(summary, 1, 10)[0] is False
 
 
 def test_the_same_error_code_is_not_retried_past_its_limit():
-    log = [{"error_code": "X"}, {"error_code": "X"}]
+    log = [{"error_code": "X"}]
     summary = {"status": "failed", "recovery_policy": "AUTO_RECOVERABLE", "immediate_retry": True,
                "checkpoint_saved": True, "failed_stage": "outline", "error_code": "X",
-               "max_attempts": 3, "auto_recovery_log": log}
-    assert cloud_pipeline.recovery_decision(summary, 1, 0)[0] is False
+               "max_attempts": 1, "auto_recovery_log": log}
+    assert cloud_pipeline.recovery_decision(summary, 0, 0)[0] is False
 
 
 # ---- resume-only scheduled passes ---------------------------------------------------------------------
@@ -609,12 +620,11 @@ def test_tripoli_resumes_the_same_episode_reanchors_repairs_the_outline_and_reac
         {"status": status, "supported_elements": ["الميناء"], "unsupported_elements": list(unsupported), "reason": "r"},
         ensure_ascii=False), [])
     wrong_scenes = [section(i) for i in range(7)]
-    wrong_scenes[3]["scenes"] = wrong_scenes[3]["scenes"][:1]                    # Run 65, attempt 1
-    wrong_count = [section(i) for i in range(6)]                                  # attempt 2: six sections
-    total_5250 = [section(i) for i in range(7)]                                   # attempt 3: 7 x 750 = 5250
+    wrong_scenes[3]["scenes"] = wrong_scenes[3]["scenes"][:1]                    # first outline response
+    total_5250 = [section(i) for i in range(7)]                                   # one corrected response; total fixed locally
     replies = iter([
         verdict("REANCHOR_REQUIRED", ["السجاد"]), (json.dumps(anchored, ensure_ascii=False), []), verdict("PASS"),
-        reply(wrong_scenes), reply(wrong_count), reply(total_5250),
+        reply(wrong_scenes), reply(total_5250),
     ])
     stages: list[tuple[str, str | None]] = []
     monkeypatch.setattr(generate_daily, "durable_checkpoint", lambda story, done, nxt: stages.append((done, nxt)))
@@ -630,7 +640,7 @@ def test_tripoli_resumes_the_same_episode_reanchors_repairs_the_outline_and_reac
         with pytest.raises(Reached):
             generate_daily.resume_partial_story(folder)
     choose.assert_not_called(); choose_valid.assert_not_called(); research.assert_not_called()   # same episode, same research
-    assert gem.call_count == 6
+    assert gem.call_count == 5
     saved_topic = json.loads((folder / "logs/topic.json").read_text(encoding="utf-8"))
     assert saved_topic["slug"] == TRIPOLI["slug"] and saved_topic["angle_ar"] == anchored["angle_ar"]
     assert saved_topic["research_topic_alignment_status"] == "PASS"

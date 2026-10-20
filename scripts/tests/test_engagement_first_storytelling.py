@@ -230,15 +230,25 @@ class QualityRepairTests(unittest.TestCase):
         story_text = prefix + "\n\n" + busy_tail
         self.assertTrue(any("curiosity does not decay" in e for e in generate_daily.quest_rules.story_text_errors(story_text)))
 
-        repaired_tail = "أغلق إبراهيم النوافذ بهدوء، ورتب الأواني، ثم هدأت أروقة الخان مع المساء. " * 180
         gate_json = json.dumps(self.passing_gate(), ensure_ascii=False)
 
         def fake_gemini(prompt, *args, **kwargs):
+            if "حوّل فقط الجمل الاستفهامية المتأخرة" in prompt:
+                items = json.loads(prompt.split("الجمل:\n", 1)[1])
+                return json.dumps({
+                    "replacements": [
+                        {
+                            "index": item["index"],
+                            "text": " ".join(
+                                ["استمر"] + ["الهدوء"] * max(0, generate_daily.word_count(item["text"]) - 1)
+                            ) + ".",
+                        }
+                        for item in items
+                    ]
+                }, ensure_ascii=False), []
             if kwargs.get("json_mode"):
                 return gate_json, []
-            self.assertIn("أعد كتابة هذا المقطع وحده ليصبح أهدأ بوضوح", prompt)
-            self.assertIn("لا تفتح أي سؤال جديد", prompt)
-            return repaired_tail, []
+            raise AssertionError("late curiosity must use question-only repair")
 
         with tempfile.TemporaryDirectory() as directory:
             story = Path(directory)
@@ -255,8 +265,28 @@ class QualityRepairTests(unittest.TestCase):
             self.assertTrue(repaired.startswith(prefix[:200]))
             self.assertNotIn("؟", " ".join(repaired.split()[int(len(repaired.split()) * 0.8):]))
             self.assertEqual(generate_daily.quest_rules.story_text_errors(repaired), [])
-            self.assertEqual(gem.call_count, 2)  # one targeted repair + one semantic gate
+            self.assertEqual(gem.call_count, 2)  # one local repair + one final gate
             self.assertTrue(list((story / "logs").glob("quality_repair_01_ending.*")))
+
+    def test_quality_stage_has_one_repair_attempt_only(self) -> None:
+        self.assertEqual(generate_daily.STORY_QUALITY_REPAIR_ATTEMPTS, 1)
+
+    def test_finalize_runs_one_final_quality_stage_after_fact_check(self) -> None:
+        draft = "كلمة " * 5200
+        passed = {"status": "PASS"}
+        with tempfile.TemporaryDirectory() as directory:
+            story = Path(directory)
+            (story / "logs").mkdir()
+            with mock.patch.object(generate_daily, "fact_check_story", return_value=(draft, passed)) as fact, \
+                    mock.patch.object(generate_daily, "ensure_story_quality", return_value=(draft, passed)) as quality:
+                result, quality_result, fact_result = generate_daily.finalize_story_text(
+                    story, {"topic_ar": "ت", "angle_ar": "ز"}, "بحث", draft
+                )
+        self.assertEqual(result, draft)
+        self.assertEqual((quality_result, fact_result), (passed, passed))
+        fact.assert_called_once()
+        quality.assert_called_once()
+        self.assertEqual(quality.call_args.kwargs["label"], "final")
 
     def test_quality_repair_scope_is_targeted(self) -> None:
         self.assertEqual(

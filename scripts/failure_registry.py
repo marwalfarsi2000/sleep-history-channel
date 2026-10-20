@@ -47,7 +47,13 @@ class Failure:
     @property
     def immediate_retry(self) -> bool:
         """Worth another bounded attempt in the same job (quota waits and free-limit blocks are not)."""
-        return self.policy == AUTO_RECOVERABLE and self.retryable and not self.planned_wait and not self.cost_blocked
+        return (
+            self.policy == AUTO_RECOVERABLE
+            and self.retryable
+            and self.category == TRANSIENT
+            and not self.planned_wait
+            and not self.cost_blocked
+        )
 
     @property
     def max_attempts(self) -> int:

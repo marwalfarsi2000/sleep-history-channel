@@ -87,7 +87,7 @@ class ChapterLengthTests(unittest.TestCase):
             story, gemini = self.draft([(words(250), [])], folder)
         self.assertEqual(gemini.call_count, 1)
         self.assertGreaterEqual(generate_daily.word_count(story), 765)
-        self.assertIn("بنحو 250 كلمة عربية", gemini.call_args.args[0])
+        self.assertIn("بنحو 350 كلمة عربية", gemini.call_args.args[0])
 
     def test_chapter_that_never_reaches_minimum_fails_closed(self):
         final_count = 702 + (5 * generate_daily.CHAPTER_EXPANSION_ATTEMPTS)
