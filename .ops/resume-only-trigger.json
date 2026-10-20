@@ -1,8 +1,8 @@
 {
   "request": "resume_only",
-  "task_id": "sleep-history-resume-aleppo-quality-20261021",
-  "source_failed_run": 39483526995,
+  "task_id": "sleep-history-resume-aleppo-simplified-20261021",
+  "source_failed_run": 39497352980,
   "story": "2026-10-20_aleppo-han-caravansary-routine",
-  "reason": "Resume Aleppo after targeted story quality repair",
-  "sequence": 5
+  "reason": "Resume Aleppo on simplified one-repair pipeline",
+  "sequence": 6
 }
