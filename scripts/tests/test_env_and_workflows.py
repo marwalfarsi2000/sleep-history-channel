@@ -47,9 +47,11 @@ def test_production_resume_only_schedules_never_start_a_new_topic():
     assert 'cron: "30 8 * * *"' in production                      # the one daily production pass
     extra = re.findall(r'cron: "(30 \d+ \* \* \*)"', production)
     assert len(extra) == 3
-    assert 'EVENT_SCHEDULE" != "30 8 * * *"' in production
-    assert "produce --resume-only" in production
-    assert production.index("produce --resume-only") < production.index("python scripts/cloud_pipeline.py produce\n")
+    schedule_condition = 'EVENT_SCHEDULE" != "30 8 * * *"'
+    assert schedule_condition in production
+    schedule_branch = production.split(schedule_condition, 1)[1].split("else", 1)[0]
+    assert "python scripts/cloud_pipeline.py produce --resume-only" in schedule_branch
+    assert "python scripts/cloud_pipeline.py produce\n" not in schedule_branch
     assert 'SLEEP_HISTORY_DURABLE_CHECKPOINTS: "1"' in production
 
 
