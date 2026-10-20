@@ -9,6 +9,7 @@ touched. The webhook URL is a secret (CANVA_THUMBNAIL_WEBHOOK_URL) and is never 
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -79,6 +80,19 @@ def build_background_prompt(thumbnail_prompt: str, scene_prompt: str = "") -> st
         raise CanvaError("CANVA_BACKGROUND_GENERATION_FAILED", "no background prompt is available")
     room = PROMPT_MAX - len(BACKGROUND_RULES) - 2
     return f"{base[:room].rstrip()}\n\n{BACKGROUND_RULES}"
+
+
+def input_identity(thumbnail_text: str, background_prompt: str) -> str:
+    """Deterministic identity for every input that can change the final Canva thumbnail."""
+    payload = {
+        "hook_text": thumbnail_text.strip(),
+        "background_prompt": background_prompt.strip(),
+        "template": TEMPLATE,
+        "background_model": BACKGROUND_MODEL,
+        "output_size": list(OUTPUT_SIZE),
+    }
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def decode_export(data: bytes) -> Image.Image:
@@ -174,6 +188,7 @@ def generate(story: Path, thumbnail_text: str, background_prompt: str, *, max_at
             "thumbnail_background_model": BACKGROUND_MODEL,
             "thumbnail_template": TEMPLATE,
             "thumbnail_text_render_method": "canva_autofill_template",
+            "thumbnail_input_sha256": input_identity(thumbnail_text, background_prompt),
             "thumbnail_attempts": number,
             "thumbnail_size": f"{OUTPUT_SIZE[0]}x{OUTPUT_SIZE[1]}",
             "thumbnail_jpeg_quality": quality,
