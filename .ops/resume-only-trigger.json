@@ -3,6 +3,7 @@
   "task_id": "sleep-history-resume-tlemcen-20261020",
   "source_failed_run": 39340600425,
   "story": "2026-10-19_tlemcen-zayyanid-textile-dyeing",
-  "reason": "Resume saved checkpoint after targeted Audio QC repair merged to main",
-  "sequence": 1
+  "reason": "Resume Tlemcen checkpoint with Audio QC diagnostics and autojunk-disabled comparison",
+  "sequence": 2,
+  "previous_failed_run": 39421771000
 }
