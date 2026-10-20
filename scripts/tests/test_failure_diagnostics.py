@@ -150,6 +150,14 @@ def test_registry_entries_are_complete():
 def test_topic_gate_rejection():
     s = failed(RuntimeError("TOPIC_GATE_REJECTED: no acceptable topic was found"), "topic_selection")
     assert (s["failed_stage"], s["failed_component"], s["recovery_policy"]) == ("topic_selection", "topic_gate", "AUTO_RECOVERABLE")
+    assert s["immediate_retry"] is False  # validation waits for the next scheduled resume
+
+
+def test_only_transient_registry_entries_are_immediate_retry():
+    transient = failed(RuntimeError("CLOUDFLARE_NETWORK_ERROR: timeout"), "background")
+    validation = failed(RuntimeError("OUTLINE_GENERATION_FAILED_AFTER_RETRIES: bad"), "outline")
+    assert transient["immediate_retry"] is True
+    assert validation["immediate_retry"] is False
 
 
 def test_story_quality_rejection_does_not_blind_retry_after_internal_repairs():
