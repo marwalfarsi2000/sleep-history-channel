@@ -620,12 +620,11 @@ def test_tripoli_resumes_the_same_episode_reanchors_repairs_the_outline_and_reac
         {"status": status, "supported_elements": ["الميناء"], "unsupported_elements": list(unsupported), "reason": "r"},
         ensure_ascii=False), [])
     wrong_scenes = [section(i) for i in range(7)]
-    wrong_scenes[3]["scenes"] = wrong_scenes[3]["scenes"][:1]                    # Run 65, attempt 1
-    wrong_count = [section(i) for i in range(6)]                                  # attempt 2: six sections
-    total_5250 = [section(i) for i in range(7)]                                   # attempt 3: 7 x 750 = 5250
+    wrong_scenes[3]["scenes"] = wrong_scenes[3]["scenes"][:1]                    # first outline response
+    total_5250 = [section(i) for i in range(7)]                                   # one corrected response; total fixed locally
     replies = iter([
         verdict("REANCHOR_REQUIRED", ["السجاد"]), (json.dumps(anchored, ensure_ascii=False), []), verdict("PASS"),
-        reply(wrong_scenes), reply(wrong_count), reply(total_5250),
+        reply(wrong_scenes), reply(total_5250),
     ])
     stages: list[tuple[str, str | None]] = []
     monkeypatch.setattr(generate_daily, "durable_checkpoint", lambda story, done, nxt: stages.append((done, nxt)))
@@ -641,7 +640,7 @@ def test_tripoli_resumes_the_same_episode_reanchors_repairs_the_outline_and_reac
         with pytest.raises(Reached):
             generate_daily.resume_partial_story(folder)
     choose.assert_not_called(); choose_valid.assert_not_called(); research.assert_not_called()   # same episode, same research
-    assert gem.call_count == 6
+    assert gem.call_count == 5
     saved_topic = json.loads((folder / "logs/topic.json").read_text(encoding="utf-8"))
     assert saved_topic["slug"] == TRIPOLI["slug"] and saved_topic["angle_ar"] == anchored["angle_ar"]
     assert saved_topic["research_topic_alignment_status"] == "PASS"
