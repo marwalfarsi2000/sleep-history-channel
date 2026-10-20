@@ -438,6 +438,16 @@ def _strip_final_case_ending(word: str) -> str:
     # remains fully guided for pronunciation.
     marks = FINAL_CASE_ENDING_RE.sub("", marks)
     graphemes[-1] = base + marks
+
+    # Tanween al-fath is commonly encoded on the consonant before a support alif,
+    # e.g. واضِحًا / طَوِيلًا.  At waqf the tanween disappears while the support
+    # alif remains, giving the actually pronounced form واضِحا / طَوِيلا.
+    if len(graphemes) >= 2 and base in {"ا", "ى"}:
+        previous = graphemes[-2]
+        previous_base = DIACRITICS_RE.sub("", previous)
+        previous_marks = "".join(DIACRITICS_RE.findall(previous)).replace("\u064b", "")
+        graphemes[-2] = previous_base + previous_marks
+
     return "".join(graphemes)
 
 
