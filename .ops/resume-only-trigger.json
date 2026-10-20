@@ -1,8 +1,8 @@
 {
   "request": "resume_only",
-  "task_id": "sleep-history-resume-aleppo-20261020",
-  "source_failed_run": 39480596763,
+  "task_id": "sleep-history-resume-aleppo-quality-20261021",
+  "source_failed_run": 39483526995,
   "story": "2026-10-20_aleppo-han-caravansary-routine",
-  "reason": "Resume Aleppo after resilient chapter continuation fix",
-  "sequence": 4
+  "reason": "Resume Aleppo after targeted story quality repair",
+  "sequence": 5
 }
