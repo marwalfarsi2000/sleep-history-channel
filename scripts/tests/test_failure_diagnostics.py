@@ -284,7 +284,7 @@ def test_run63_telegram_names_stage_component_and_code_without_the_codex_line(re
     assert "المكوّن: <b>Topic Discovery</b>" in message
     assert "السبب: <code>TOPIC_DISCOVERY_FAILED</code>" in message
     assert "عدد كافٍ من المرشحين" in message
-    assert "🔄 يستطيع النظام معالجة هذا تلقائيًا." in message
+    assert "⏭️ لن يعيد هذا التشغيل المحاولة" in message
     assert "Codex" not in message and "بدء الإنتاج" not in message and "لن يُحل" not in message
     assert URL in message
 
