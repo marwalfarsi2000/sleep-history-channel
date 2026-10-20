@@ -282,6 +282,40 @@ def parse_json_object(text: str, error_code: str) -> dict:
     raise ValueError(f"{error_code}: expected one JSON object, got {shape}")
 
 
+def parse_topic_discovery_with_one_repair(text: str) -> dict:
+    """Parse topic discovery JSON; if syntax is broken, repair that JSON once without regenerating ideas."""
+    error_code = "TOPIC_DISCOVERY_SCHEMA_FAILED"
+    try:
+        value = parse_json_object(text, error_code)
+    except (json.JSONDecodeError, ValueError) as first_error:
+        repair_prompt = f"""أصلح صياغة JSON التالية فقط.
+لا تعِد كتابة الأفكار، لا تغيّر أي قيمة أو نص أو ترتيب مرشح، ولا تضف أو تحذف مرشحًا.
+المطلوب فقط تصحيح أخطاء JSON مثل علامات الاقتباس أو الفواصل أو الأقواس.
+يجب أن يكون الناتج JSON object واحدًا فقط وله المفتاح العلوي "candidates".
+لا تضف شرحًا أو Markdown.
+
+JSON المكسور:
+{text}
+"""
+        repaired, _ = gemini(repair_prompt, json_mode=True, max_tokens=7000, temperature=0.0)
+        try:
+            value = parse_json_object(repaired, error_code)
+        except (json.JSONDecodeError, ValueError) as repair_error:
+            raise RuntimeError(
+                f"{error_code}: malformed JSON remained invalid after one local repair"
+            ) from repair_error
+        if "candidates" not in value:
+            raise RuntimeError(f"{error_code}: repaired JSON is missing candidates")
+        print(
+            f"{error_code}: repaired malformed JSON locally once ({type(first_error).__name__})",
+            file=sys.stderr,
+            flush=True,
+        )
+    if "candidates" not in value:
+        raise RuntimeError(f"{error_code}: JSON object is missing candidates")
+    return value
+
+
 def safe_slug(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return slug[:70] or f"history-{dt.date.today():%Y%m%d}"
@@ -590,7 +624,7 @@ def choose_topic(history: list[dict], retry_feedback: str = "") -> dict:
 كل مرشح يجب أن يملك مهمة واضحة وافتتاحًا بمشهد (شخصية تفعل شيئًا) لا بمحاضرة، ويقبل التقسيم إلى مشاهد صغيرة مترابطة، ويُفهم دون معرفة تاريخية مسبقة، ويمكن تهدئته تدريجيًا، ويمكن للمستمع أن يسرح فيه ويعود، وألا يكون قائمة حقائق ولا روتينًا بلا هدف.
 """
     text, _ = gemini(prompt, json_mode=True, max_tokens=7000, temperature=0.7)
-    discovery = parse_json_object(text, "TOPIC_DISCOVERY_SCHEMA_FAILED")
+    discovery = parse_topic_discovery_with_one_repair(text)
     candidates = discovery.get("candidates") or []
     # Gemini may return fewer than the preferred six; what matters is enough
     # valid, unused, varied candidates once the saved bank is merged in.

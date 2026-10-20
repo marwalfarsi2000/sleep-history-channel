@@ -44,6 +44,37 @@ class TopicDiscoveryMinimumTests(unittest.TestCase):
         self.assertEqual(generate_daily.MIN_VALID_CANDIDATES, 4)
         self.assertEqual(generate_daily.MIN_NARRATIVE_FAMILIES, 4)
 
+    def test_malformed_discovery_json_is_repaired_once_without_regenerating_topics(self) -> None:
+        repaired = json.dumps({"candidates": fresh(4, 4)}, ensure_ascii=False)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "bank.json"
+            path.write_text("[]", encoding="utf-8")
+            with mock.patch.object(generate_daily, "TOPIC_CANDIDATE_BANK_PATH", path), \
+                    mock.patch.object(generate_daily, "gemini", side_effect=[
+                        ('{"candidates":[{"topic_ar":"مكسور",}]', []),
+                        (repaired, []),
+                        (json.dumps(GATE), []),
+                    ]) as gem:
+                topic = generate_daily.choose_topic([])
+        self.assertTrue(topic["slug"])
+        self.assertEqual(gem.call_count, 3)
+        repair_prompt = gem.call_args_list[1].args[0]
+        self.assertIn("أصلح صياغة JSON", repair_prompt)
+        self.assertIn("لا تعِد كتابة الأفكار", repair_prompt)
+
+    def test_malformed_discovery_json_stops_after_one_failed_local_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "bank.json"
+            path.write_text("[]", encoding="utf-8")
+            with mock.patch.object(generate_daily, "TOPIC_CANDIDATE_BANK_PATH", path), \
+                    mock.patch.object(generate_daily, "gemini", side_effect=[
+                        ('{"candidates":[}', []),
+                        ('{"candidates":[}', []),
+                    ]) as gem:
+                with self.assertRaisesRegex(RuntimeError, "TOPIC_DISCOVERY_SCHEMA_FAILED"):
+                    generate_daily.choose_topic([])
+        self.assertEqual(gem.call_count, 2)
+
     def test_prompt_still_asks_for_six_to_eight(self) -> None:
         _, gem = run(fresh(6, 6))
         self.assertIn("من ستة إلى ثمانية مرشحين", gem.call_args_list[0].args[0])

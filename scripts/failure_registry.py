@@ -65,6 +65,9 @@ def _f(code, stage, component, category, policy, retryable, action, **extra) -> 
 
 
 REGISTRY: dict[str, Failure] = dict([
+    _f("TOPIC_DISCOVERY_SCHEMA_FAILED", "topic_selection", "topic_discovery_json", VALIDATION, AUTO_RECOVERABLE, False,
+       "Topic discovery returned malformed JSON even after one local syntax repair; preserve state and stop.",
+       detail_ar="أعاد مولد المواضيع JSON غير صالح بعد محاولة إصلاح محلية واحدة."),
     _f("TOPIC_DISCOVERY_FAILED", "topic_selection", "topic_discovery", VALIDATION, AUTO_RECOVERABLE, True,
        "Use valid fresh candidates plus queued candidate-bank entries before enforcing the minimum pool.",
        detail_ar="لم يتوفر عدد كافٍ من المرشحين الصالحين للموضوع."),
