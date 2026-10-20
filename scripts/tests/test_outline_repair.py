@@ -118,13 +118,12 @@ class LocalRepairTests(unittest.TestCase):
 
 
 class AdaptiveRetryTests(unittest.TestCase):
-    def test_run65_chain_wrong_scenes_then_wrong_count_then_5250_ends_in_success(self) -> None:
+    def test_one_model_correction_then_local_repair_ends_in_success(self) -> None:
         a1 = seven()
-        a1[2]["scenes"] = [scene()]          # attempt 1: a section with one scene (needs the model)
-        a2 = outline(6)                      # attempt 2: six sections of two scenes (cannot be split)
-        a3 = seven(target=750)               # attempt 3: structure right, total 5250
-        sections, gem = run([reply(a1), reply(a2), reply(a3)])
-        self.assertEqual(gem.call_count, 3)
+        a1[2]["scenes"] = [scene()]          # first response needs a model correction
+        a2 = seven(target=750)               # corrected structure; 5250 is raised locally
+        sections, gem = run([reply(a1), reply(a2)])
+        self.assertEqual(gem.call_count, 2)
         generate_daily.validate_outline_sections(sections)
 
     def test_all_errors_are_sent_to_the_model_in_one_correction(self) -> None:
