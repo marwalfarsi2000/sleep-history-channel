@@ -1,7 +1,7 @@
 {
   "request": "start_new_episode",
-  "task_id": "sleep-history-new-episode-20261020",
-  "reason": "Owner requested a new episode after pronunciation-accurate TTS correction",
-  "required_main_sha": "01aec7073dbcf4b7fa9005f96e64c2bd97b9d115",
-  "sequence": 1
+  "task_id": "sleep-history-new-episode-after-jsonfix-20261021",
+  "reason": "Retry failed Production #86 after local topic-discovery JSON repair",
+  "required_main_sha": "da2a707135c3608be6ac9d949e54a8226e64b150",
+  "sequence": 2
 }
