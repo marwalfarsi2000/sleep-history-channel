@@ -95,6 +95,13 @@
       "approval_status": "GENERATING",
       "youtube_video_id": null,
       "story_path": "stories/2026-10-20_aleppo-han-caravansary-routine"
+    },
+    "lan-tukmil-alqissa-20261021-aleppo-han-caravansary-ro": {
+      "archive_identifier": "lan-tukmil-alqissa-20261021-aleppo-han-caravansary-ro",
+      "approval_status": "REVIEW_PENDING",
+      "story_path": "stories/2026-10-20_aleppo-han-caravansary-routine",
+      "title": "استراحة القوافل في خان مراد بحلب العثمانية | قصة تاريخية للنوم 😴",
+      "review_url": "https://archive.org/details/lan-tukmil-alqissa-20261021-aleppo-han-caravansary-ro"
     }
   }
 }
