@@ -181,5 +181,27 @@
     "video_sha256": "687ec2159bd95e5ad6c70cd651291fcc05aa4cefb7c5e31544986860e30860fe",
     "audio_duration_seconds": 3488.33,
     "video_duration_seconds": 3488.28
+  },
+  {
+    "identifier": "lan-tukmil-alqissa-20261020-tlemcen-zayyanid-textile",
+    "slug": "tlemcen-zayyanid-textile-dyeing",
+    "title": "صباغة المنسوجات الصوفية في تلمسان العصر الزياني | قصة تاريخية هادئة للنوم 😴",
+    "episode_title_core": "صباغة المنسوجات الصوفية في تلمسان العصر الزياني",
+    "title_suffix": "قصة تاريخية هادئة للنوم 😴",
+    "final_youtube_title": "صباغة المنسوجات الصوفية في تلمسان العصر الزياني | قصة تاريخية هادئة للنوم 😴",
+    "thumbnail_text": "ورش الصباغة التלمسانية",
+    "thumbnail_scene_type": "الحرف والعمليات اليومية",
+    "thumbnail_prompt": "Calm illustrated realism of a 14th-century Tlemcen wool dyeing workshop at dusk with subtle painterly texture and premium storybook quality; low-key night lighting with a dim hanging lantern casting a warm glow on earthenware vats of natural dyes and hanging woolen skeins; palette of deep midnight navy, charcoal, muted warm gold, warm brown, and aged ivory; one simple memorable scene focusing on traditional dyeing vats and fabrics; mobile-first strong silhouette, no people, no modern objects, no text or typography of any kind rendered in the image. 16:9 YouTube thumbnail. Original composition. Professional quality.",
+    "historical_setting": "تلمسان، الجزائر — القرن الرابع عشر الميلادي",
+    "created_at": "2026-10-20T16:49:42.129188+04:00",
+    "status": "REVIEW_PENDING",
+    "video_filename": "14_video_final.mp4",
+    "item_url": "https://archive.org/details/lan-tukmil-alqissa-20261020-tlemcen-zayyanid-textile",
+    "video_url": "https://archive.org/download/lan-tukmil-alqissa-20261020-tlemcen-zayyanid-textile/14_video_final.mp4",
+    "thumbnail_url": "https://archive.org/download/lan-tukmil-alqissa-20261020-tlemcen-zayyanid-textile/11_thumbnail_base.jpg",
+    "video_size": 54837317,
+    "video_sha256": "a7b361cb8032189cc982bf1030f85040f8efe2180b8560a81873db455443cf23",
+    "audio_duration_seconds": 3551.69,
+    "video_duration_seconds": 3552.0
   }
 ]
