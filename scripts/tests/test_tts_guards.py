@@ -111,18 +111,28 @@ class TtsGuardTests(unittest.TestCase):
             self.assertEqual(result, source)
             gemini.assert_not_called()
 
-    def test_final_tts_text_removes_all_arabic_diacritics(self):
+    def test_final_tts_keeps_pronunciation_marks_but_drops_case_endings_at_waqf(self):
         source = "في مَدِينَةٍ عَمِيقَةٍ، كانَتِ الرِّحْلَةُ عَمِيقَةً؟ ثُمَّ عادَ المُسَافِرُ!"
         result = pipeline.api_text(source)
-        self.assertIn("في مدينة عميقة، كانت الرحلة عميقة؟", result)
-        self.assertTrue(result.endswith("المسافر!"))
-        self.assertEqual(pipeline.DIACRITICS_RE.findall(result), [])
+        self.assertIn("مَدِينَةٍ عَمِيقَةٍ،", result)
+        self.assertIn("كانَتِ الرِّحْلَةُ عَمِيقَة؟", result)
+        self.assertTrue(result.endswith("المُسَافِر!"))
+        self.assertGreater(len(pipeline.DIACRITICS_RE.findall(result)), 0)
         self.assertEqual(pipeline.vocalized_sentence_final_words(result), [])
-        pipeline.require_no_tts_diacritics(result)
 
-    def test_final_tts_diacritic_guard_fails_closed(self):
-        with self.assertRaisesRegex(RuntimeError, "TTS_DIACRITICS_FORBIDDEN"):
-            pipeline.require_no_tts_diacritics("هذا نَصّ مشكول.")
+    def test_pausal_form_preserves_shadda_and_internal_vowels(self):
+        source = "كانَ الحَقُّ واضِحًا."
+        result = pipeline.api_text(source)
+        self.assertIn("الحَقُّ", result)
+        self.assertTrue(result.endswith("واضِحا."))
+        self.assertEqual(pipeline.vocalized_sentence_final_words(result), [])
+
+    def test_semicolon_also_uses_natural_pausal_ending(self):
+        source = "كانَ الطَّرِيقُ طَوِيلًا؛ ثُمَّ عادَ المُسَافِرُ."
+        result = pipeline.api_text(source)
+        self.assertIn("طَوِيلا؛", result)
+        self.assertTrue(result.endswith("المُسَافِر."))
+        self.assertEqual(pipeline.vocalized_sentence_final_words(result), [])
 
     def test_pausal_guard_finds_any_vocalized_sentence_final_word(self):
         self.assertEqual(
