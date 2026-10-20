@@ -151,6 +151,7 @@ def test_recovery_never_loops_forever(monkeypatch, sleeps, message):
     ("invalid_grant: expired", True),                               # owner action
     ("boom", True),                                                 # unknown = code defect
     ("TTS_CHUNKING_FAILED: sentence exceeds 5600 characters", True),  # code defect
+    ("STORY_QUALITY_GATE_REJECTED: {\"deterministic\":[\"curiosity does not decay\"]}", True),
     ("OUTLINE_GENERATION_FAILED_AFTER_RETRIES: x", False),          # nothing saved yet at a late stage
 ])
 def test_only_safe_failures_are_retried(monkeypatch, sleeps, message, checkpoint):

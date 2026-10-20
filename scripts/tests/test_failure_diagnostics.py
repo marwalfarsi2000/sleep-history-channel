@@ -56,7 +56,7 @@ def test_run63_topic_discovery_failure_is_a_topic_selection_failure(repo, monkey
     assert summary["error_code"] == "TOPIC_DISCOVERY_FAILED"
     assert summary["error_category"] == "DATA_OR_MODEL_OUTPUT_VALIDATION"
     assert summary["repo_file"] == "scripts/generate_daily.py" or summary["repo_file"].endswith("generate_daily.py")
-    assert summary["retryable"] is False and summary["auto_recovery_available"] is True
+    assert summary["retryable"] is True and summary["auto_recovery_available"] is True
     assert summary["owner_action_required"] is False
     assert summary["recommended_action"].startswith("Use valid fresh candidates")
 
@@ -150,6 +150,14 @@ def test_registry_entries_are_complete():
 def test_topic_gate_rejection():
     s = failed(RuntimeError("TOPIC_GATE_REJECTED: no acceptable topic was found"), "topic_selection")
     assert (s["failed_stage"], s["failed_component"], s["recovery_policy"]) == ("topic_selection", "topic_gate", "AUTO_RECOVERABLE")
+
+
+def test_story_quality_rejection_does_not_blind_retry_after_internal_repairs():
+    s = failed(RuntimeError('STORY_QUALITY_GATE_REJECTED: {"deterministic":["curiosity does not decay"]}'), "quality_gates")
+    assert s["failed_stage"] == "quality_gates"
+    assert s["retryable"] is False
+    assert s["immediate_retry"] is False
+    assert s["recovery_policy"] == "AUTO_RECOVERABLE"
 
 
 def test_malformed_outline():

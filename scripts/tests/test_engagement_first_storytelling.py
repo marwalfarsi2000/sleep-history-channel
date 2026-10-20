@@ -213,6 +213,63 @@ class QualityGateTests(unittest.TestCase):
             self.run_gate(result)
 
 
+class QualityRepairTests(unittest.TestCase):
+    def passing_gate(self) -> dict:
+        names = (
+            "language", "adult_audience", "religion", "sleep", "historical_style",
+            "no_dangerous_drift", "soft_narrative_spine", "gentle_curiosity",
+            "attentional_anchoring", "sensory_imagery", "low_stakes", "gradual_unwind",
+            "reentry_tolerance", "not_boring_or_overstimulating", "flexible_composition",
+            *generate_daily.STORY_QUALITY_ENGAGEMENT_GATES,
+        )
+        return {"status": "PASS", **{name: True for name in names}, "issues": []}
+
+    def test_curiosity_decay_failure_repairs_only_the_ending_then_passes(self) -> None:
+        prefix = "جلس إبراهيم في الخان بهدوء ورتب الأواني قرب الباب. " * 900
+        busy_tail = "ماذا سيحدث بعد قليل؟ ومن سيصل؟ وأين يذهب المسافر؟ " * 120
+        story_text = prefix + "\n\n" + busy_tail
+        self.assertTrue(any("curiosity does not decay" in e for e in generate_daily.quest_rules.story_text_errors(story_text)))
+
+        repaired_tail = "أغلق إبراهيم النوافذ بهدوء، ورتب الأواني، ثم هدأت أروقة الخان مع المساء. " * 180
+        gate_json = json.dumps(self.passing_gate(), ensure_ascii=False)
+
+        def fake_gemini(prompt, *args, **kwargs):
+            if kwargs.get("json_mode"):
+                return gate_json, []
+            self.assertIn("أعد كتابة هذا المقطع وحده ليصبح أهدأ بوضوح", prompt)
+            self.assertIn("لا تفتح أي سؤال جديد", prompt)
+            return repaired_tail, []
+
+        with tempfile.TemporaryDirectory() as directory:
+            story = Path(directory)
+            (story / "logs").mkdir()
+            with mock.patch.object(generate_daily, "gemini", side_effect=fake_gemini) as gem:
+                repaired, quality = generate_daily.ensure_story_quality(
+                    story,
+                    {"topic_ar": "خان حلب", "angle_ar": "استقبال القوافل", "quest_ar": "تجهيز الخان"},
+                    "بحث موثق",
+                    story_text,
+                    label="test",
+                )
+            self.assertEqual(quality["status"], "PASS")
+            self.assertTrue(repaired.startswith(prefix[:200]))
+            self.assertNotIn("؟", " ".join(repaired.split()[int(len(repaired.split()) * 0.8):]))
+            self.assertEqual(generate_daily.quest_rules.story_text_errors(repaired), [])
+            self.assertEqual(gem.call_count, 2)  # one targeted repair + one semantic gate
+            self.assertTrue(list((story / "logs").glob("quality_repair_01_ending.*")))
+
+    def test_quality_repair_scope_is_targeted(self) -> None:
+        self.assertEqual(
+            generate_daily._quality_repair_scope({"deterministic": ["curiosity does not decay: x"]}),
+            "ending",
+        )
+        self.assertEqual(
+            generate_daily._quality_repair_scope({"deterministic": ["encyclopedic opening: x"]}),
+            "opening",
+        )
+        self.assertIsNone(generate_daily._quality_repair_scope({"status": "REJECT"}))
+
+
 class RulesTests(unittest.TestCase):
     def test_old_split_removed_and_new_section_present(self) -> None:
         self.assertNotIn("60% الحياة اليومية", RULES)
