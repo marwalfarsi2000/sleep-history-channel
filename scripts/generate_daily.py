@@ -302,7 +302,7 @@ MAX_SAME_FORMAT_IN_A_ROW = 2
 OUTLINE_MAX_MODEL_CALLS = 4
 OUTLINE_RETRY_MAX = OUTLINE_MAX_MODEL_CALLS
 MIN_OUTLINE_TARGET_WORDS = 5500
-CHAPTER_EXPANSION_ATTEMPTS = 3
+CHAPTER_EXPANSION_ATTEMPTS = 5
 
 
 def chapter_minimum_words(target_words: int) -> int:
@@ -1207,7 +1207,11 @@ Premise الحلقة:
             if word_count(chapter) >= minimum_words:
                 break
             missing = minimum_words - word_count(chapter)
-            request_words = missing + max(100, missing // 5)
+            # Small deficits were repeatedly causing permanent production failure
+            # because the model often returned less than a 100-word continuation.
+            # Ask for a useful minimum continuation while still staying within the
+            # section's target + 150-word envelope for the deficits we permit here.
+            request_words = max(250, missing + 200)
             continuation_prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
 {rules}
 
