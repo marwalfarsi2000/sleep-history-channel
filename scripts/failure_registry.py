@@ -47,7 +47,7 @@ class Failure:
     @property
     def immediate_retry(self) -> bool:
         """Worth another bounded attempt in the same job (quota waits and free-limit blocks are not)."""
-        return self.policy == AUTO_RECOVERABLE and not self.planned_wait and not self.cost_blocked
+        return self.policy == AUTO_RECOVERABLE and self.retryable and not self.planned_wait and not self.cost_blocked
 
     @property
     def max_attempts(self) -> int:
@@ -59,7 +59,7 @@ def _f(code, stage, component, category, policy, retryable, action, **extra) -> 
 
 
 REGISTRY: dict[str, Failure] = dict([
-    _f("TOPIC_DISCOVERY_FAILED", "topic_selection", "topic_discovery", VALIDATION, AUTO_RECOVERABLE, False,
+    _f("TOPIC_DISCOVERY_FAILED", "topic_selection", "topic_discovery", VALIDATION, AUTO_RECOVERABLE, True,
        "Use valid fresh candidates plus queued candidate-bank entries before enforcing the minimum pool.",
        detail_ar="لم يتوفر عدد كافٍ من المرشحين الصالحين للموضوع."),
     _f("TOPIC_GATE_REJECTED", "topic_selection", "topic_gate", VALIDATION, AUTO_RECOVERABLE, True,
@@ -86,9 +86,9 @@ REGISTRY: dict[str, Failure] = dict([
     _f("STORY_TOO_SHORT", "chapters", "story_length", VALIDATION, AUTO_RECOVERABLE, True,
        "The assembled story is under 5000 Arabic words; the next run resumes the chapters stage.",
        detail_ar="القصة المجمّعة أقصر من الحد الأدنى."),
-    _f("STORY_QUALITY_GATE_REJECTED", "quality_gates", "story_quality_gate", VALIDATION, AUTO_RECOVERABLE, True,
-       "The story failed the quality gate; inspect logs/ if it repeats.",
-       detail_ar="لم تجتز القصة بوابة الجودة."),
+    _f("STORY_QUALITY_GATE_REJECTED", "quality_gates", "story_quality_gate", VALIDATION, AUTO_RECOVERABLE, False,
+       "Targeted in-stage quality repair was exhausted; do not blind-retry the unchanged story.",
+       detail_ar="لم تجتز القصة بوابة الجودة بعد استنفاد الإصلاح الموجّه داخل المرحلة."),
     _f("FACT_CORRECTION_FAILED", "quality_gates", "fact_check", VALIDATION, AUTO_RECOVERABLE, True,
        "Fact correction shortened the story too much; inspect logs/ if it repeats.",
        detail_ar="فشل تصحيح الحقائق."),
