@@ -1,13 +1,14 @@
 name: Sleep History Production
 
 on:
-  # Durable resume control for connected automation tools that can commit but cannot
-  # call GitHub's workflow_dispatch API. Updating this one marker never starts a new topic.
+  # Durable controls for connected automation tools that can commit but cannot
+  # call GitHub's workflow_dispatch API.
   push:
     branches:
       - main
     paths:
       - ".ops/resume-only-trigger.json"
+      - ".ops/start-new-episode.json"
   workflow_dispatch:
     inputs:
       trigger_source:
@@ -91,8 +92,14 @@ jobs:
           if [[ "${{ inputs.resume_archive_only }}" == "true" ]]; then
             python scripts/cloud_pipeline.py resume-review
           elif [[ "$EVENT_NAME" == "push" ]]; then
-            # Marker-file pushes are an explicit resume-only control: never start a new episode.
-            python scripts/cloud_pipeline.py produce --resume-only
+            if git show --pretty="" --name-only "$GITHUB_SHA" | grep -Fxq ".ops/start-new-episode.json"; then
+              # Explicit owner/new-episode marker: run normal production. The generator
+              # still refuses to start a second topic if a genuinely unfinished episode exists.
+              python scripts/cloud_pipeline.py produce
+            else
+              # Resume marker pushes never start a new episode.
+              python scripts/cloud_pipeline.py produce --resume-only
+            fi
           elif [[ "$EVENT_NAME" == "schedule" && "$EVENT_SCHEDULE" != "30 8 * * *" ]]; then
             python scripts/cloud_pipeline.py produce --resume-only
           else
