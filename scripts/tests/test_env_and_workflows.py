@@ -49,7 +49,10 @@ def test_production_resume_only_schedules_never_start_a_new_topic():
     assert len(extra) == 3
     schedule_condition = 'EVENT_SCHEDULE" != "30 8 * * *"'
     assert schedule_condition in production
-    schedule_branch = production.split(schedule_condition, 1)[1].split("else", 1)[0]
+    schedule_branch = production.split(
+        'elif [[ "$EVENT_NAME" == "schedule" && "$EVENT_SCHEDULE" != "30 8 * * *" ]]; then',
+        1,
+    )[1].split("\n          else", 1)[0]
     assert "python scripts/cloud_pipeline.py produce --resume-only" in schedule_branch
     assert "python scripts/cloud_pipeline.py produce\n" not in schedule_branch
     assert 'SLEEP_HISTORY_DURABLE_CHECKPOINTS: "1"' in production
