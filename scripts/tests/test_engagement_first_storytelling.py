@@ -237,7 +237,12 @@ class QualityRepairTests(unittest.TestCase):
                 items = json.loads(prompt.split("الجمل:\n", 1)[1])
                 return json.dumps({
                     "replacements": [
-                        {"index": item["index"], "text": "استمر المساء بهدوء داخل الخان وبقي العمل مألوفا."}
+                        {
+                            "index": item["index"],
+                            "text": " ".join(
+                                ["استمر"] + ["الهدوء"] * max(0, generate_daily.word_count(item["text"]) - 1)
+                            ) + ".",
+                        }
                         for item in items
                     ]
                 }, ensure_ascii=False), []
