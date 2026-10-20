@@ -164,10 +164,15 @@ def generate_background(story: Path) -> None:
             time.sleep(30)
 
 
-def render_thumbnail_file(story: Path, text: str) -> None:
+def render_thumbnail_file(story: Path, text: str) -> tuple[dict, str]:
     import image_generate
-    from PIL import Image
-    image_generate.render_thumbnail(Image.open(story / cp.BACKGROUND_FILE).convert("RGB"), story / cp.THUMBNAIL_FILE, text)
+    metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
+    return image_generate.build_final_thumbnail(
+        story,
+        story / cp.BACKGROUND_FILE,
+        text,
+        str(metadata.get("thumbnail_prompt", "")).strip(),
+    )
 
 
 def inspect_video_frame(story: Path) -> dict:
@@ -220,10 +225,16 @@ def image_identity() -> str:
                           pipeline.SETTINGS.get("image_accuracy_retry_attempts"), "background-v1")
 
 
-def thumbnail_identity(text: str) -> str:
-    import inspect
-    import image_generate
-    return cp.fingerprint(text, cp.sha256_text(inspect.getsource(image_generate.render_thumbnail)))
+def thumbnail_identity(story: Path, text: str) -> str:
+    import canva_thumbnail
+    metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
+    scene_path = story / "08_image_prompt_en.txt"
+    scene_prompt = scene_path.read_text(encoding="utf-8") if scene_path.exists() else ""
+    effective_prompt = canva_thumbnail.build_background_prompt(
+        str(metadata.get("thumbnail_prompt", "")).strip(),
+        scene_prompt,
+    )
+    return canva_thumbnail.input_identity(text, effective_prompt)
 
 
 def mix_identity() -> str:
@@ -248,7 +259,7 @@ class Context:
         voice = self.manifest["tts_voice_identity"]
         return {
             "background_fp": cp.fingerprint(self.manifest["background_prompt_hash"], image_identity()),
-            "thumbnail_identity": thumbnail_identity(self.thumbnail_text),
+            "thumbnail_identity": thumbnail_identity(self.story, self.thumbnail_text),
             "chunk_fps": {i: cp.fingerprint(cp.sha256_text(text), voice) for i, text in self.chunk_texts.items()},
             "total": len(self.chunk_texts),
             "mix_identity": mix_identity(),
@@ -390,13 +401,44 @@ def unit_background(c: Context, name: str) -> list[str]:
 
 def unit_thumbnail(c: Context, name: str) -> list[str]:
     story, manifest = c.story, c.manifest
-    render_thumbnail_file(story, c.thumbnail_text)
-    sha = cp.sha256_file(story / cp.THUMBNAIL_FILE)
-    manifest["metadata_patch"]["thumbnail_sha256"] = sha
+    thumbnail = story / cp.THUMBNAIL_FILE
+    metadata = json.loads((story / "15_metadata.json").read_text(encoding="utf-8"))
+    expected_identity = c.expected()["thumbnail_identity"]
+    sha = cp.sha256_file(thumbnail) if thumbnail.is_file() else ""
+    reusable = (
+        thumbnail.is_file()
+        and metadata.get("thumbnail_generation_provider") == "canva_via_n8n"
+        and metadata.get("thumbnail_text_render_status") == "passed"
+        and metadata.get("thumbnail_input_sha256") == expected_identity
+        and metadata.get("thumbnail_sha256") == sha
+    )
+
+    if reusable:
+        thumbnail_record = {
+            key: value for key, value in metadata.items() if key.startswith("thumbnail_")
+        }
+        thumbnail_status = "passed"
+        say("THUMBNAIL_REBUILT", "NO (reused current Canva thumbnail)")
+    else:
+        thumbnail_record, thumbnail_status = render_thumbnail_file(story, c.thumbnail_text)
+        sha = cp.sha256_file(thumbnail)
+        say("THUMBNAIL_REBUILT", "YES")
+
+    patch = manifest.setdefault("metadata_patch", {})
+    patch.update(thumbnail_record)
+    patch.update(
+        thumbnail_sha256=sha,
+        thumbnail_input_sha256=expected_identity,
+        thumbnail_text_render_status=thumbnail_status,
+        thumbnail_path=str(thumbnail),
+    )
     _apply_metadata_patch(story, manifest)
-    manifest.update(thumbnail_complete=True, thumbnail_sha256=sha, thumbnail_artifact=name,
-                    thumbnail_fp=cp.fingerprint(manifest["background_sha256"], c.expected()["thumbnail_identity"]))
-    say("THUMBNAIL_REBUILT", "YES")
+    manifest.update(
+        thumbnail_complete=True,
+        thumbnail_sha256=sha,
+        thumbnail_artifact=name,
+        thumbnail_fp=cp.fingerprint(manifest["background_sha256"], expected_identity),
+    )
     return [cp.THUMBNAIL_FILE]
 
 
