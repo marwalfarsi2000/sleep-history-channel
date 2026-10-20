@@ -19,14 +19,16 @@ REVIEW_WORKFLOW = (ROOT / ".github" / "workflows" / "review.yml").read_text(enco
 
 
 class OwnerBehaviorInvariantTests(unittest.TestCase):
-    def test_final_tts_is_unvocalized_by_contract_and_runtime(self) -> None:
-        self.assertEqual(SETTINGS["arabic_diacritization"], "full_review_only")
-        self.assertEqual(SETTINGS["tts_final_diacritics"], "none")
+    def test_final_tts_uses_pronunciation_accurate_pausal_diacritics(self) -> None:
+        self.assertEqual(SETTINGS["arabic_diacritization"], "pronunciation_accurate_full")
+        self.assertEqual(SETTINGS["tts_final_diacritics"], "pronunciation_accurate_pausal")
         sample = pipeline.api_text("هٰذِهِ جُمْلَةٌ هادِئَةٌ.")
-        self.assertEqual(pipeline.DIACRITICS_RE.findall(sample), [])
-        pipeline.require_no_tts_diacritics(sample)
-        self.assertIn("خالية تمامًا", TTS_RULES)
-        self.assertIn("07_story_tts_api.md", TTS_RULES)
+        self.assertIn("هٰذِهِ", sample)
+        self.assertTrue(sample.endswith("هادِئَة."))
+        self.assertGreater(len(pipeline.DIACRITICS_RE.findall(sample)), 0)
+        self.assertEqual(pipeline.vocalized_sentence_final_words(sample), [])
+        self.assertIn("الوقف الطبيعي", TTS_RULES)
+        self.assertIn("07_story_tts_api.md", MASTER_RULES)
 
     def test_write_for_ear_expands_units_and_abbreviations(self) -> None:
         self.assertIn("سم", TTS_RULES)
