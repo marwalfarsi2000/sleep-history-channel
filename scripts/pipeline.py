@@ -99,9 +99,9 @@ ARABIC_DIRECTION_TAGS = {
 }
 DIACRITICS_RE = re.compile(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]")
 DIRECTION_RE = re.compile(r"\[[^\]\n]{1,100}\]")
-DIACRITIZATION_VERSION = "full-v8-speech-normalized-pausal-final-words"
-TTS_NORMALIZATION_VERSION = "arabic-speech-normalizer-v1"
-TTS_AUDIO_CACHE_VERSION = "native-speed-1.0-v3-speech-normalized"
+DIACRITIZATION_VERSION = "full-v9-review-only-final-unvocalized"
+TTS_NORMALIZATION_VERSION = "arabic-speech-normalizer-v2-unvocalized"
+TTS_AUDIO_CACHE_VERSION = "native-speed-1.0-v4-unvocalized"
 
 
 class AudioTranscriptMismatch(RuntimeError):
@@ -443,6 +443,16 @@ def require_pausal_sentence_endings(text: str) -> None:
             + json.dumps(vocalized_endings[:5], ensure_ascii=False)
         )
 
+
+def require_no_tts_diacritics(text: str) -> None:
+    """Fail closed if any Arabic combining mark would reach a speech provider."""
+    marks = DIACRITICS_RE.findall(text)
+    if marks:
+        raise RuntimeError(
+            f"TTS_DIACRITICS_FORBIDDEN: final TTS text contains {len(marks)} Arabic diacritic marks"
+        )
+
+
 def merge_reviewed_diacritics(primary: str, reviewed: str) -> str:
     """Keep second-pass corrections without allowing it to drop first-pass marks."""
     def graphemes(value: str) -> list[str]:
@@ -652,12 +662,13 @@ def diacritize_and_annotate(clean_story: str, cache_dir: Path | None = None, lim
 def api_text(text: str) -> str:
     # Never send bracketed production cues to the speech provider.
     text = without_direction_tags(text)
-    # The TTS-facing copy uses Arabic pausal reading: keep the reviewed spelling
-    # but remove every mark from the last word of each complete sentence.  This
-    # prevents engines from vocalizing case endings/tanween as connected speech.
+    # 06_story_tts_annotated.md remains a fully vocalized linguistic review copy.
+    # The speech-provider copy is deliberately different: pronunciation must be
+    # encoded by the words/spelling themselves, never by Arabic diacritics.
     text = apply_pausal_sentence_endings(text)
-    # Fish respects punctuation and paragraph boundaries. A blank line after a
-    # completed sentence creates a short natural pause without unsupported SSML.
+    text = DIACRITICS_RE.sub("", text)
+    # Speech providers respect punctuation and paragraph boundaries. A blank line
+    # after a completed sentence creates a short natural pause without SSML.
     # A dot between digits is a decimal separator, not a sentence boundary.
     text = re.sub(r"\s*((?<!\d)\.|\.(?!\d)|[!؟])\s*", r"\1\n\n", text)
     text = re.sub(r"\s*(؛)\s*", r"\1\n", text)
@@ -1504,6 +1515,7 @@ def prepare(story: Path):
             "post_processing_tempo": float(SETTINGS.get("post_tts_tempo", 1.0)),
         }, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
     clean = api_text(annotated)
+    require_no_tts_diacritics(clean)
     require_pausal_sentence_endings(clean)
     require_speech_safe(clean, stage="FINAL_TTS_TEXT")
     api_faithful, _ = lexical_fidelity(normalized_story, clean)
@@ -1514,6 +1526,7 @@ def prepare(story: Path):
         tts_normalization_status="passed",
         speech_safe_validation_status="passed",
         diacritization_status="passed",
+        tts_final_diacritics_status="none",
         pronunciation_validation_status="passed",
         tts_preparation_status="passed",
     )
@@ -1590,6 +1603,7 @@ async def synthesize(story: Path):
         "generation_speed": SETTINGS.get("tts_generation_speed"),
         "post_tts_tempo": SETTINGS.get("post_tts_tempo"),
         "diacritization": SETTINGS.get("arabic_diacritization"),
+        "final_diacritics": SETTINGS.get("tts_final_diacritics", "none"),
     }
     config_hash = compute_config_hash(tts_config)
 
@@ -2183,6 +2197,7 @@ def validate(story: Path):
     normalized_story_text=(story/"05b_story_tts_normalized.md").read_text(encoding="utf-8")
     require_speech_safe(normalized_story_text, stage="VALIDATE_NORMALIZED_STORY")
     require_speech_safe(api_tts_text, stage="VALIDATE_FINAL_TTS")
+    require_no_tts_diacritics(api_tts_text)
     faithful, lexical_corrections=lexical_fidelity(normalized_story_text, annotated_text)
     if not faithful:
         raise RuntimeError("TTS annotated text differs lexically from the clean story")
@@ -2236,7 +2251,7 @@ def validate(story: Path):
     long_silences=re.findall(r"silence_duration:\s*([0-9.]+)",silence.stderr)
     stats=subprocess.run([ffmpeg(),"-hide_banner","-i",str(story/"12_audio_full.mp3"),"-af","astats=metadata=1:reset=1","-f","null","-"],capture_output=True,text=True)
     duration_status="PASS" if SETTINGS["target_min_seconds"] <= ad <= SETTINGS["target_max_seconds"] else "FAIL"
-    validation={"audio_duration_seconds":round(ad,2),"video_duration_seconds":round(vd,2),"duration_status":duration_status,"youtube_packaging_status":"PASS" if packaged_episode else "LEGACY","tts_normalization_status":"PASS","speech_safe_validation_status":"PASS","tts_diacritization_status":"PASS_DOUBLE_REVIEWED_PAUSAL","pronunciation_validation_status":"PASS","tts_preparation_status":"PASS","diacritic_ratio":round(current_diacritic_ratio,4),"diacritization_engine":DIACRITIZATION_VERSION,"tts_generation_speed":float(SETTINGS.get("tts_generation_speed",1.0)),"post_processing_tempo":float(SETTINGS.get("post_tts_tempo",1.0)),"effective_speed":float(SETTINGS.get("post_tts_tempo",1.0)),"sentence_pause_strategy":SETTINGS.get("sentence_pause_strategy"),"sentence_pause_boundaries":sentence_boundaries,"pausal_sentence_endings_status":"PASS","lexical_corrections_count":len(lexical_corrections),"lexical_corrections_preview":lexical_corrections[:20],"performance_tags":0,"long_silences_seconds":[float(x) for x in long_silences],"audio_chunks":len(list((story/"audio_chunks").glob("*.mp3"))),"tts_chunks":len(list((story/"tts_chunks").glob("*.txt"))),"zero_byte_files":[str(p) for p in story.rglob("*") if p.is_file() and p.stat().st_size==0]}
+    validation={"audio_duration_seconds":round(ad,2),"video_duration_seconds":round(vd,2),"duration_status":duration_status,"youtube_packaging_status":"PASS" if packaged_episode else "LEGACY","tts_normalization_status":"PASS","speech_safe_validation_status":"PASS","tts_diacritization_status":"PASS_REVIEW_ONLY","tts_final_diacritics_status":"PASS_NONE","pronunciation_validation_status":"PASS","tts_preparation_status":"PASS","diacritic_ratio":round(current_diacritic_ratio,4),"diacritization_engine":DIACRITIZATION_VERSION,"tts_generation_speed":float(SETTINGS.get("tts_generation_speed",1.0)),"post_processing_tempo":float(SETTINGS.get("post_tts_tempo",1.0)),"effective_speed":float(SETTINGS.get("post_tts_tempo",1.0)),"sentence_pause_strategy":SETTINGS.get("sentence_pause_strategy"),"sentence_pause_boundaries":sentence_boundaries,"pausal_sentence_endings_status":"PASS","lexical_corrections_count":len(lexical_corrections),"lexical_corrections_preview":lexical_corrections[:20],"performance_tags":0,"long_silences_seconds":[float(x) for x in long_silences],"audio_chunks":len(list((story/"audio_chunks").glob("*.mp3"))),"tts_chunks":len(list((story/"tts_chunks").glob("*.txt"))),"zero_byte_files":[str(p) for p in story.rglob("*") if p.is_file() and p.stat().st_size==0]}
     (logs/"validation.json").write_text(json.dumps(validation,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     (logs/"ffmpeg_astats.txt").write_text(stats.stderr,encoding="utf-8")
     if validation["zero_byte_files"]: raise RuntimeError("zero-byte files found")
