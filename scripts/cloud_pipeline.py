@@ -243,8 +243,8 @@ def produce() -> dict:
 
 
 SKIP_MARKER = ROOT / ".runtime" / "produce_skipped.json"
-MAX_AUTORECOVERY_ATTEMPTS = 2           # automatic re-runs per job, in addition to the first attempt
-AUTORECOVERY_BACKOFF_SECONDS = (30, 90)
+MAX_AUTORECOVERY_ATTEMPTS = 1           # only one re-run, and only for transient external failures
+AUTORECOVERY_BACKOFF_SECONDS = (30,)
 AUTORECOVERY_DEADLINE_SECONDS = 4 * 3600  # never retry late in the 355-minute job
 RETRY_EXIT_CODES_NEVER = ("WAITING_FOR_LLM_QUOTA", "TTS_WAITING_FOR_QUOTA")
 
@@ -252,8 +252,8 @@ RETRY_EXIT_CODES_NEVER = ("WAITING_FOR_LLM_QUOTA", "TTS_WAITING_FOR_QUOTA")
 def recovery_decision(summary: dict, attempts: int, elapsed: float) -> tuple[bool, int]:
     """Should this job re-run ``produce`` itself? Returns ``(retry, wait_seconds)``.
 
-    Only failures the registry marks AUTO_RECOVERABLE and worth an immediate retry, with a
-    saved checkpoint (or a stage with nothing to lose), within hard attempt and time limits.
+    Global recovery is intentionally tiny: only a transient external failure may re-run once.
+    Validation/content failures must be repaired inside their own stage or stop with a checkpoint.
     Quota waits, cost blocks, owner actions and code defects are never retried here.
     """
     if summary.get("status") != "failed" or summary.get("recovery_policy") != "AUTO_RECOVERABLE":
@@ -275,7 +275,7 @@ def recovery_decision(summary: dict, attempts: int, elapsed: float) -> tuple[boo
 
 
 def produce_with_recovery() -> dict:
-    """``produce`` with bounded, checkpoint-reusing automatic recovery; never an unbounded loop."""
+    """Run production with one checkpoint-reusing retry for transient external failures only."""
     started = time.monotonic()
     attempts = 0
     while True:
