@@ -1,0 +1,51 @@
+name: TEMP Check Cloudflare Free Plan
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/temp-check-cloudflare-free-plan.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify Cloudflare Workers plan without spending
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          HTTP=$(curl -sS -o subs.json -w '%{http_code}'             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/subscriptions"             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")
+          echo "HTTP=$HTTP"
+          python3 - <<'PY'
+          import json
+          p=json.load(open("subs.json"))
+          safe=[]
+          for x in (p.get("result") or []):
+              safe.append({
+                  "id":x.get("id"),
+                  "state":x.get("state"),
+                  "rate_plan_id":(x.get("rate_plan") or {}).get("id"),
+                  "rate_plan_name":(x.get("rate_plan") or {}).get("public_name") or (x.get("rate_plan") or {}).get("name"),
+              })
+          print("SUBSCRIPTIONS="+json.dumps(safe,sort_keys=True))
+          # Never infer free-only eligibility unless the subscription payload proves it.
+          names=" ".join(str(v).lower() for x in safe for v in x.values() if v is not None)
+          paid_markers=("workers paid","workers_paid","workers-paid","workers bundles","workers_standard")
+          if any(m in names for m in paid_markers):
+              print("CLOUDFLARE_FREE_ONLY_ELIGIBLE=NO_PAID_PLAN")
+              raise SystemExit(42)
+          if "workers free" in names or "workers_free" in names or "workers-free" in names:
+              print("CLOUDFLARE_FREE_ONLY_ELIGIBLE=YES")
+          else:
+              print("CLOUDFLARE_FREE_ONLY_ELIGIBLE=NO_UNVERIFIABLE_PLAN")
+              raise SystemExit(43)
+          PY
