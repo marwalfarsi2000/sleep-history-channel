@@ -1,0 +1,49 @@
+name: TEMP Check Pollinations Free Balance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/temp-check-pollinations-free-balance.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check free-only Pollinations balance
+        env:
+          POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$POLLINATIONS_API_KEY"
+          HTTP=$(curl -sS -o balance.json -w '%{http_code}'             -H "Authorization: Bearer $POLLINATIONS_API_KEY"             https://gen.pollinations.ai/account/balance)
+          echo "HTTP=$HTTP"
+          python3 - <<'PY'
+          import json
+          p=json.load(open("balance.json"))
+          # Print balances only; never print the key or account identity.
+          safe={}
+          for k in ("balance","accountBalance","tierBalance","paidBalance","questBalance","tier","paid"):
+              if k in p: safe[k]=p[k]
+          print("POLLINATIONS_BALANCE="+json.dumps(safe,sort_keys=True))
+          acct=p.get("accountBalance")
+          if isinstance(acct,dict):
+              paid=float(acct.get("paid") or 0)
+              total=float(acct.get("total") or 0)
+              tier=float(acct.get("tier") or 0)
+              quest=max(0.0,total-paid)
+              print(f"FREE_QUEST_OR_TIER_POLLEN={quest}")
+              print(f"PAID_POLLEN={paid}")
+              if quest<=0:
+                  raise SystemExit("FREE_BALANCE_UNAVAILABLE")
+              print("FREE_ONLY_ELIGIBLE=YES")
+          else:
+              # Cannot prove which wallet would be charged, so do not generate.
+              print("FREE_ONLY_ELIGIBLE=NO_UNVERIFIABLE_WALLET")
+              raise SystemExit(42)
+          PY
