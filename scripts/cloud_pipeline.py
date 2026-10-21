@@ -388,11 +388,33 @@ def publish(identifier: str) -> dict:
             if metadata.get("thumbnail_text_render_status") != "passed":
                 raise RuntimeError("PREFLIGHT_VALIDATION_FAILED: thumbnail text render status is not passed")
 
+    # Owner approval is a durable decision. Record it before touching YouTube so
+    # an OAuth/API problem never loses the approval or sends the episode back to review.
+    if current_remote == State.REVIEW_PENDING:
+        approved_at = dt.datetime.now(dt.timezone(dt.timedelta(hours=4))).isoformat()
+        advance_index_status(identifier, State.APPROVED_FOR_PUBLISH, approved_at=approved_at)
+        modify_remote(identifier, {
+            "approval_status": State.APPROVED_FOR_PUBLISH,
+            "approved_at": approved_at,
+        })
+        persist_state(
+            identifier,
+            approval_status=State.APPROVED_FOR_PUBLISH,
+            approved_at=approved_at,
+            publish_blocked=None,
+            publish_blocked_action=None,
+        )
+        current_remote = State.APPROVED_FOR_PUBLISH
+
     from youtube_publish import publish_archive_item
     result = publish_archive_item(identifier)
 
     if result.get("requires_owner_action"):
-        run_summary.update(owner_action_required=True, owner_action=result.get("action"))
+        run_summary.update(
+            owner_action_required=True,
+            owner_action=result.get("action"),
+            publish_blocked=result.get("status", "OWNER_ACTION_REQUIRED"),
+        )
         persist_state(
             identifier,
             approval_status=current_remote,
@@ -400,6 +422,17 @@ def publish(identifier: str) -> dict:
             publish_blocked_action=result.get("action"),
             youtube_video_id=result.get("video_id"),
         )
+        modify_remote(identifier, {
+            "approval_status": current_remote,
+            "publish_blocked": result.get("status", "OWNER_ACTION_REQUIRED"),
+            "publish_blocked_action": result.get("action"),
+        })
+        if result.get("action") in {"REAUTHORIZE_YOUTUBE_OAUTH", "REAUTHORIZE_YOUTUBE_OAUTH_WITH_READ_SCOPE"}:
+            send_message(
+                "<b>⏸️ الحلقة معتمدة وجاهزة للنشر</b>\n"
+                "تعذر الاتصال بـ YouTube بسبب صلاحية OAuth. لم يُفقد أي عمل ولا تحتاج الحلقة إلى إعادة اعتماد أو إعادة إنتاج.\n"
+                "بعد إعادة ربط YouTube يمكن استكمال النشر من نفس الفيديو مباشرة."
+            )
         return result
 
     advance_index_status(
