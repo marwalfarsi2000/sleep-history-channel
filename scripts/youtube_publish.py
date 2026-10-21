@@ -9,6 +9,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -62,6 +63,23 @@ def get_granted_scopes(creds: Credentials) -> set[str]:
     if not scopes:
         raise RuntimeError("YOUTUBE_OAUTH_PREFLIGHT_FAILED: could not determine granted OAuth scopes")
     return scopes
+
+
+def oauth_refresh_block(exc: BaseException) -> dict | None:
+    """Convert revoked/expired OAuth into a durable owner-action state, not a pipeline crash."""
+    text = str(exc).lower()
+    if not isinstance(exc, RefreshError) and "invalid_grant" not in text:
+        return None
+    if not any(token in text for token in ("invalid_grant", "expired", "revoked")):
+        return None
+    return {
+        "requires_owner_action": True,
+        "status": "PUBLISH_BLOCKED_AUTH",
+        "action": "REAUTHORIZE_YOUTUBE_OAUTH",
+        "video_id": None,
+        "uploaded": False,
+        "reason": "YouTube authorization expired or was revoked. Reauthorize once; the approved episode remains ready to publish.",
+    }
 
 
 def capability_gap(mode: str, granted: set[str]) -> dict | None:
@@ -351,7 +369,13 @@ def publish_archive_item(identifier: str) -> dict:
     mode = publish_mode()
     creds = credentials()
     # Capability gate: runs before any download, search or videos.insert.
-    granted = get_granted_scopes(creds)
+    try:
+        granted = get_granted_scopes(creds)
+    except RefreshError as exc:
+        blocked = oauth_refresh_block(exc)
+        if blocked:
+            return blocked
+        raise
     blocked = capability_gap(mode, granted)
     if blocked:
         return blocked
