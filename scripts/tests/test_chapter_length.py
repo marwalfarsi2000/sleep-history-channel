@@ -55,7 +55,7 @@ class ChapterLengthTests(unittest.TestCase):
     def test_existing_short_chapter_is_appended_not_regenerated(self):
         with tempfile.TemporaryDirectory() as folder:
             chapter = Path(folder) / "chapter_01.md"
-            original = words(600)
+            original = words(500)
             chapter.write_text(original, encoding="utf-8")
             story, gemini = self.draft([("إضافة " * 200, [])], folder)
             saved = chapter.read_text(encoding="utf-8")
