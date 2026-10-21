@@ -30,9 +30,10 @@ class ChapterLengthTests(unittest.TestCase):
                 raise
 
     def test_minimum_formula(self):
-        self.assertEqual(generate_daily.chapter_minimum_words(850), 765)
-        self.assertEqual(generate_daily.chapter_minimum_words(700), 750)
-        self.assertEqual(generate_daily.chapter_minimum_words(1000), 900)
+        self.assertEqual(generate_daily.chapter_preferred_words(850), 595)
+        self.assertEqual(generate_daily.chapter_preferred_words(700), 550)
+        self.assertEqual(generate_daily.chapter_preferred_words(1000), 700)
+        self.assertEqual(generate_daily.chapter_minimum_words(850), 595)
 
     def test_short_fresh_chapter_is_extended_by_continuation_only(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -42,14 +43,14 @@ class ChapterLengthTests(unittest.TestCase):
         self.assertEqual(saved.strip(), story.strip())
         self.assertEqual(gemini.call_count, 2)  # draft + one continuation, no rewrite
 
-    def test_600_and_700_word_chapters_still_need_expansion(self):
+    def test_600_and_700_word_chapters_are_accepted_without_forced_expansion(self):
         for count in (600, 700):
             with tempfile.TemporaryDirectory() as folder:
                 chapter = Path(folder) / "chapter_01.md"
                 chapter.write_text(words(count), encoding="utf-8")
-                story, gemini = self.draft([(words(200), [])], folder)
-            self.assertEqual(gemini.call_count, 1, count)
-            self.assertEqual(generate_daily.word_count(story), count + 200)
+                story, gemini = self.draft([], folder)
+            self.assertEqual(gemini.call_count, 0, count)
+            self.assertEqual(generate_daily.word_count(story), count)
 
     def test_existing_short_chapter_is_appended_not_regenerated(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -67,10 +68,10 @@ class ChapterLengthTests(unittest.TestCase):
 
     def test_sufficient_existing_chapter_is_reused_without_model_call(self):
         with tempfile.TemporaryDirectory() as folder:
-            (Path(folder) / "chapter_01.md").write_text(words(765), encoding="utf-8")
+            (Path(folder) / "chapter_01.md").write_text(words(595), encoding="utf-8")
             story, gemini = self.draft([], folder)
         self.assertEqual(gemini.call_count, 0)
-        self.assertEqual(generate_daily.word_count(story), 765)
+        self.assertEqual(generate_daily.word_count(story), 595)
 
     def test_continuation_prompt_keeps_phase_and_scenes(self):
         section = [{**SECTION[0], "phase": "UNWIND", "scenes": [{"main_idea": "فكرة خاصة"}]}]
@@ -83,26 +84,28 @@ class ChapterLengthTests(unittest.TestCase):
 
     def test_small_deficit_requests_a_real_continuation_instead_of_tiny_patch(self):
         with tempfile.TemporaryDirectory() as folder:
-            (Path(folder) / "chapter_01.md").write_text(words(748), encoding="utf-8")
+            (Path(folder) / "chapter_01.md").write_text(words(580), encoding="utf-8")
             story, gemini = self.draft([(words(250), [])], folder)
         self.assertEqual(gemini.call_count, 1)
-        self.assertGreaterEqual(generate_daily.word_count(story), 765)
+        self.assertGreaterEqual(generate_daily.word_count(story), 595)
         self.assertIn("بنحو 350 كلمة عربية", gemini.call_args.args[0])
 
-    def test_chapter_that_never_reaches_minimum_fails_closed(self):
-        final_count = 702 + (5 * generate_daily.CHAPTER_EXPANSION_ATTEMPTS)
+    def test_short_chapter_after_one_continuation_is_soft_warning_not_failure(self):
         with tempfile.TemporaryDirectory() as folder:
-            (Path(folder) / "chapter_01.md").write_text(words(702), encoding="utf-8")
-            with self.assertRaisesRegex(
-                RuntimeError,
-                rf"CHAPTER_LENGTH_TARGET_FAILED: chapter 1 has {final_count} words; minimum acceptable is 765",
-            ) as ctx:
-                self.draft([(words(5), [])] * generate_daily.CHAPTER_EXPANSION_ATTEMPTS, folder)
-        self.assertEqual(ctx.exception.gemini.call_count, generate_daily.CHAPTER_EXPANSION_ATTEMPTS)
+            (Path(folder) / "chapter_01.md").write_text(words(409), encoding="utf-8")
+            with mock.patch("sys.stderr") as err:
+                story, gemini = self.draft([(words(5), [])], folder)
+        self.assertEqual(gemini.call_count, 1)
+        self.assertEqual(generate_daily.word_count(story), 414)
+        written = "".join(call.args[0] for call in err.write.call_args_list)
+        self.assertIn("CHAPTER_LENGTH_SOFT_WARNING", written)
+        self.assertIn("hard 5000-word gate", written)
 
-    def test_old_600_threshold_is_gone(self):
+    def test_per_chapter_length_is_not_a_hard_failure_anymore(self):
         import inspect
-        self.assertNotIn("< 600", inspect.getsource(generate_daily.draft_story))
+        source = inspect.getsource(generate_daily.draft_story)
+        self.assertNotIn("CHAPTER_LENGTH_TARGET_FAILED", source)
+        self.assertIn("CHAPTER_LENGTH_SOFT_WARNING", source)
 
 
 class OutlineTotalTests(unittest.TestCase):
