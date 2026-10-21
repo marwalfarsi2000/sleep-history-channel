@@ -114,6 +114,43 @@ def test_owner_approved_publish_uploads_public_with_upload_only_token_and_finish
     assert len(sent) == 1
 
 
+def test_oauth_block_keeps_owner_approval_durable_and_does_not_fail_publish(catalogue, monkeypatch):
+    metadata = {"title": "title", "approval_status": "REVIEW_PENDING"}
+    sent, remote_updates = [], []
+    blocked = {
+        "requires_owner_action": True,
+        "status": "PUBLISH_BLOCKED_AUTH",
+        "action": "REAUTHORIZE_YOUTUBE_OAUTH",
+        "video_id": None,
+        "uploaded": False,
+    }
+    patches = [
+        patch.object(cloud_pipeline, "remote_status", return_value="REVIEW_PENDING"),
+        patch.object(cloud_pipeline, "archive_metadata", return_value={"metadata": metadata}),
+        patch.object(cloud_pipeline, "modify_remote", side_effect=lambda i, f: remote_updates.append(f)),
+        patch.object(cloud_pipeline, "send_message", side_effect=lambda *a, **k: sent.append(a)),
+        patch("youtube_publish.publish_archive_item", return_value=blocked),
+        patch("archive_recovery.ensure_index_record", return_value=True),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        result = cloud_pipeline.publish(IDENTIFIER)
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert result == blocked
+    record = read_json(catalogue / "config" / "archive_index.json")[0]
+    assert record["status"] == "APPROVED_FOR_PUBLISH"
+    assert read_json(catalogue / "config" / "topics_history.json")[0]["status"] == "APPROVED_FOR_PUBLISH"
+    assert remote_updates[0]["approval_status"] == "APPROVED_FOR_PUBLISH"
+    assert remote_updates[-1]["publish_blocked"] == "PUBLISH_BLOCKED_AUTH"
+    assert remote_updates[-1]["approval_status"] == "APPROVED_FOR_PUBLISH"
+    assert len(sent) == 1
+    assert "معتمدة وجاهزة للنشر" in sent[0][0]
+
+
 @pytest.mark.parametrize("remote", ["GENERATING", "MEDIA_READY", "REJECTED", "FAILED_RETRYABLE"])
 def test_no_youtube_upload_before_owner_approval(catalogue, monkeypatch, remote):
     with patch("youtube_publish.publish_archive_item") as upload:
