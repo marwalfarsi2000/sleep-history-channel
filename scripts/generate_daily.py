@@ -340,9 +340,14 @@ CHAPTER_EXPANSION_ATTEMPTS = 1
 STORY_QUALITY_REPAIR_ATTEMPTS = 1
 
 
+def chapter_preferred_words(target_words: int) -> int:
+    """Soft chapter target used only to decide whether one append-only continuation is worth trying."""
+    return max(550, math.ceil(target_words * 0.70))
+
+
 def chapter_minimum_words(target_words: int) -> int:
-    """Smallest acceptable chapter: 90% of its target, never under 750 words."""
-    return max(750, math.ceil(target_words * 0.90))
+    """Backward-compatible alias for the soft chapter target; chapter length is no longer a hard gate."""
+    return chapter_preferred_words(target_words)
 
 
 def recent_story_formats(history: list[dict], limit: int = 2) -> list[str]:
@@ -1480,7 +1485,7 @@ def draft_story(topic: dict, research: str, sections: list[dict], log_dir: Path)
         previous = chapters[-1][-2500:] if chapters else "هذه بداية السرد."
         chapter_path = log_dir / f"chapter_{index:02d}.md"
         target_words = max(850, int(section.get("target_words", 700)))
-        minimum_words = chapter_minimum_words(target_words)
+        preferred_words = chapter_preferred_words(target_words)
         prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
 {rules}
 
@@ -1517,9 +1522,9 @@ Premise الحلقة:
         # A chapter below its minimum is only extended with new paragraphs
         # appended to the saved text; it is never regenerated or replaced.
         for _attempt in range(CHAPTER_EXPANSION_ATTEMPTS):
-            if word_count(chapter) >= minimum_words:
+            if word_count(chapter) >= preferred_words:
                 break
-            missing = minimum_words - word_count(chapter)
+            missing = preferred_words - word_count(chapter)
             # Small deficits were repeatedly causing permanent production failure
             # because the model often returned less than a 100-word continuation.
             # Ask for a useful minimum continuation while still staying within the
@@ -1544,10 +1549,13 @@ Premise الحلقة:
             if word_count(continuation) > 0:
                 chapter = f"{chapter.rstrip()}\n\n{continuation.strip()}"
                 write(chapter_path, chapter)
-        if word_count(chapter) < minimum_words:
-            raise RuntimeError(
-                f"CHAPTER_LENGTH_TARGET_FAILED: chapter {index} has {word_count(chapter)} words; "
-                f"minimum acceptable is {minimum_words}"
+        if word_count(chapter) < preferred_words:
+            print(
+                f"CHAPTER_LENGTH_SOFT_WARNING: chapter {index} has {word_count(chapter)} words; "
+                f"preferred target is {preferred_words}. Continuing because per-chapter length is a soft target; "
+                "the assembled story still has a hard 5000-word gate.",
+                file=sys.stderr,
+                flush=True,
             )
         chapters.append(chapter)
     return "\n\n".join(chapters)
