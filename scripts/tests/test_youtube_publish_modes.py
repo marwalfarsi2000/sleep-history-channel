@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import httplib2
 import pytest
+from google.auth.exceptions import RefreshError
 from googleapiclient.errors import HttpError
 
 import youtube_publish as yp
@@ -120,6 +121,23 @@ def test_insufficient_capability_never_calls_videos_insert(tmp_path, monkeypatch
     h.download.assert_not_called()
     assert h.records == []
     assert not h.pending.exists()
+
+
+def test_expired_refresh_token_becomes_nonfatal_owner_action_without_upload(tmp_path, monkeypatch):
+    with harness(tmp_path, monkeypatch, "approved_direct_public", UPLOAD_ONLY) as h:
+        with patch.object(
+            yp,
+            "get_granted_scopes",
+            side_effect=RefreshError("invalid_grant: Token has been expired or revoked."),
+        ):
+            result = h.run()
+    assert result["requires_owner_action"] is True
+    assert result["status"] == "PUBLISH_BLOCKED_AUTH"
+    assert result["action"] == "REAUTHORIZE_YOUTUBE_OAUTH"
+    assert result["uploaded"] is False
+    h.videos.insert.assert_not_called()
+    h.build.assert_not_called()
+    h.download.assert_not_called()
 
 
 def test_undeterminable_scopes_fail_closed_without_upload(tmp_path, monkeypatch):
