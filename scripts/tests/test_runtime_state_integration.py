@@ -207,7 +207,7 @@ def test_review_publish_owner_action_is_preserved_in_state(review_env):
     with patch("youtube_publish.publish_archive_item", return_value=blocked):
         assert cloud_pipeline.publish("ia-item")["requires_owner_action"]
     episode = remote_episode(review_env.bare, "ia-item")
-    assert episode["approval_status"] == "REVIEW_PENDING"
+    assert episode["approval_status"] == "APPROVED_FOR_PUBLISH"
     assert episode["publish_blocked"] == "OWNER_ACTION_REQUIRED"
 
 
