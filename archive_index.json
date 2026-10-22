@@ -238,7 +238,7 @@
     "thumbnail_prompt": "Calm illustrated realism of an 18th-century Ghadames pottery workshop at dusk with subtle painterly texture and premium storybook quality; low-key night lighting with a dim clay oil lamp casting a warm glow on unbaked clay vessels, wooden shaping tools, and textured mud-brick walls; palette of deep midnight navy, charcoal, muted warm gold, and aged ivory; one simple memorable scene focusing on traditional earthenware crafting tools; mobile-first strong silhouette, no people, no modern objects, no text or typography of any kind rendered in the image. 16:9 YouTube thumbnail. Original composition. Professional quality.",
     "historical_setting": "غدامس، ليبيا — القرن الثامن عشر الميلادي",
     "created_at": "2026-10-22T03:17:29.826478+04:00",
-    "status": "REVIEW_PENDING",
+    "status": "APPROVED_FOR_PUBLISH",
     "video_filename": "14_video_final.mp4",
     "item_url": "https://archive.org/details/lan-tukmil-alqissa-20261022-ghadames-oasis-pottery-cr",
     "video_url": "https://archive.org/download/lan-tukmil-alqissa-20261022-ghadames-oasis-pottery-cr/14_video_final.mp4",
@@ -246,7 +246,8 @@
     "video_size": 71847421,
     "video_sha256": "8580ff75d3cbd47d2661f9c28f2ccefc265c869b3cdc428e896e8ac9b8f00d6d",
     "audio_duration_seconds": 4674.22,
-    "video_duration_seconds": 4674.16
+    "video_duration_seconds": 4674.16,
+    "approved_at": "2026-10-23T03:00:16.427816+04:00"
   },
   {
     "identifier": "lan-tukmil-alqissa-20261023-muscat-old-market-herbs-r",
