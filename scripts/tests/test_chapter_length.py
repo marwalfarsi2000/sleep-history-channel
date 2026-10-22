@@ -108,6 +108,60 @@ class ChapterLengthTests(unittest.TestCase):
         self.assertIn("CHAPTER_LENGTH_SOFT_WARNING", source)
 
 
+class StoryMinimumRepairTests(unittest.TestCase):
+    def test_story_just_under_5000_gets_one_append_only_topup_in_penultimate_chapter(self):
+        sections = [
+            {"title": f"قسم {i}", "brief": "هادئ", "phase": "EXPLORATION", "scenes": []}
+            for i in range(1, 9)
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            logs = Path(folder)
+            counts = [625, 625, 625, 625, 625, 625, 601, 625]  # total 4976
+            for i, count in enumerate(counts, 1):
+                (logs / f"chapter_{i:02d}.md").write_text(words(count), encoding="utf-8")
+            draft = "\n\n".join((logs / f"chapter_{i:02d}.md").read_text(encoding="utf-8") for i in range(1, 9))
+            original_seventh = (logs / "chapter_07.md").read_text(encoding="utf-8")
+            original_eighth = (logs / "chapter_08.md").read_text(encoding="utf-8")
+            with mock.patch.object(generate_daily, "gemini", return_value=(words(250), [])) as gemini:
+                repaired = generate_daily.ensure_minimum_story_length(
+                    {"topic_ar": "مسقط"}, "بحث", sections, logs, draft
+                )
+
+            self.assertEqual(gemini.call_count, 1)
+            self.assertGreaterEqual(generate_daily.word_count(repaired), 5000)
+            self.assertTrue((logs / "chapter_07.md").read_text(encoding="utf-8").startswith(original_seventh))
+            self.assertEqual((logs / "chapter_08.md").read_text(encoding="utf-8"), original_eighth)
+            self.assertIn("محاولة إصلاح واحدة", gemini.call_args.args[0])
+            self.assertIn("لا تفتح لغزًا أو سؤالًا جديدًا", gemini.call_args.args[0])
+
+    def test_story_at_or_over_5000_never_calls_model(self):
+        sections = [{"title": "قسم", "brief": "هادئ", "phase": "UNWIND", "scenes": []}]
+        with tempfile.TemporaryDirectory() as folder:
+            logs = Path(folder)
+            draft = words(5000)
+            with mock.patch.object(generate_daily, "gemini") as gemini:
+                repaired = generate_daily.ensure_minimum_story_length(
+                    {"topic_ar": "مسقط"}, "بحث", sections, logs, draft
+                )
+        self.assertEqual(repaired, draft)
+        gemini.assert_not_called()
+
+    def test_failed_single_topup_remains_fail_closed_below_5000(self):
+        sections = [
+            {"title": f"قسم {i}", "brief": "هادئ", "phase": "UNWIND", "scenes": []}
+            for i in range(1, 3)
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            logs = Path(folder)
+            (logs / "chapter_01.md").write_text(words(2200), encoding="utf-8")
+            (logs / "chapter_02.md").write_text(words(2200), encoding="utf-8")
+            draft = words(4400)
+            with mock.patch.object(generate_daily, "gemini", return_value=(words(10), [])):
+                repaired = generate_daily.ensure_minimum_story_length(
+                    {"topic_ar": "مسقط"}, "بحث", sections, logs, draft
+                )
+        self.assertLess(generate_daily.word_count(repaired), 5000)
+
 class OutlineTotalTests(unittest.TestCase):
     @staticmethod
     def sections(per_section):
@@ -142,10 +196,12 @@ class OutlineTotalTests(unittest.TestCase):
         self.assertGreaterEqual(sum(s["target_words"] for s in result), 5500)
         generate_daily.validate_outline_sections(result)
 
-    def test_final_story_gate_still_5000(self):
+    def test_final_story_gate_still_5000_after_one_local_topup(self):
         import inspect
         source = inspect.getsource(generate_daily.resume_partial_story)
+        self.assertIn("ensure_minimum_story_length", source)
         self.assertIn("word_count(draft) < 5000", source)
+        self.assertIn("STORY_TOO_SHORT", source)
         self.assertEqual(generate_daily.MIN_OUTLINE_TARGET_WORDS, 5500)
 
 
