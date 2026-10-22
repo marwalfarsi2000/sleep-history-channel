@@ -206,6 +206,31 @@ def _gemini_one(model: str, prompt: str, *, json_mode: bool = False, search: boo
                 flush=True,
             )
             time.sleep(delay)
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+            # Transport failures are temporary provider capacity/network problems.
+            # Keep them inside the model router so it can retry briefly and then
+            # fall back to the next approved free model instead of aborting the
+            # whole production run during long tasks such as diacritization.
+            last_error = f"Gemini transient network error: {type(error).__name__}: {_error_summary(str(error))}"
+            if attempt < len(retry_delays):
+                delay = retry_delays[attempt]
+                print(
+                    f"Gemini transient network failure; retrying in {delay}s "
+                    f"({attempt + 1}/{len(retry_delays)}): {_error_summary(str(error))}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                time.sleep(delay)
+                continue
+            info = llm_router.ApiErrorInfo(
+                0,
+                llm_router.QuotaKind.CAPACITY,
+                "model",
+                None,
+                [],
+                last_error[:180],
+            )
+            raise llm_router.GeminiApiError(last_error, info) from error
     if result is None:
         raise RuntimeError(last_error or "Gemini request failed")
     candidates = result.get("candidates") or []
@@ -1561,6 +1586,79 @@ Premise الحلقة:
     return "\n\n".join(chapters)
 
 
+def ensure_minimum_story_length(
+    topic: dict,
+    research: str,
+    sections: list[dict],
+    logs: Path,
+    draft: str,
+    *,
+    minimum_words: int = 5000,
+) -> str:
+    """One bounded append-only repair when the assembled story misses 5000 words.
+
+    The repair is saved into the penultimate chapter so a later checkpoint restore
+    reuses it. The final SOFT_FADE chapter is left untouched whenever possible.
+    """
+    current = word_count(draft)
+    if current >= minimum_words:
+        return draft
+    if not sections:
+        return draft
+
+    missing = minimum_words - current
+    request_words = min(700, max(250, missing + 150))
+    target_index = max(1, len(sections) - 1)
+    target_path = logs / f"chapter_{target_index:02d}.md"
+    if not target_path.exists():
+        target_index = len(sections)
+        target_path = logs / f"chapter_{target_index:02d}.md"
+    if not target_path.exists():
+        return draft
+
+    section = sections[target_index - 1]
+    chapter = target_path.read_text(encoding="utf-8").strip()
+    prompt = f"""أكمل هذا القسم من قصة تاريخية للنوم بإضافة جديدة فقط، بنحو {request_words} كلمة عربية.
+
+هذه محاولة إصلاح واحدة لأن القصة المجمعة أقصر قليلًا من الحد الأدنى.
+قواعد صارمة:
+- أكمل من نهاية القسم مباشرة ولا تعِد كتابة أي جزء موجود.
+- لا تلخص ولا تكرر ولا تضف عنوانًا أو خاتمة جديدة.
+- لا تفتح لغزًا أو سؤالًا جديدًا ولا ترفع الإثارة.
+- حافظ على الشخصية والمهمة والمرحلة {section.get('phase', '')}.
+- أضف فقط تفاصيل يدعمها المصدر المعرفي؛ لا تخترع أسماء أو تواريخ أو حقائق.
+- اجعل الإضافة هادئة وطبيعية ومن دون حشو.
+
+الموضوع: {topic.get('topic_ar', '')}
+القسم: {section.get('title', '')} — {section.get('brief', '')}
+المشاهد: {json.dumps(section.get('scenes', []), ensure_ascii=False)}
+
+المصدر المعرفي:
+{research[:36000]}
+
+نص القسم حتى الآن:
+{chapter}
+"""
+    continuation, _ = gemini(prompt, max_tokens=5000, temperature=0.35)
+    if word_count(continuation) <= 0:
+        return draft
+    target_path.write_text(f"{chapter.rstrip()}\n\n{continuation.strip()}\n", encoding="utf-8")
+
+    rebuilt: list[str] = []
+    for index in range(1, len(sections) + 1):
+        path = logs / f"chapter_{index:02d}.md"
+        if path.exists():
+            rebuilt.append(path.read_text(encoding="utf-8").strip())
+    repaired = "\n\n".join(part for part in rebuilt if part)
+    print(
+        f"STORY_LENGTH_LOCAL_TOPUP: {current} -> {word_count(repaired)} Arabic words "
+        f"using chapter {target_index}",
+        file=sys.stderr,
+        flush=True,
+    )
+    return repaired or draft
+
+
 def resume_partial_story(story: Path) -> Path:
     _remember_story(story)
     if (story / "logs/topic.json").exists():
@@ -1594,8 +1692,9 @@ def resume_partial_story(story: Path) -> Path:
         durable_checkpoint(story, "outline", "chapters")
     run_summary.stage("chapters")
     draft = draft_story(topic, research, sections, story / "logs")
+    draft = ensure_minimum_story_length(topic, research, sections, story / "logs", draft)
     if word_count(draft) < 5000:
-        raise RuntimeError(f"Generated story is too short: {word_count(draft)} Arabic words")
+        raise RuntimeError(f"STORY_TOO_SHORT: Generated story is too short after one local top-up: {word_count(draft)} Arabic words")
     write(story / "logs/assembled_story.md", draft)
     durable_checkpoint(story, "chapters", "quality_gates")
     run_summary.stage("quality_gates")
