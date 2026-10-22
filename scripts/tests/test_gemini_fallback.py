@@ -77,6 +77,39 @@ class GeminiFallbackTests(unittest.TestCase):
             {"thinkingLevel": "minimal"},
         )
 
+    def test_timeout_is_retried_locally_then_switches_to_next_free_model(self):
+        success = {"candidates": [{"content": {"parts": [{"text": "نجح البديل"}]}}]}
+        responses = [
+            TimeoutError("The read operation timed out"),
+            TimeoutError("The read operation timed out"),
+            _Response(success),
+        ]
+        with mock.patch.object(generate_daily, "SETTINGS", {
+            "llm_fallback_models": ["gemini-3.5-flash-lite"],
+            "cost_policy": "free_or_preapproved_only",
+            "approved_llm_models": ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"],
+        }), mock.patch.object(generate_daily, "MODEL", "gemini-3.1-flash-lite"), \
+             mock.patch.object(generate_daily, "load_secrets", return_value={"GEMINI_API_KEY": "test"}), \
+             mock.patch.object(generate_daily, "GEMINI_RETRY_DELAYS", (0,)), \
+             mock.patch.object(generate_daily.urllib.request, "urlopen", side_effect=responses) as urlopen, \
+             mock.patch.object(generate_daily.time, "sleep"):
+            text, _ = generate_daily.gemini("prompt")
+
+        self.assertEqual(text, "نجح البديل")
+        self.assertEqual(urlopen.call_count, 3)
+        self.assertIn("gemini-3.1-flash-lite", urlopen.call_args_list[0].args[0].full_url)
+        self.assertIn("gemini-3.1-flash-lite", urlopen.call_args_list[1].args[0].full_url)
+        self.assertIn("gemini-3.5-flash-lite", urlopen.call_args_list[2].args[0].full_url)
+
+    def test_urlerror_is_treated_as_transient_capacity_not_pipeline_failure(self):
+        with mock.patch.object(generate_daily, "load_secrets", return_value={"GEMINI_API_KEY": "test"}), \
+             mock.patch.object(generate_daily, "GEMINI_RETRY_DELAYS", ()), \
+             mock.patch.object(generate_daily.urllib.request, "urlopen", side_effect=urllib.error.URLError("temporary DNS")):
+            with self.assertRaises(generate_daily.llm_router.GeminiApiError) as ctx:
+                generate_daily._gemini_one("gemini-3.1-flash-lite", "prompt")
+        self.assertEqual(ctx.exception.info.kind, generate_daily.llm_router.QuotaKind.CAPACITY)
+        self.assertEqual(ctx.exception.info.scope, "model")
+
     def test_search_rate_limit_is_not_hammered_and_fails_closed_without_model_memory_fallback(self):
         responses = [_http_error(429, '{"error":{"status":"RESOURCE_EXHAUSTED"}}') for _ in range(4)]
         with mock.patch.object(generate_daily, "load_secrets", return_value={"GEMINI_API_KEY": "test"}), \
