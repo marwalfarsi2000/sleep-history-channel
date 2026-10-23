@@ -130,8 +130,9 @@
       "title": "عطار سوق المسبك في مسقط القديمة | حكاية تاريخية للنوم 😴",
       "review_url": "https://archive.org/details/lan-tukmil-alqissa-20261023-muscat-old-market-herbs-r",
       "approved_at": "2026-10-23T17:11:17.032387+04:00",
-      "publish_blocked": null,
-      "publish_blocked_action": null
+      "publish_blocked": "PUBLISH_BLOCKED_AUTH",
+      "publish_blocked_action": "REAUTHORIZE_YOUTUBE_OAUTH",
+      "youtube_video_id": null
     }
   }
 }
