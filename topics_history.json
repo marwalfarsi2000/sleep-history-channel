@@ -899,9 +899,8 @@
     "slug": "nile-delta-papyrus-making-quest",
     "topic": "صناعة وجمع أوراق البردي في دلتا النيل خلال عصر الدولة الحديثة",
     "angle": "تتبع يوم في حياة حرفي وناسخ يجمع سيقان البردي الطرية من مستنقعات دلتا النيل لتقطيعها وتجفيفها وتحويلها إلى لفائف كتابة ناعمة في العصر الفراتي والمصري القديم.",
-    "story_path": "stories/2026-10-23_nile-delta-papyrus-making-quest",
     "created_at": "2026-10-23T13:38:08.382950+04:00",
-    "status": "GENERATING",
+    "status": "REVIEW_PENDING",
     "topic_ar": "صناعة وجمع أوراق البردي في دلتا النيل خلال عصر الدولة الحديثة",
     "angle_ar": "تتبع يوم في حياة حرفي وناسخ يجمع سيقان البردي الطرية من مستنقعات دلتا النيل لتقطيعها وتجفيفها وتحويلها إلى لفائف كتابة ناعمة في العصر الفراتي والمصري القديم.",
     "search_query_en": "ancient egyptian papyrus making manufacturing river delta daily life",
@@ -1001,6 +1000,8 @@
     "one_sentence_summary_ar": "حرفي يجهز وينسج لفائف البردي الطرية في ورشة هادئة على ضفاف النيل",
     "narrative_identity": "IMMERSIVE_LOW_STAKES_HISTORICAL_QUEST",
     "research_topic_alignment_status": "PASS",
-    "alignment_reason": "جميع عناصر العالم التاريخي المتعلقة ببيئة دلتا النيل ومستنقعاتها، وجمع سيقان البردي وتقطيعها وترتيبها وتجفيفها، مدعومة بشكل كامل وصريح في نصوص البحث والمصادر التاريخية والأثرية المرفقة."
+    "alignment_reason": "جميع عناصر العالم التاريخي المتعلقة ببيئة دلتا النيل ومستنقعاتها، وجمع سيقان البردي وتقطيعها وترتيبها وتجفيفها، مدعومة بشكل كامل وصريح في نصوص البحث والمصادر التاريخية والأثرية المرفقة.",
+    "archive_identifier": "lan-tukmil-alqissa-20261024-nile-delta-papyrus-making",
+    "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261024-nile-delta-papyrus-making"
   }
 ]
