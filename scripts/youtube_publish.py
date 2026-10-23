@@ -66,19 +66,44 @@ def get_granted_scopes(creds: Credentials) -> set[str]:
 
 
 def oauth_refresh_block(exc: BaseException) -> dict | None:
-    """Convert revoked/expired OAuth into a durable owner-action state, not a pipeline crash."""
+    """Convert non-retryable OAuth refresh failures into a durable owner-action state."""
     text = str(exc).lower()
-    if not isinstance(exc, RefreshError) and "invalid_grant" not in text:
+    auth_markers = (
+        "invalid_grant",
+        "expired",
+        "revoked",
+        "unauthorized_client",
+        "invalid_client",
+        "deleted_client",
+    )
+    if not isinstance(exc, RefreshError) and not any(marker in text for marker in auth_markers):
         return None
-    if not any(token in text for token in ("invalid_grant", "expired", "revoked")):
+    if not any(marker in text for marker in auth_markers):
         return None
+
+    client_problem = any(
+        marker in text
+        for marker in ("unauthorized_client", "invalid_client", "deleted_client")
+    )
     return {
         "requires_owner_action": True,
         "status": "PUBLISH_BLOCKED_AUTH",
-        "action": "REAUTHORIZE_YOUTUBE_OAUTH",
+        "action": (
+            "UPDATE_YOUTUBE_OAUTH_CLIENT_AND_REAUTHORIZE"
+            if client_problem
+            else "REAUTHORIZE_YOUTUBE_OAUTH"
+        ),
         "video_id": None,
         "uploaded": False,
-        "reason": "YouTube authorization expired or was revoked. Reauthorize once; the approved episode remains ready to publish.",
+        "reason": (
+            "YouTube rejected the OAuth client. Ensure YOUTUBE_CLIENT_ID, "
+            "YOUTUBE_CLIENT_SECRET and YOUTUBE_REFRESH_TOKEN all belong to the same "
+            "OAuth client, then reauthorize once. The approved episode remains ready "
+            "to publish."
+            if client_problem
+            else "YouTube authorization expired or was revoked. Reauthorize once; "
+            "the approved episode remains ready to publish."
+        ),
     }
 
 
