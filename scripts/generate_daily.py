@@ -360,7 +360,7 @@ MAX_SAME_FORMAT_IN_A_ROW = 2
 # Validation failures never trigger a second whole-pipeline run inside the same job.
 OUTLINE_MAX_MODEL_CALLS = 2
 OUTLINE_RETRY_MAX = OUTLINE_MAX_MODEL_CALLS
-MIN_OUTLINE_TARGET_WORDS = 6500
+MIN_OUTLINE_TARGET_WORDS = 5500
 CHAPTER_EXPANSION_ATTEMPTS = 1
 STORY_QUALITY_REPAIR_ATTEMPTS = 1
 MIN_STORY_WORDS = 5000
@@ -370,8 +370,8 @@ STORY_TOPUP_MAX_REQUEST_WORDS = 1200
 
 
 def chapter_preferred_words(target_words: int) -> int:
-    """Soft chapter target with enough buffer that the assembled story normally clears 5000 words."""
-    return max(650, math.ceil(target_words * 0.80))
+    """Soft chapter target used only to decide whether one append-only continuation is worth trying."""
+    return max(550, math.ceil(target_words * 0.70))
 
 
 def chapter_minimum_words(target_words: int) -> int:

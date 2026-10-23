@@ -30,10 +30,10 @@ class ChapterLengthTests(unittest.TestCase):
                 raise
 
     def test_minimum_formula(self):
-        self.assertEqual(generate_daily.chapter_preferred_words(850), 680)
-        self.assertEqual(generate_daily.chapter_preferred_words(700), 650)
-        self.assertEqual(generate_daily.chapter_preferred_words(1000), 800)
-        self.assertEqual(generate_daily.chapter_minimum_words(850), 680)
+        self.assertEqual(generate_daily.chapter_preferred_words(850), 595)
+        self.assertEqual(generate_daily.chapter_preferred_words(700), 550)
+        self.assertEqual(generate_daily.chapter_preferred_words(1000), 700)
+        self.assertEqual(generate_daily.chapter_minimum_words(850), 595)
 
     def test_short_fresh_chapter_is_extended_by_continuation_only(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -43,8 +43,8 @@ class ChapterLengthTests(unittest.TestCase):
         self.assertEqual(saved.strip(), story.strip())
         self.assertEqual(gemini.call_count, 2)  # draft + one continuation, no rewrite
 
-    def test_650_and_700_word_chapters_are_accepted_without_forced_expansion(self):
-        for count in (650, 700):
+    def test_600_and_700_word_chapters_are_accepted_without_forced_expansion(self):
+        for count in (600, 700):
             with tempfile.TemporaryDirectory() as folder:
                 chapter = Path(folder) / "chapter_01.md"
                 chapter.write_text(words(count), encoding="utf-8")
@@ -68,10 +68,10 @@ class ChapterLengthTests(unittest.TestCase):
 
     def test_sufficient_existing_chapter_is_reused_without_model_call(self):
         with tempfile.TemporaryDirectory() as folder:
-            (Path(folder) / "chapter_01.md").write_text(words(680), encoding="utf-8")
+            (Path(folder) / "chapter_01.md").write_text(words(595), encoding="utf-8")
             story, gemini = self.draft([], folder)
         self.assertEqual(gemini.call_count, 0)
-        self.assertEqual(generate_daily.word_count(story), 680)
+        self.assertEqual(generate_daily.word_count(story), 595)
 
     def test_continuation_prompt_keeps_phase_and_scenes(self):
         section = [{**SECTION[0], "phase": "UNWIND", "scenes": [{"main_idea": "فكرة خاصة"}]}]
@@ -87,7 +87,7 @@ class ChapterLengthTests(unittest.TestCase):
             (Path(folder) / "chapter_01.md").write_text(words(580), encoding="utf-8")
             story, gemini = self.draft([(words(250), [])], folder)
         self.assertEqual(gemini.call_count, 1)
-        self.assertGreaterEqual(generate_daily.word_count(story), 680)
+        self.assertGreaterEqual(generate_daily.word_count(story), 595)
         self.assertIn("بنحو 350 كلمة عربية", gemini.call_args.args[0])
 
     def test_short_chapter_after_one_continuation_is_soft_warning_not_failure(self):
@@ -170,9 +170,9 @@ class StoryMinimumRepairTests(unittest.TestCase):
                     {"topic_ar": "مسقط"}, "بحث", sections, logs, draft
                 )
 
-        self.assertGreaterEqual(generate_daily.word_count(repaired), generate_daily.MIN_STORY_WORDS)
-        self.assertEqual(gemini.call_count, 2)
-        self.assertEqual((logs / "chapter_07.md").read_text(encoding="utf-8"), final_chapter)
+            self.assertGreaterEqual(generate_daily.word_count(repaired), generate_daily.MIN_STORY_WORDS)
+            self.assertEqual(gemini.call_count, 2)
+            self.assertEqual((logs / "chapter_07.md").read_text(encoding="utf-8"), final_chapter)
 
     def test_repair_remains_fail_closed_if_all_bounded_attempts_make_no_progress(self):
         sections = [
@@ -201,14 +201,14 @@ class OutlineTotalTests(unittest.TestCase):
         return result
 
     def test_total_at_minimum_passes(self):
-        sections = self.sections(900)
-        sections[0]["target_words"] = 6500 - 900 * 6
-        self.assertEqual(sum(s["target_words"] for s in sections), 6500)
+        sections = self.sections(800)
+        sections[0]["target_words"] = 5500 - 800 * 6
+        self.assertEqual(sum(s["target_words"] for s in sections), 5500)
         generate_daily.validate_outline_sections(sections)
 
     def test_total_below_minimum_rejected(self):
-        with self.assertRaisesRegex(generate_daily.OutlineValidationError, "total is 5600; minimum is 6500"):
-            generate_daily.validate_outline_sections(self.sections(800))
+        with self.assertRaisesRegex(generate_daily.OutlineValidationError, "total is 4900; minimum is 5500"):
+            generate_daily.validate_outline_sections(self.sections(700))
 
     def test_non_numeric_target_rejected(self):
         sections = self.sections(800)
@@ -222,7 +222,7 @@ class OutlineTotalTests(unittest.TestCase):
         with mock.patch.object(generate_daily, "gemini", side_effect=[(js.dumps({"sections": low}), [])]) as gemini:
             result = generate_daily.make_outline({"topic_ar": "ت", "angle_ar": "ز"}, "بحث")
         self.assertEqual(gemini.call_count, 1)
-        self.assertGreaterEqual(sum(s["target_words"] for s in result), 6500)
+        self.assertGreaterEqual(sum(s["target_words"] for s in result), 5500)
         generate_daily.validate_outline_sections(result)
 
     def test_final_story_gate_is_shared_by_new_and_resumed_episodes(self):
@@ -235,7 +235,7 @@ class OutlineTotalTests(unittest.TestCase):
             self.assertIn("STORY_LENGTH_REPAIR_EXHAUSTED", source)
         self.assertEqual(generate_daily.MIN_STORY_WORDS, 5000)
         self.assertGreater(generate_daily.STORY_TOPUP_TARGET_WORDS, generate_daily.MIN_STORY_WORDS)
-        self.assertEqual(generate_daily.MIN_OUTLINE_TARGET_WORDS, 6500)
+        self.assertEqual(generate_daily.MIN_OUTLINE_TARGET_WORDS, 5500)
 
 
 if __name__ == "__main__":
