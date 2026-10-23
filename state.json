@@ -134,6 +134,13 @@
       "publish_blocked_action": "UPDATE_YOUTUBE_OAUTH_CLIENT_AND_REAUTHORIZE",
       "youtube_video_id": null,
       "youtube_upload_status": "rejected"
+    },
+    "lan-tukmil-alqissa-20261024-nile-delta-papyrus-making": {
+      "archive_identifier": "lan-tukmil-alqissa-20261024-nile-delta-papyrus-making",
+      "approval_status": "REVIEW_PENDING",
+      "story_path": "stories/2026-10-23_nile-delta-papyrus-making-quest",
+      "title": "جمع وتجفيف أوراق البردي في دلتا النيل | قصة طويلة وهادئة للنوم 😴",
+      "review_url": "https://archive.org/details/lan-tukmil-alqissa-20261024-nile-delta-papyrus-making"
     }
   }
 }
