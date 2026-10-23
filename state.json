@@ -133,7 +133,7 @@
       "publish_blocked": "PUBLISH_BLOCKED_AUTH",
       "publish_blocked_action": "UPDATE_YOUTUBE_OAUTH_CLIENT_AND_REAUTHORIZE",
       "youtube_video_id": null,
-      "youtube_upload_status": "inserting"
+      "youtube_upload_status": "rejected"
     }
   }
 }
