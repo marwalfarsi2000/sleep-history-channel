@@ -261,7 +261,7 @@
     "thumbnail_prompt": "Calm illustrated realism of an 18th-century spice and herb market in Old Muscat at dusk with subtle painterly texture and premium storybook quality; low-key night lighting with dim lanterns casting a warm glow on clay jars, wooden mortars, and bundles of dried herbs; palette of deep midnight navy, charcoal, muted warm gold, and aged ivory; one simple memorable scene focusing on traditional apothecary shelves; mobile-first strong silhouette, no people, no modern objects, no text or typography of any kind rendered in the image. 16:9 YouTube thumbnail. Original composition. Professional quality.",
     "historical_setting": "مسقط، عمان — القرن الثامن عشر الميلادي",
     "created_at": "2026-10-23T01:02:32.096494+04:00",
-    "status": "REVIEW_PENDING",
+    "status": "APPROVED_FOR_PUBLISH",
     "video_filename": "14_video_final.mp4",
     "item_url": "https://archive.org/details/lan-tukmil-alqissa-20261023-muscat-old-market-herbs-r",
     "video_url": "https://archive.org/download/lan-tukmil-alqissa-20261023-muscat-old-market-herbs-r/14_video_final.mp4",
@@ -269,6 +269,7 @@
     "video_size": 66642888,
     "video_sha256": "efc768b881d13e2af70a748c43bf4340744832d09f00b61bbf68ff0f5fcdb606",
     "audio_duration_seconds": 4219.94,
-    "video_duration_seconds": 4220.0
+    "video_duration_seconds": 4220.0,
+    "approved_at": "2026-10-23T17:11:17.032387+04:00"
   }
 ]
