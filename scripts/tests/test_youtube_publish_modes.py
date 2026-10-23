@@ -140,6 +140,31 @@ def test_expired_refresh_token_becomes_nonfatal_owner_action_without_upload(tmp_
     h.download.assert_not_called()
 
 
+@pytest.mark.parametrize("oauth_error", [
+    "unauthorized_client: Unauthorized",
+    "invalid_client: The OAuth client secret is incorrect",
+    "deleted_client: OAuth client was deleted",
+])
+def test_oauth_client_failure_becomes_nonfatal_owner_action_without_upload(
+    tmp_path, monkeypatch, oauth_error
+):
+    with harness(tmp_path, monkeypatch, "approved_direct_public", UPLOAD_ONLY) as h:
+        with patch.object(
+            yp,
+            "get_granted_scopes",
+            side_effect=RefreshError(oauth_error),
+        ):
+            result = h.run()
+    assert result["requires_owner_action"] is True
+    assert result["status"] == "PUBLISH_BLOCKED_AUTH"
+    assert result["action"] == "UPDATE_YOUTUBE_OAUTH_CLIENT_AND_REAUTHORIZE"
+    assert "same OAuth client" in result["reason"]
+    assert result["uploaded"] is False
+    h.videos.insert.assert_not_called()
+    h.build.assert_not_called()
+    h.download.assert_not_called()
+
+
 def test_undeterminable_scopes_fail_closed_without_upload(tmp_path, monkeypatch):
     with harness(tmp_path, monkeypatch, "private_verify_public", FULL) as h:
         with patch.object(yp, "get_granted_scopes", side_effect=RuntimeError("YOUTUBE_OAUTH_PREFLIGHT_FAILED")):
