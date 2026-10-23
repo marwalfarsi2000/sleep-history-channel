@@ -131,7 +131,7 @@
       "review_url": "https://archive.org/details/lan-tukmil-alqissa-20261023-muscat-old-market-herbs-r",
       "approved_at": "2026-10-23T17:11:17.032387+04:00",
       "publish_blocked": "PUBLISH_BLOCKED_AUTH",
-      "publish_blocked_action": "REAUTHORIZE_YOUTUBE_OAUTH",
+      "publish_blocked_action": "UPDATE_YOUTUBE_OAUTH_CLIENT_AND_REAUTHORIZE",
       "youtube_video_id": null
     }
   }
