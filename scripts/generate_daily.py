@@ -360,14 +360,18 @@ MAX_SAME_FORMAT_IN_A_ROW = 2
 # Validation failures never trigger a second whole-pipeline run inside the same job.
 OUTLINE_MAX_MODEL_CALLS = 2
 OUTLINE_RETRY_MAX = OUTLINE_MAX_MODEL_CALLS
-MIN_OUTLINE_TARGET_WORDS = 5500
+MIN_OUTLINE_TARGET_WORDS = 6500
 CHAPTER_EXPANSION_ATTEMPTS = 1
 STORY_QUALITY_REPAIR_ATTEMPTS = 1
+MIN_STORY_WORDS = 5000
+STORY_TOPUP_TARGET_WORDS = 5300
+STORY_TOPUP_MAX_ATTEMPTS = 8
+STORY_TOPUP_MAX_REQUEST_WORDS = 1200
 
 
 def chapter_preferred_words(target_words: int) -> int:
-    """Soft chapter target used only to decide whether one append-only continuation is worth trying."""
-    return max(550, math.ceil(target_words * 0.70))
+    """Soft chapter target with enough buffer that the assembled story normally clears 5000 words."""
+    return max(650, math.ceil(target_words * 0.80))
 
 
 def chapter_minimum_words(target_words: int) -> int:
@@ -1593,12 +1597,17 @@ def ensure_minimum_story_length(
     logs: Path,
     draft: str,
     *,
-    minimum_words: int = 5000,
+    minimum_words: int = MIN_STORY_WORDS,
+    target_words: int = STORY_TOPUP_TARGET_WORDS,
+    max_attempts: int = STORY_TOPUP_MAX_ATTEMPTS,
 ) -> str:
-    """One bounded append-only repair when the assembled story misses 5000 words.
+    """Append only until the assembled story clears the hard minimum.
 
-    The repair is saved into the penultimate chapter so a later checkpoint restore
-    reuses it. The final SOFT_FADE chapter is left untouched whenever possible.
+    New episodes and resumed episodes use the same repair path. Repairs rotate
+    backwards through non-final chapters so the final SOFT_FADE stays untouched
+    whenever possible. Every successful append is written immediately, and in
+    production it is also persisted as a durable checkpoint before another model
+    call can happen.
     """
     current = word_count(draft)
     if current >= minimum_words:
@@ -1606,21 +1615,42 @@ def ensure_minimum_story_length(
     if not sections:
         return draft
 
-    missing = minimum_words - current
-    request_words = min(700, max(250, missing + 150))
-    target_index = max(1, len(sections) - 1)
-    target_path = logs / f"chapter_{target_index:02d}.md"
-    if not target_path.exists():
-        target_index = len(sections)
-        target_path = logs / f"chapter_{target_index:02d}.md"
-    if not target_path.exists():
+    safety_target = max(minimum_words, target_words)
+    non_final = [
+        index
+        for index in range(len(sections) - 1, 0, -1)
+        if (logs / f"chapter_{index:02d}.md").exists()
+    ]
+    if non_final:
+        target_indexes = non_final
+    else:
+        target_indexes = [
+            index
+            for index in range(len(sections), 0, -1)
+            if (logs / f"chapter_{index:02d}.md").exists()
+        ]
+    if not target_indexes:
         return draft
 
-    section = sections[target_index - 1]
-    chapter = target_path.read_text(encoding="utf-8").strip()
-    prompt = f"""أكمل هذا القسم من قصة تاريخية للنوم بإضافة جديدة فقط، بنحو {request_words} كلمة عربية.
+    repaired = draft
+    for attempt in range(1, max_attempts + 1):
+        current = word_count(repaired)
+        if current >= minimum_words:
+            break
 
-هذه محاولة إصلاح واحدة لأن القصة المجمعة أقصر قليلًا من الحد الأدنى.
+        target_index = target_indexes[(attempt - 1) % len(target_indexes)]
+        target_path = logs / f"chapter_{target_index:02d}.md"
+        section = sections[target_index - 1]
+        chapter = target_path.read_text(encoding="utf-8").strip()
+        missing_to_target = max(1, safety_target - current)
+        request_words = min(
+            STORY_TOPUP_MAX_REQUEST_WORDS,
+            max(450, missing_to_target + 250),
+        )
+        prompt = f"""أكمل هذا القسم من قصة تاريخية للنوم بإضافة جديدة فقط، بنحو {request_words} كلمة عربية.
+
+هذه محاولة إصلاح طول رقم {attempt} من {max_attempts}. القصة المجمعة حاليًا {current} كلمة عربية،
+والحد الأدنى الصارم {minimum_words} كلمة، والهدف الآمن {safety_target} كلمة.
 قواعد صارمة:
 - أكمل من نهاية القسم مباشرة ولا تعِد كتابة أي جزء موجود.
 - لا تلخص ولا تكرر ولا تضف عنوانًا أو خاتمة جديدة.
@@ -1628,6 +1658,7 @@ def ensure_minimum_story_length(
 - حافظ على الشخصية والمهمة والمرحلة {section.get('phase', '')}.
 - أضف فقط تفاصيل يدعمها المصدر المعرفي؛ لا تخترع أسماء أو تواريخ أو حقائق.
 - اجعل الإضافة هادئة وطبيعية ومن دون حشو.
+- لا تُنهِ القصة هنا إن لم يكن هذا هو القسم الأخير؛ أضف امتدادًا طبيعيًا داخل هذا القسم فقط.
 
 الموضوع: {topic.get('topic_ar', '')}
 القسم: {section.get('title', '')} — {section.get('brief', '')}
@@ -1639,25 +1670,50 @@ def ensure_minimum_story_length(
 نص القسم حتى الآن:
 {chapter}
 """
-    continuation, _ = gemini(prompt, max_tokens=5000, temperature=0.35)
-    if word_count(continuation) <= 0:
-        return draft
-    target_path.write_text(f"{chapter.rstrip()}\n\n{continuation.strip()}\n", encoding="utf-8")
+        continuation, _ = gemini(prompt, max_tokens=6000, temperature=0.35)
+        added_words = word_count(continuation)
+        if added_words <= 0:
+            print(
+                f"STORY_LENGTH_TOPUP_EMPTY: attempt={attempt} chapter={target_index} current={current}",
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
 
-    rebuilt: list[str] = []
-    for index in range(1, len(sections) + 1):
-        path = logs / f"chapter_{index:02d}.md"
-        if path.exists():
-            rebuilt.append(path.read_text(encoding="utf-8").strip())
-    repaired = "\n\n".join(part for part in rebuilt if part)
-    print(
-        f"STORY_LENGTH_LOCAL_TOPUP: {current} -> {word_count(repaired)} Arabic words "
-        f"using chapter {target_index}",
-        file=sys.stderr,
-        flush=True,
-    )
-    return repaired or draft
+        write(target_path, f"{chapter.rstrip()}\n\n{continuation.strip()}\n")
+        if os.environ.get("SLEEP_HISTORY_DURABLE_CHECKPOINTS") == "1":
+            durable_checkpoint(logs.parent, f"story_length_topup_{attempt}", "chapters")
 
+        rebuilt: list[str] = []
+        for index in range(1, len(sections) + 1):
+            path = logs / f"chapter_{index:02d}.md"
+            if path.exists():
+                rebuilt.append(path.read_text(encoding="utf-8").strip())
+        repaired = "\n\n".join(part for part in rebuilt if part) or repaired
+        new_count = word_count(repaired)
+        print(
+            f"STORY_LENGTH_LOCAL_TOPUP: attempt={attempt} chapter={target_index} "
+            f"{current} -> {new_count} Arabic words (+{new_count - current})",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    final_count = word_count(repaired)
+    if final_count >= minimum_words:
+        print(
+            f"STORY_LENGTH_REPAIR_COMPLETE: {final_count} Arabic words "
+            f"(minimum={minimum_words}, safety_target={safety_target})",
+            file=sys.stderr,
+            flush=True,
+        )
+    else:
+        print(
+            f"STORY_LENGTH_REPAIR_EXHAUSTED: {final_count} Arabic words after "
+            f"{max_attempts} append-only attempts",
+            file=sys.stderr,
+            flush=True,
+        )
+    return repaired
 
 def resume_partial_story(story: Path) -> Path:
     _remember_story(story)
@@ -1693,8 +1749,11 @@ def resume_partial_story(story: Path) -> Path:
     run_summary.stage("chapters")
     draft = draft_story(topic, research, sections, story / "logs")
     draft = ensure_minimum_story_length(topic, research, sections, story / "logs", draft)
-    if word_count(draft) < 5000:
-        raise RuntimeError(f"STORY_TOO_SHORT: Generated story is too short after one local top-up: {word_count(draft)} Arabic words")
+    if word_count(draft) < MIN_STORY_WORDS:
+        raise RuntimeError(
+            f"STORY_LENGTH_REPAIR_EXHAUSTED: {word_count(draft)} Arabic words remain after "
+            f"{STORY_TOPUP_MAX_ATTEMPTS} append-only repair attempts"
+        )
     write(story / "logs/assembled_story.md", draft)
     durable_checkpoint(story, "chapters", "quality_gates")
     run_summary.stage("quality_gates")
@@ -2264,8 +2323,12 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
     durable_checkpoint(story, "outline", "chapters")
     run_summary.stage("chapters")
     draft = draft_story(topic, research, outline, story / "logs")
-    if word_count(draft) < 5000:
-        raise RuntimeError(f"Generated story is too short: {word_count(draft)} Arabic words")
+    draft = ensure_minimum_story_length(topic, research, outline, story / "logs", draft)
+    if word_count(draft) < MIN_STORY_WORDS:
+        raise RuntimeError(
+            f"STORY_LENGTH_REPAIR_EXHAUSTED: {word_count(draft)} Arabic words remain after "
+            f"{STORY_TOPUP_MAX_ATTEMPTS} append-only repair attempts"
+        )
     write(story / "logs/assembled_story.md", draft)
     durable_checkpoint(story, "chapters", "quality_gates")
     run_summary.stage("quality_gates")
