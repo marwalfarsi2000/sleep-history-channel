@@ -131,7 +131,7 @@ class StoryMinimumRepairTests(unittest.TestCase):
             self.assertGreaterEqual(generate_daily.word_count(repaired), 5000)
             self.assertTrue((logs / "chapter_07.md").read_text(encoding="utf-8").startswith(original_seventh))
             self.assertEqual((logs / "chapter_08.md").read_text(encoding="utf-8"), original_eighth)
-            self.assertIn("محاولة إصلاح واحدة", gemini.call_args.args[0])
+            self.assertIn("محاولة إصلاح طول رقم 1", gemini.call_args.args[0])
             self.assertIn("لا تفتح لغزًا أو سؤالًا جديدًا", gemini.call_args.args[0])
 
     def test_story_at_or_over_5000_never_calls_model(self):
@@ -146,7 +146,35 @@ class StoryMinimumRepairTests(unittest.TestCase):
         self.assertEqual(repaired, draft)
         gemini.assert_not_called()
 
-    def test_failed_single_topup_remains_fail_closed_below_5000(self):
+    def test_run_97_size_shortfall_is_repaired_across_multiple_saved_chapters(self):
+        sections = [
+            {"title": f"قسم {i}", "brief": "هادئ", "phase": "UNWIND", "scenes": []}
+            for i in range(1, 8)
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            logs = Path(folder)
+            counts = [500, 500, 500, 500, 500, 500, 473]  # exact run #97 total: 3473
+            for i, count in enumerate(counts, 1):
+                (logs / f"chapter_{i:02d}.md").write_text(words(count), encoding="utf-8")
+            draft = "\n\n".join(
+                (logs / f"chapter_{i:02d}.md").read_text(encoding="utf-8")
+                for i in range(1, 8)
+            )
+            final_chapter = (logs / "chapter_07.md").read_text(encoding="utf-8")
+            with mock.patch.object(
+                generate_daily,
+                "gemini",
+                side_effect=[(words(900), []), (words(900), [])],
+            ) as gemini:
+                repaired = generate_daily.ensure_minimum_story_length(
+                    {"topic_ar": "مسقط"}, "بحث", sections, logs, draft
+                )
+
+            self.assertGreaterEqual(generate_daily.word_count(repaired), generate_daily.MIN_STORY_WORDS)
+            self.assertEqual(gemini.call_count, 2)
+            self.assertEqual((logs / "chapter_07.md").read_text(encoding="utf-8"), final_chapter)
+
+    def test_repair_remains_fail_closed_if_all_bounded_attempts_make_no_progress(self):
         sections = [
             {"title": f"قسم {i}", "brief": "هادئ", "phase": "UNWIND", "scenes": []}
             for i in range(1, 3)
@@ -156,11 +184,12 @@ class StoryMinimumRepairTests(unittest.TestCase):
             (logs / "chapter_01.md").write_text(words(2200), encoding="utf-8")
             (logs / "chapter_02.md").write_text(words(2200), encoding="utf-8")
             draft = words(4400)
-            with mock.patch.object(generate_daily, "gemini", return_value=(words(10), [])):
+            with mock.patch.object(generate_daily, "gemini", return_value=("", [])) as gemini:
                 repaired = generate_daily.ensure_minimum_story_length(
                     {"topic_ar": "مسقط"}, "بحث", sections, logs, draft
                 )
-        self.assertLess(generate_daily.word_count(repaired), 5000)
+        self.assertLess(generate_daily.word_count(repaired), generate_daily.MIN_STORY_WORDS)
+        self.assertEqual(gemini.call_count, generate_daily.STORY_TOPUP_MAX_ATTEMPTS)
 
 class OutlineTotalTests(unittest.TestCase):
     @staticmethod
@@ -196,12 +225,16 @@ class OutlineTotalTests(unittest.TestCase):
         self.assertGreaterEqual(sum(s["target_words"] for s in result), 5500)
         generate_daily.validate_outline_sections(result)
 
-    def test_final_story_gate_still_5000_after_one_local_topup(self):
+    def test_final_story_gate_is_shared_by_new_and_resumed_episodes(self):
         import inspect
-        source = inspect.getsource(generate_daily.resume_partial_story)
-        self.assertIn("ensure_minimum_story_length", source)
-        self.assertIn("word_count(draft) < 5000", source)
-        self.assertIn("STORY_TOO_SHORT", source)
+        resume_source = inspect.getsource(generate_daily.resume_partial_story)
+        create_source = inspect.getsource(generate_daily.create_daily_story)
+        for source in (resume_source, create_source):
+            self.assertIn("ensure_minimum_story_length", source)
+            self.assertIn("word_count(draft) < MIN_STORY_WORDS", source)
+            self.assertIn("STORY_LENGTH_REPAIR_EXHAUSTED", source)
+        self.assertEqual(generate_daily.MIN_STORY_WORDS, 5000)
+        self.assertGreater(generate_daily.STORY_TOPUP_TARGET_WORDS, generate_daily.MIN_STORY_WORDS)
         self.assertEqual(generate_daily.MIN_OUTLINE_TARGET_WORDS, 5500)
 
 
