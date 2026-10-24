@@ -294,5 +294,27 @@
     "audio_duration_seconds": 4249.54,
     "video_duration_seconds": 4250.0,
     "approved_at": "2026-10-24T03:57:05.622534+04:00"
+  },
+  {
+    "identifier": "lan-tukmil-alqissa-20261024-cordoba-andalusian-bakery",
+    "slug": "cordoba-andalusian-bakery-routine",
+    "title": "أفران قرطبة وخبز الخمر المعطر بالتوابل | قصة تاريخية هادئة للنوم 😴",
+    "episode_title_core": "أفران قرطبة وخبز الخمر المعطر بالتوابل",
+    "title_suffix": "قصة تاريخية هادئة للنوم 😴",
+    "final_youtube_title": "أفران قرطبة وخبز الخمر المعطر بالتوابل | قصة تاريخية هادئة للنوم 😴",
+    "thumbnail_text": "مخابز قرطبة العتيقة",
+    "thumbnail_scene_type": "الحياة اليومية والطهي التقليدي",
+    "thumbnail_prompt": "Calm illustrated realism of a 10th-century Umayyad Cordoba bakery at dusk with subtle painterly texture and premium storybook quality; low-key night lighting with a dim clay oven casting a warm glow on wooden kneading troughs, flour sacks, and ceramic jars of sesame and anise; palette of deep midnight navy, charcoal, muted warm gold, and aged ivory; one simple memorable scene focusing on a quiet baker's table with traditional dough preparation; mobile-first strong silhouette, no people, no modern objects, no text or typography of any kind rendered in the image. 16:9 YouTube thumbnail. Original composition. Professional quality.",
+    "historical_setting": "قرطبة، إسبانيا — القرن العاشر الميلادي",
+    "created_at": "2026-10-24T13:00:03.495902+04:00",
+    "status": "REVIEW_PENDING",
+    "video_filename": "14_video_final.mp4",
+    "item_url": "https://archive.org/details/lan-tukmil-alqissa-20261024-cordoba-andalusian-bakery",
+    "video_url": "https://archive.org/download/lan-tukmil-alqissa-20261024-cordoba-andalusian-bakery/14_video_final.mp4",
+    "thumbnail_url": "https://archive.org/download/lan-tukmil-alqissa-20261024-cordoba-andalusian-bakery/11_thumbnail_base.jpg",
+    "video_size": 68182247,
+    "video_sha256": "339d40bd6a4c963e246daadd8d195ffe6947f1fca259c46eae5e2365dff1327e",
+    "audio_duration_seconds": 4255.3,
+    "video_duration_seconds": 4255.24
   }
 ]
