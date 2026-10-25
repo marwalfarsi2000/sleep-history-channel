@@ -316,5 +316,27 @@
     "video_sha256": "339d40bd6a4c963e246daadd8d195ffe6947f1fca259c46eae5e2365dff1327e",
     "audio_duration_seconds": 4255.3,
     "video_duration_seconds": 4255.24
+  },
+  {
+    "identifier": "lan-tukmil-alqissa-20261025-nizwa-falaj-water-distrib",
+    "slug": "nizwa-falaj-water-distribution-routine",
+    "title": "توزيع مياه الأفلاج في واحة نزوى العمانية | قصة تاريخية هادئة للنوم 😴",
+    "episode_title_core": "توزيع مياه الأفلاج في واحة نزوى العمانية",
+    "title_suffix": "قصة تاريخية هادئة للنوم 😴",
+    "final_youtube_title": "توزيع مياه الأفلاج في واحة نزوى العمانية | قصة تاريخية هادئة للنوم 😴",
+    "thumbnail_text": "قنوات نزوى القديمة",
+    "thumbnail_scene_type": "الهندسة البيئية ونظم الري",
+    "thumbnail_prompt": "Calm illustrated realism of a 17th-century Omani falaj water channel in Nizwa at dusk with subtle painterly texture and premium storybook quality; low-key night lighting with a dim lantern casting a warm glow on ancient stone masonry and lush date palm fronds; palette of deep midnight navy, charcoal, muted warm gold, and aged ivory; one simple memorable scene focusing on the gentle flow of water in a traditional irrigation channel; leave an uncluttered area in the upper sky for text; mobile-first strong silhouette, no people, no modern objects, no text or typography of any kind rendered in the image. 16:9 YouTube thumbnail. Original composition. Professional quality.",
+    "historical_setting": "نزوى، عمان — القرن السابع عشر الميلادي",
+    "created_at": "2026-10-25T12:59:04.539177+04:00",
+    "status": "REVIEW_PENDING",
+    "video_filename": "14_video_final.mp4",
+    "item_url": "https://archive.org/details/lan-tukmil-alqissa-20261025-nizwa-falaj-water-distrib",
+    "video_url": "https://archive.org/download/lan-tukmil-alqissa-20261025-nizwa-falaj-water-distrib/14_video_final.mp4",
+    "thumbnail_url": "https://archive.org/download/lan-tukmil-alqissa-20261025-nizwa-falaj-water-distrib/11_thumbnail_base.jpg",
+    "video_size": 67418195,
+    "video_sha256": "1b1fad9e43ecc1e87125bc55f474cdac5c34f2d24685a81286f4a9506da5fd60",
+    "audio_duration_seconds": 4266.76,
+    "video_duration_seconds": 4267.0
   }
 ]
