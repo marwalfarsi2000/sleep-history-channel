@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "request_id": "egypt-nile-20261025-001",
+  "title": "أسرار النهر الخالد - رحلة هادئة في أسرار وعمارة الفراعنة",
+  "identifier": "lan-tukmil-alqissa-audio-20261025-egypt-nile-202",
+  "item_url": "https://archive.org/details/lan-tukmil-alqissa-audio-20261025-egypt-nile-202",
+  "audio_url": "https://archive.org/download/lan-tukmil-alqissa-audio-20261025-egypt-nile-202/sleep_history_audio.mp3",
+  "narration_url": "https://archive.org/download/lan-tukmil-alqissa-audio-20261025-egypt-nile-202/narration_only.mp3",
+  "completed_at": "2026-10-25T02:13:22.226927+00:00",
+  "voice": {
+    "voice_provider": "gemini",
+    "voice_name": "راوي القصص 1",
+    "voice_id": "voice_21d6p0ov3h4h",
+    "tts_model": "gemini-3.8-flash-tts",
+    "tts_generation_speed": 1.0,
+    "post_processing_tempo": 1.0,
+    "effective_speed": 1.0,
+    "diacritization_engine": "full-v10-pronunciation-accurate-pausal",
+    "sentence_pause_strategy": "punctuation_and_blank_line"
+  }
+}
