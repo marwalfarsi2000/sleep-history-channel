@@ -1,0 +1,56 @@
+name: Sleep History Narrate Text
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".ops/narrate-text.json"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sleep-history-narrate-text
+  cancel-in-progress: false
+
+jobs:
+  narrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install audio and Python dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Narrate supplied text and upload audio to Internet Archive
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_TTS_VOICE_ID: ${{ secrets.GEMINI_TTS_VOICE_ID }}
+          GEMINI_TTS_VOICE_NAME: ${{ secrets.GEMINI_TTS_VOICE_NAME }}
+          GOOGLE_CLOUD_TTS_API_KEY: ${{ secrets.GOOGLE_CLOUD_TTS_API_KEY }}
+          IAS3_ACCESS_KEY: ${{ secrets.IAS3_ACCESS_KEY }}
+          IAS3_SECRET_KEY: ${{ secrets.IAS3_SECRET_KEY }}
+        run: python scripts/narrate_text.py
+
+      - name: Save narration result
+        if: success()
+        run: |
+          git config user.name "sleep-history-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add .ops/narrate-result.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Store narration result [skip ci]"
+            git push
+          fi
