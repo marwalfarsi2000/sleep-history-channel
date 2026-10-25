@@ -57,6 +57,9 @@ def main() -> None:
     )
 
     run_summary.start(workflow="narrate_text", action="tts_and_archive", story_path=str(story))
+    # Direct text narration is not a full episode, so the production 58–90 minute duration gate does not apply.
+    pipeline.SETTINGS["target_min_seconds"] = 1
+    pipeline.SETTINGS["target_max_seconds"] = 24 * 60 * 60
     asyncio.run(pipeline.synthesize(story))
 
     final_audio = story / "12_audio_full.mp3"
