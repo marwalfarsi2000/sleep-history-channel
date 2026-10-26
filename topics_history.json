@@ -1228,9 +1228,8 @@
     "slug": "dhofar-frankincense-sorting-routine",
     "topic": "استخراج وتجهيز العطور البحرية وصمغ اللبان في موانئ صلالة القديمة",
     "angle": "تتبع يوم في حياة تاجر صمغ وعطور محلية يفرز أنواع اللبان البري وينظفها في مخازن ميناء ظفار الهادئة خلال القرن الثالث عشر الميلادي.",
-    "story_path": "stories/2026-10-26_dhofar-frankincense-sorting-routine",
     "created_at": "2026-10-26T13:47:20.682900+04:00",
-    "status": "GENERATING",
+    "status": "REVIEW_PENDING",
     "topic_ar": "استخراج وتجهيز العطور البحرية وصمغ اللبان في موانئ صلالة القديمة",
     "angle_ar": "تتبع يوم في حياة تاجر صمغ وعطور محلية يفرز أنواع اللبان البري وينظفها في مخازن ميناء ظفار الهادئة خلال القرن الثالث عشر الميلادي.",
     "search_query_en": "dhofar frankincense port history medieval trade daily life",
@@ -1331,6 +1330,8 @@
     "one_sentence_summary_ar": "تاجر يفرز حبيبات اللبان العطرية وينظمها في مخازن ميناء ظفار الهادئة",
     "narrative_identity": "IMMERSIVE_LOW_STAKES_HISTORICAL_QUEST",
     "research_topic_alignment_status": "PASS",
-    "alignment_reason": "جميع عناصر العالم التاريخي والفترة والمكان والنشاط المتعلق بفرز وتخزين صمغ اللبان البري في مخازن ميناء ظفار (البليد) خلال القرن الثالث عشر الميلادي مدعومة بشكل كامل بالمصادر والأدلة الأثرية والتاريخية الواردة في البحث."
+    "alignment_reason": "جميع عناصر العالم التاريخي والفترة والمكان والنشاط المتعلق بفرز وتخزين صمغ اللبان البري في مخازن ميناء ظفار (البليد) خلال القرن الثالث عشر الميلادي مدعومة بشكل كامل بالمصادر والأدلة الأثرية والتاريخية الواردة في البحث.",
+    "archive_identifier": "lan-tukmil-alqissa-20261026-dhofar-frankincense-sorti",
+    "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261026-dhofar-frankincense-sorti"
   }
 ]
