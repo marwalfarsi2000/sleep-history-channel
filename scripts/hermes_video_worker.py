@@ -301,7 +301,13 @@ def main():
     parser.add_argument("--poll-seconds", type=int, default=5)
     args = parser.parse_args()
 
-    try:\n        from google.colab import auth as colab_auth\n        colab_auth.authenticate_user()\n    except Exception:\n        pass\n\n    creds, _ = google.auth.default()
+    try:
+        from google.colab import auth as colab_auth
+        colab_auth.authenticate_user()
+    except Exception:
+        pass
+
+    creds, _ = google.auth.default()
     gc = gspread.authorize(creds)
     ws = gc.open_by_key(args.sheet_id).sheet1
     drive = build("drive", "v3", credentials=creds, cache_discovery=False)
