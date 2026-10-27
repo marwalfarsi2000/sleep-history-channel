@@ -191,6 +191,13 @@
       "approval_status": "GENERATING",
       "youtube_video_id": null,
       "story_path": "stories/2026-10-27_antioch-silk-weaving-craft"
+    },
+    "lan-tukmil-alqissa-20261027-antioch-silk-weaving-craf": {
+      "archive_identifier": "lan-tukmil-alqissa-20261027-antioch-silk-weaving-craf",
+      "approval_status": "REVIEW_PENDING",
+      "story_path": "stories/2026-10-27_antioch-silk-weaving-craft",
+      "title": "حرفة نسيج الحرير في أنطاكية البيزنطية | قصة طويلة وهادئة للنوم 😴",
+      "review_url": "https://archive.org/details/lan-tukmil-alqissa-20261027-antioch-silk-weaving-craf"
     }
   }
 }
