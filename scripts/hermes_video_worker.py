@@ -33,13 +33,53 @@ def wait_for_comfy(timeout=180):
     return False
 
 
+def bootstrap_comfy():
+    if not COMFY_DIR.exists():
+        print("⬇️ ComfyUI missing — installing automatically...")
+        subprocess.run(
+            ["git", "clone", "--depth", "1", "https://github.com/comfyanonymous/ComfyUI.git", str(COMFY_DIR)],
+            check=True,
+        )
+
+    print("📦 Checking ComfyUI dependencies...")
+    subprocess.run(
+        ["python", "-m", "pip", "install", "-q", "-r", str(COMFY_DIR / "requirements.txt")],
+        check=True,
+    )
+
+    model_files = [
+        (
+            COMFY_DIR / "models" / "diffusion_models" / "wan2.2_ti2v_5B_fp16.safetensors",
+            "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
+        ),
+        (
+            COMFY_DIR / "models" / "text_encoders" / "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+            "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        ),
+        (
+            COMFY_DIR / "models" / "vae" / "wan2.2_vae.safetensors",
+            "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/vae/wan2.2_vae.safetensors",
+        ),
+    ]
+
+    for dest, url in model_files:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if not dest.exists() or dest.stat().st_size < 1024 * 1024:
+            print(f"⬇️ Downloading {dest.name} ...")
+            subprocess.run(
+                ["wget", "-c", "-q", "--show-progress", url, "-O", str(dest)],
+                check=True,
+            )
+        else:
+            print(f"✅ Found {dest.name}")
+
+
 def ensure_comfy():
     if wait_for_comfy(3):
         print("✅ ComfyUI already running")
         return
 
-    if not COMFY_DIR.exists():
-        raise RuntimeError("/content/ComfyUI not found. Run the Wan2.2 setup cell first.")
+    bootstrap_comfy()
 
     log_path = Path("/content/comfy_worker.log")
     log = open(log_path, "ab", buffering=0)
