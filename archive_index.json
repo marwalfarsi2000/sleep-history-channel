@@ -382,5 +382,27 @@
     "video_sha256": "c726d71d4ca286a10d3039e61b3aae928990244e7b83ed07b58e5554dce4c4d7",
     "audio_duration_seconds": 4390.28,
     "video_duration_seconds": 4390.28
+  },
+  {
+    "identifier": "lan-tukmil-alqissa-20261028-baghdad-abbasid-apothecar",
+    "slug": "baghdad-abbasid-apothecary-routine",
+    "title": "إعداد الأعشاب والزهور الطبية بصيدلية بغدادية | قصة تاريخية للنوم 😴",
+    "episode_title_core": "إعداد الأعشاب والزهور الطبية بصيدلية بغدادية",
+    "title_suffix": "قصة تاريخية للنوم 😴",
+    "final_youtube_title": "إعداد الأعشاب والزهور الطبية بصيدلية بغدادية | قصة تاريخية للنوم 😴",
+    "thumbnail_text": "دكان العطار البغدادي",
+    "thumbnail_scene_type": "الأسواق والحرف الطبية",
+    "thumbnail_prompt": "Calm illustrated realism of a 9th-century Baghdad apothecary shop interior at dusk with subtle painterly texture and premium storybook quality; low-key night lighting with a dim ceramic oil lamp casting a warm glow on rows of clay jars, wooden drawers, and bundles of dried herbs hanging from wooden rafters; palette of deep midnight navy, charcoal, muted warm gold, and aged ivory; one simple memorable scene focusing on traditional apothecary scales and mortar; mobile-first strong silhouette, no people, no modern objects, no text or typography of any kind rendered in the image. 16:9 YouTube thumbnail. Original composition. Professional quality.",
+    "historical_setting": "بغداد، العراق — القرن التاسع الميلادي",
+    "created_at": "2026-10-28T19:20:59.442244+04:00",
+    "status": "REVIEW_PENDING",
+    "video_filename": "14_video_final.mp4",
+    "item_url": "https://archive.org/details/lan-tukmil-alqissa-20261028-baghdad-abbasid-apothecar",
+    "video_url": "https://archive.org/download/lan-tukmil-alqissa-20261028-baghdad-abbasid-apothecar/14_video_final.mp4",
+    "thumbnail_url": "https://archive.org/download/lan-tukmil-alqissa-20261028-baghdad-abbasid-apothecar/11_thumbnail_base.jpg",
+    "video_size": 71302706,
+    "video_sha256": "00630abad9de5d77cec4282c95fa3e3ce8bda3e344f2d1e0ceda52677550e3ae",
+    "audio_duration_seconds": 4586.4,
+    "video_duration_seconds": 4586.4
   }
 ]

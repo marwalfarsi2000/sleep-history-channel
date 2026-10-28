@@ -1447,9 +1447,8 @@
     "slug": "baghdad-abbasid-apothecary-routine",
     "topic": "جمع وترتيب الأعشاب والزهور الطبية في صيدلية بغدادية خلال العصر العباسي",
     "angle": "تتبع يوم في حياة صيدلاني وعطار يفرز الأعشاب الطبية والمجففة ويعد الأقراص العطرية في دكانه ببغداد خلال القرن التاسع الميلادي.",
-    "story_path": "stories/2026-10-28_baghdad-abbasid-apothecary-routine",
     "created_at": "2026-10-28T13:15:50.737064+04:00",
-    "status": "GENERATING",
+    "status": "REVIEW_PENDING",
     "topic_ar": "جمع وترتيب الأعشاب والزهور الطبية في صيدلية بغدادية خلال العصر العباسي",
     "angle_ar": "تتبع يوم في حياة صيدلاني وعطار يفرز الأعشاب الطبية والمجففة ويعد الأقراص العطرية في دكانه ببغداد خلال القرن التاسع الميلادي.",
     "search_query_en": "baghdad abbasid apothecary herbalist pharmacy history daily life",
@@ -1549,6 +1548,8 @@
     "one_sentence_summary_ar": "عطار يرفر الأعشاب الطبية وينظمها داخل أواني دكانه العباسي ببغداد",
     "narrative_identity": "IMMERSIVE_LOW_STAKES_HISTORICAL_QUEST",
     "research_topic_alignment_status": "PASS",
-    "alignment_reason": "جميع عناصر العالم التاريخي المتعلقة بالصيدلية الدغدادية في القرن التاسع الميلادي، بما في ذلك الأواني الفخارية، والموازين، والأعشاب، وتصميم الدكاكين، مدعومة بشكل كامل من خلال ملاحظات البحث التاريخية وخريطة الادعاءات والمصادر المرفقة."
+    "alignment_reason": "جميع عناصر العالم التاريخي المتعلقة بالصيدلية الدغدادية في القرن التاسع الميلادي، بما في ذلك الأواني الفخارية، والموازين، والأعشاب، وتصميم الدكاكين، مدعومة بشكل كامل من خلال ملاحظات البحث التاريخية وخريطة الادعاءات والمصادر المرفقة.",
+    "archive_identifier": "lan-tukmil-alqissa-20261028-baghdad-abbasid-apothecar",
+    "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261028-baghdad-abbasid-apothecar"
   }
 ]
