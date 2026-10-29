@@ -1,0 +1,22 @@
+{
+  "name": "sleep-history-remotion-v1",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test:contract": "python3 scripts/check_contract.py",
+    "test:frames": "bash scripts/test-frames.sh",
+    "render:external-worker": "remotion render src/index.tsx CalmHistorySleeper out/loop.mp4 --props=data/sample.json --codec=h264 --crf=26 --concurrency=1"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.539",
+    "remotion": "4.0.539",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "typescript": "5.6.3",
+    "@types/react": "18.3.0",
+    "@types/react-dom": "18.3.0"
+  }
+}
