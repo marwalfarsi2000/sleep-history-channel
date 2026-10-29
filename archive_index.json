@@ -404,5 +404,27 @@
     "video_sha256": "00630abad9de5d77cec4282c95fa3e3ce8bda3e344f2d1e0ceda52677550e3ae",
     "audio_duration_seconds": 4586.4,
     "video_duration_seconds": 4586.4
+  },
+  {
+    "identifier": "lan-tukmil-alqissa-20261030-alexandria-p-lemaic-glass",
+    "slug": "alexandria-p-lemaic-glassblowing",
+    "title": "صناعة الزجاج المنفوخ في الإسكندرية البطلمية | قصة طويلة وهادئة للنوم 😴",
+    "episode_title_core": "صناعة الزجاج المنفوخ في الإسكندرية البطلمية",
+    "title_suffix": "قصة طويلة وهادئة للنوم 😴",
+    "final_youtube_title": "صناعة الزجاج المنفوخ في الإسكندرية البطلمية | قصة طويلة وهادئة للنوم 😴",
+    "thumbnail_text": "ورش صناعة الزجاج",
+    "thumbnail_scene_type": "الحرف والعمليات اليدوية",
+    "thumbnail_prompt": "Calm illustrated realism of a 3rd-century BC Alexandrian glass workshop at dusk with subtle painterly texture and premium storybook quality; low-key night lighting with a dim oil lamp casting a warm glow on limestone molds, glass rods, and colorful glass inlay fragments on a wooden workbench; palette of deep midnight navy, charcoal, muted warm gold, and aged ivory; one simple memorable scene focusing on the artisan's tools and glass materials; leave a naturally uncluttered, low-detail text-safe area on the right side of the workbench; mobile-first strong silhouette, no people, no modern objects, no text or typography of any kind rendered in the image. 16:9 YouTube thumbnail. Original composition. Professional quality.",
+    "historical_setting": "الإسكندرية، مصر — القرن الثالث قبل الميلاد",
+    "created_at": "2026-10-30T01:16:36.817267+04:00",
+    "status": "REVIEW_PENDING",
+    "video_filename": "14_video_final.mp4",
+    "item_url": "https://archive.org/details/lan-tukmil-alqissa-20261030-alexandria-p-lemaic-glass",
+    "video_url": "https://archive.org/download/lan-tukmil-alqissa-20261030-alexandria-p-lemaic-glass/14_video_final.mp4",
+    "thumbnail_url": "https://archive.org/download/lan-tukmil-alqissa-20261030-alexandria-p-lemaic-glass/11_thumbnail_base.jpg",
+    "video_size": 65873450,
+    "video_sha256": "80b8fd6258f1ec34c4b52499aabcbb1976533c01613bf4725ad0ea6475adbf94",
+    "audio_duration_seconds": 4245.84,
+    "video_duration_seconds": 4246.0
   }
 ]
