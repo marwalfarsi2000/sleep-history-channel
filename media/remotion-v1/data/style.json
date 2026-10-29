@@ -1,0 +1,23 @@
+{
+  "fps": 24,
+  "width": 1920,
+  "height": 1080,
+  "rtl": true,
+  "fonts": [
+    "Noto Naskh Arabic",
+    "Amiri",
+    "Tahoma",
+    "Arial"
+  ],
+  "remoteFonts": false,
+  "palette": {
+    "night": "#0c1424",
+    "ivory": "#e1d6bd",
+    "mutedGold": "#a69372"
+  },
+  "fadeSeconds": 5,
+  "maxDriftPx": 12,
+  "flashes": false,
+  "hardCuts": false,
+  "silent": true
+}

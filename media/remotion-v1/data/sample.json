@@ -1,0 +1,21 @@
+{
+  "episodeId": "night-library-sample",
+  "language": "ar",
+  "title": "المكتبة في آخر الليل",
+  "subtitle": "رحلة هادئة إلى الماضي",
+  "durationSeconds": 90,
+  "scenes": [
+    {
+      "startSeconds": 0,
+      "kind": "library"
+    },
+    {
+      "startSeconds": 30,
+      "kind": "courtyard"
+    },
+    {
+      "startSeconds": 60,
+      "kind": "harbor"
+    }
+  ]
+}
