@@ -227,6 +227,13 @@
       "approval_status": "GENERATING",
       "youtube_video_id": null,
       "story_path": "stories/2026-10-30_athens-classical-papyrus-workshop"
+    },
+    "lan-tukmil-alqissa-20261031-athens-classical-papyrus": {
+      "archive_identifier": "lan-tukmil-alqissa-20261031-athens-classical-papyrus",
+      "approval_status": "REVIEW_PENDING",
+      "story_path": "stories/2026-10-30_athens-classical-papyrus-workshop",
+      "title": "صناعة ورق البردي في أثينا الكلاسيكية | قصة تاريخية للنوم 😴",
+      "review_url": "https://archive.org/details/lan-tukmil-alqissa-20261031-athens-classical-papyrus"
     }
   }
 }
