@@ -1675,9 +1675,8 @@
     "slug": "athens-classical-papyrus-workshop",
     "topic": "تجهيز وتجفيف ورق البردي وسجلات السفر في مدينة أثينا الكلاسيكية",
     "angle": "تتبع يوم في ورشة ناسخ ومجهز لفائف يجمع الشرائح النباتية ويجففها لصنع مواد الكتابة في أثينا خلال القرن الخامس قبل الميلاد.",
-    "story_path": "stories/2026-10-30_athens-classical-papyrus-workshop",
     "created_at": "2026-10-30T13:17:46.003078+04:00",
-    "status": "GENERATING",
+    "status": "REVIEW_PENDING",
     "topic_ar": "تجهيز وتجفيف ورق البردي وسجلات السفر في مدينة أثينا الكلاسيكية",
     "angle_ar": "تتبع يوم في ورشة ناسخ ومجهز لفائف يجمع الشرائح النباتية ويجففها لصنع مواد الكتابة في أثينا خلال القرن الخامس قبل الميلاد.",
     "search_query_en": "athens classical period writing material papyrus workshop daily life",
@@ -1778,6 +1777,8 @@
     "one_sentence_summary_ar": "حرفي يجهز لفائف الكتابة النباتية وينسقها في ورشة هادئة بأثينا",
     "narrative_identity": "IMMERSIVE_LOW_STAKES_HISTORICAL_QUEST",
     "research_topic_alignment_status": "PASS",
-    "alignment_reason": "جميع عناصر العالم التاريخي والفترة والمكان مدعومة بشكل مباشر في ملاحظات البحث وخريطة الادعاءات، وخاصة ما يتعلق بتجهيز شرائح البردي والمواد المستخدمة في الكتابة والأرشيفات في أثينا الكلاسيكية."
+    "alignment_reason": "جميع عناصر العالم التاريخي والفترة والمكان مدعومة بشكل مباشر في ملاحظات البحث وخريطة الادعاءات، وخاصة ما يتعلق بتجهيز شرائح البردي والمواد المستخدمة في الكتابة والأرشيفات في أثينا الكلاسيكية.",
+    "archive_identifier": "lan-tukmil-alqissa-20261031-athens-classical-papyrus",
+    "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261031-athens-classical-papyrus"
   }
 ]
