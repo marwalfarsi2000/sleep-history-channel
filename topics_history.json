@@ -1785,9 +1785,8 @@
     "slug": "damascus-ayyubid-bronze-workshop",
     "topic": "صناعة وتجهيز الأواني البرونزية المنقوشة في ورش دمشق القديمة خلال العصر الأيوبي",
     "angle": "تتبع يوم في ورشة حرفي نحاس يطرق الأواني البرونزية ويزينها بالخطوط الهندسية الناعمة في أسواق دمشق خلال القرن الثاني عشر الميلادي.",
-    "story_path": "stories/2026-10-31_damascus-ayyubid-bronze-workshop",
     "created_at": "2026-10-31T13:05:29.621049+04:00",
-    "status": "GENERATING",
+    "status": "REVIEW_PENDING",
     "topic_ar": "صناعة وتجهيز الأواني البرونزية المنقوشة في ورش دمشق القديمة خلال العصر الأيوبي",
     "angle_ar": "تتبع يوم في ورشة حرفي نحاس يطرق الأواني البرونزية ويزينها بالخطوط الهندسية الناعمة في أسواق دمشق خلال القرن الثاني عشر الميلادي.",
     "search_query_en": "damascus ayyubid period metalwork bronze crafting daily life",
@@ -1888,6 +1887,8 @@
     "one_sentence_summary_ar": "حرفي ينقش الأواني البرونزية بعناية داخل ورشة دمشقية هادئة",
     "narrative_identity": "IMMERSIVE_LOW_STAKES_HISTORICAL_QUEST",
     "research_topic_alignment_status": "PASS",
-    "alignment_reason": "جميع عناصر العالم التاريخي والفترة الزمنية والمكان والأدوات (المطارق والنقوش والأزقة الحجرية في درب النقاشة بدمشق خلال العصر الأيوبي) موثقة بشكل كامل وصريح في خريطة الادعاءات والمصادر المرفقة."
+    "alignment_reason": "جميع عناصر العالم التاريخي والفترة الزمنية والمكان والأدوات (المطارق والنقوش والأزقة الحجرية في درب النقاشة بدمشق خلال العصر الأيوبي) موثقة بشكل كامل وصريح في خريطة الادعاءات والمصادر المرفقة.",
+    "archive_identifier": "lan-tukmil-alqissa-20261031-damascus-ayyubid-bronze-w",
+    "archive_url": "https://archive.org/details/lan-tukmil-alqissa-20261031-damascus-ayyubid-bronze-w"
   }
 ]
