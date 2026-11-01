@@ -470,5 +470,27 @@
     "video_sha256": "38a66a664ddc5426da5157cecc969cb983f4c652810ecbe024d3f786a2712190",
     "audio_duration_seconds": 4380.92,
     "video_duration_seconds": 4381.0
+  },
+  {
+    "identifier": "lan-tukmil-alqissa-20261101-baghdad-abbasid-spice-mar",
+    "slug": "baghdad-abbasid-spice-market-routine",
+    "title": "تجارة التوابل والمكسرات في أسواق بغداد العباسية | قصة تاريخية للنوم 😴",
+    "episode_title_core": "تجارة التوابل والمكسرات في أسواق بغداد العباسية",
+    "title_suffix": "قصة تاريخية للنوم 😴",
+    "final_youtube_title": "تجارة التوابل والمكسرات في أسواق بغداد العباسية | قصة تاريخية للنوم 😴",
+    "thumbnail_text": "مخازن التوابل",
+    "thumbnail_scene_type": "الأسواق والحرف التجارية",
+    "thumbnail_prompt": "Calm illustrated realism of a 10th-century Baghdad spice merchant's shop at night with subtle painterly texture and premium storybook quality; low-key lighting with a single dim oil lamp casting a warm glow on open linen sacks filled with cardamom, nuts, and aromatic spices; palette of deep midnight navy, charcoal, muted warm gold, and aged ivory; one simple memorable scene focusing on the textures of the spices and wooden scales; mobile-first strong silhouette, no people, no modern objects, no text or typography of any kind rendered in the image. 16:9 YouTube thumbnail. Original composition. Professional quality.",
+    "historical_setting": "بغداد، العراق — القرن العاشر الميلادي (العصر العباسي)",
+    "created_at": "2026-11-01T13:14:11.472629+04:00",
+    "status": "REVIEW_PENDING",
+    "video_filename": "14_video_final.mp4",
+    "item_url": "https://archive.org/details/lan-tukmil-alqissa-20261101-baghdad-abbasid-spice-mar",
+    "video_url": "https://archive.org/download/lan-tukmil-alqissa-20261101-baghdad-abbasid-spice-mar/14_video_final.mp4",
+    "thumbnail_url": "https://archive.org/download/lan-tukmil-alqissa-20261101-baghdad-abbasid-spice-mar/11_thumbnail_base.jpg",
+    "video_size": 65644340,
+    "video_sha256": "fde526f00ab288b4413574b4ae047738f12485fa3cbf3139344ae93797a06a9d",
+    "audio_duration_seconds": 4036.88,
+    "video_duration_seconds": 4037.0
   }
 ]
