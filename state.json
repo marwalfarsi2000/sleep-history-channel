@@ -258,6 +258,11 @@
       "approval_status": "MEDIA_READY",
       "youtube_video_id": null,
       "story_path": "stories/2026-11-01_baghdad-abbasid-spice-market-routine"
+    },
+    "2026-11-02_tabuk-nabataean-papyrus-workshop": {
+      "approval_status": "GENERATING",
+      "youtube_video_id": null,
+      "story_path": "stories/2026-11-02_tabuk-nabataean-papyrus-workshop"
     }
   }
 }
