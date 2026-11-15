@@ -36,3 +36,8 @@ resume.ps1
 
 
 node_modules/
+
+# Never commit Google OAuth client downloads or local OAuth data.
+client_secret*.json
+.local/
+.oauth-local/

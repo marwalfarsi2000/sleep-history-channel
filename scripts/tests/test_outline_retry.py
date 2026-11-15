@@ -63,6 +63,12 @@ class OutlineRetryTests(unittest.TestCase):
         self.assertEqual(gem.call_count, 1)
         self.assertEqual(sections, good)
 
+    def test_plain_list_of_sections_is_losslessly_wrapped(self) -> None:
+        good = outline(9)
+        sections, gem = run([(json.dumps(good, ensure_ascii=False), [])])
+        self.assertEqual(sections, good)
+        self.assertEqual(gem.call_count, 1)
+
     def test_2_malformed_json_then_valid(self) -> None:
         sections, gem = run([MALFORMED, reply(outline())])
         self.assertEqual(gem.call_count, 2)

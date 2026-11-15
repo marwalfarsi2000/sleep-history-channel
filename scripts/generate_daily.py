@@ -1463,7 +1463,15 @@ Premise الحلقة (لا تغيّره):
         final = attempt == OUTLINE_MAX_MODEL_CALLS
         text, _ = gemini(prompt + feedback, json_mode=True, max_tokens=6000, temperature=0.5 if final else 0.3)
         try:
-            result = parse_json_object(text, "OUTLINE_SCHEMA_FAILED")
+            raw_outline = parse_json(text)
+            # Some models return the requested sections directly as a JSON array.
+            # This is a lossless shape correction, not invented historical content.
+            if isinstance(raw_outline, list) and raw_outline and all(
+                isinstance(section, dict) and "scenes" in section for section in raw_outline
+            ):
+                result = {"sections": raw_outline}
+            else:
+                result = parse_json_object(text, "OUTLINE_SCHEMA_FAILED")
         except ValueError as exc:  # json.JSONDecodeError is a ValueError
             last_error = f"{type(exc).__name__}: {exc}"[:300]
             print(f"OUTLINE_ATTEMPT={attempt} PARSE=FAIL VALIDATION=NOT_RUN ERROR={last_error}", file=sys.stderr, flush=True)
