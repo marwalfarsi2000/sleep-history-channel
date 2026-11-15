@@ -541,28 +541,30 @@ def test_thumbnail_failure_after_upload_keeps_the_video_and_never_creates_anothe
     assert second["video_id"] == "NEW123" and {"youtube_thumbnail_status": "set"} in recorded
 
 
-def test_intent_is_recorded_before_insert_and_a_crash_without_read_scope_does_not_duplicate(tmp_path):
+def test_intent_is_recorded_before_insert_and_crash_recovery_does_not_duplicate(tmp_path):
     order: list[str] = []
-    youtube, insert, patches = youtube_fixture(scopes=UPLOAD_ONLY, metadata={})
+    youtube, insert, patches = youtube_fixture(scopes=READ, metadata={})
     insert.next_chunk.side_effect = lambda: order.append("insert") or (None, {"id": "NEW123"})
     patches.append(mock.patch.object(youtube_publish, "record_upload_intent", side_effect=lambda i, s: order.append(f"intent:{s}")))
     run_publish(patches)
     assert order[:2] == ["intent:inserting", "insert"]
     # The next run after a runner crash: the video id was never recorded anywhere, only the intent marker.
     (tmp_path / "pending_item-1.json").unlink(missing_ok=True)
-    youtube2, insert2, patches2 = youtube_fixture(scopes=UPLOAD_ONLY, metadata={"youtube_upload_status": "inserting"})
+    youtube2, insert2, patches2 = youtube_fixture(scopes=READ, metadata={"youtube_upload_status": "inserting"})
     blocked = run_publish(patches2)
-    assert blocked["requires_owner_action"] and blocked["action"] == "REAUTHORIZE_YOUTUBE_OAUTH_WITH_READ_SCOPE"
+    assert blocked["requires_owner_action"] and blocked["action"] == "RECONCILE_POSSIBLE_YOUTUBE_UPLOAD"
     youtube2.videos.return_value.insert.assert_not_called()
 
 
-def test_with_a_read_scope_the_marker_is_resolved_by_search_and_a_clean_miss_uploads_once():
+def test_with_read_scope_a_found_video_is_resumed_but_a_search_miss_remains_blocked():
     found = [{"id": {"videoId": "OLD9"}, "snippet": {"title": "title"}}]
     youtube, insert, patches = youtube_fixture(scopes=READ, metadata={"youtube_upload_status": "inserting"}, search_items=found)
     assert run_publish(patches)["video_id"] == "OLD9"
     youtube.videos.return_value.insert.assert_not_called()
     youtube2, insert2, patches2 = youtube_fixture(scopes=READ, metadata={"youtube_upload_status": "inserting"})
-    assert run_publish(patches2)["video_id"] == "NEW123" and insert2.next_chunk.call_count == 1
+    blocked = run_publish(patches2)
+    assert blocked["action"] == "RECONCILE_POSSIBLE_YOUTUBE_UPLOAD"
+    youtube2.videos.return_value.insert.assert_not_called()
 
 
 def test_a_clean_4xx_rejection_clears_the_intent_marker():

@@ -31,7 +31,7 @@ MANAGE_SCOPES = {SCOPE_MANAGE, SCOPE_FORCE_SSL}
 READ_SCOPES = {SCOPE_READONLY, SCOPE_MANAGE, SCOPE_FORCE_SSL}
 # Each requirement is (capability, any-of scopes); every requirement must be met.
 MODE_REQUIREMENTS = {
-    MODE_DIRECT_PUBLIC: [("videos.insert", INSERT_SCOPES)],
+    MODE_DIRECT_PUBLIC: [("videos.insert", INSERT_SCOPES), ("videos.list", READ_SCOPES)],
     MODE_PRIVATE_VERIFY_PUBLIC: [
         ("videos.insert", INSERT_SCOPES),
         ("videos.list and videos.update", MANAGE_SCOPES),
@@ -337,17 +337,6 @@ def resume_existing(youtube, identifier: str, video_id: str, mode: str, granted:
     Returns None only when YouTube confirms the video is gone, so a fresh upload
     can never duplicate a live one. API errors propagate instead of re-uploading.
     """
-    if not granted & READ_SCOPES:
-        # Direct-public mode with an upload-only token cannot read the video back;
-        # the insert already published it, so never upload a second copy.
-        record_remote_upload(identifier, video_id, "verified")
-        return {
-            "video_id": video_id,
-            "url": watch_url(video_id),
-            "already_published": True,
-            "verified": {"verification": "skipped_insufficient_scope"},
-            "mode": mode,
-        }
     items = youtube.videos().list(part="status,contentDetails,snippet", id=video_id).execute().get("items") or []
     if not items or items[0].get("status", {}).get("uploadStatus") in {"failed", "rejected", "deleted"}:
         clear_pending_youtube_id(identifier)
@@ -446,18 +435,17 @@ def publish_archive_item(identifier: str) -> dict:
                         return outcome
         except Exception as search_exc:
             print(f"Warning: YouTube search discovery failed: {search_exc}")
-        if not granted & READ_SCOPES and upload_intent_pending(identifier, metadata):
-            # A previous attempt started videos.insert and never recorded a video ID, and this token
-            # cannot search YouTube to check. YouTube has no idempotency key, so never guess.
+        if upload_intent_pending(identifier, metadata):
+            # A prior videos.insert may have succeeded without a saved ID.
+            # YouTube title search is not a reliable proof of absence.
             return {
                 "requires_owner_action": True,
                 "status": "OWNER_ACTION_REQUIRED",
-                "action": "REAUTHORIZE_YOUTUBE_OAUTH_WITH_READ_SCOPE",
+                "action": "RECONCILE_POSSIBLE_YOUTUBE_UPLOAD",
                 "mode": mode,
                 "video_id": None,
                 "uploaded": False,
-                "reason": "A previous upload may have created the video; without a read scope it cannot be "
-                          "verified, so a second copy is not uploaded. Check the channel, or re-authorize with a read scope.",
+                "reason": "An upload may exist without a saved ID. Check the YouTube channel before re-uploading.",
             }
 
     with tempfile.TemporaryDirectory(prefix="sleep-history-youtube-") as folder:
@@ -495,20 +483,21 @@ def publish_archive_item(identifier: str) -> dict:
 
         set_thumbnail_safely(youtube, identifier, video_id, thumbnail)
 
-        if mode == MODE_DIRECT_PUBLIC and not granted & READ_SCOPES:
-            record_remote_upload(identifier, video_id, "verified")
-            return {
-                "video_id": video_id,
-                "url": watch_url(video_id),
-                "already_published": False,
-                "verified": {"verification": "skipped_insufficient_scope"},
-                "mode": mode,
-            }
         verified = wait_until_processed(youtube, video_id)
         if verified.get("status", {}).get("uploadStatus") != "processed":
             raise RuntimeError("YouTube upload processing failed or did not complete")
 
         if mode == MODE_DIRECT_PUBLIC:
+            if verified.get("status", {}).get("privacyStatus") != "public":
+                return {
+                    "requires_owner_action": True,
+                    "status": "PUBLISH_BLOCKED_VISIBILITY",
+                    "action": "CHECK_YOUTUBE_PRIVACY",
+                    "video_id": video_id,
+                    "uploaded": True,
+                    "mode": mode,
+                    "reason": "The uploaded video is not confirmed public; it will not be marked published.",
+                }
             record_remote_upload(identifier, video_id, "verified")
             return {"video_id": video_id, "url": watch_url(video_id), "already_published": False, "verified": verified, "mode": mode}
         return finalize_public(youtube, identifier, video_id, verified, mode)

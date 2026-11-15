@@ -15,6 +15,7 @@ import youtube_publish as yp
 REPO = Path(__file__).resolve().parents[2]
 IDENTIFIER = "lan-tukmil-alqissa-20261018-daily-life-in-palmyra-rom"
 UPLOAD_ONLY = {yp.SCOPE_UPLOAD}
+UPLOAD_AND_READ = {yp.SCOPE_UPLOAD, yp.SCOPE_READONLY}
 METADATA = json.dumps({
     "youtube_packaging_status": "passed", "final_youtube_title": "title", "title": "title",
     "thumbnail_text": "تدمر ليلًا", "youtube_packaging_validation_status": "passed",
@@ -28,10 +29,11 @@ def test_repository_uses_approved_direct_public_mode():
     assert yp.publish_mode() == "approved_direct_public"
 
 
-def test_current_upload_only_token_passes_direct_preflight_without_videos_update():
-    assert yp.capability_gap("approved_direct_public", UPLOAD_ONLY) is None
+def test_current_upload_only_token_is_blocked_until_video_read_scope_exists():
+    assert yp.capability_gap("approved_direct_public", UPLOAD_ONLY)["status"] == "OWNER_ACTION_REQUIRED"
+    assert yp.capability_gap("approved_direct_public", UPLOAD_AND_READ) is None
     names = [name for name, _ in yp.MODE_REQUIREMENTS["approved_direct_public"]]
-    assert names == ["videos.insert"]
+    assert names == ["videos.insert", "videos.list"]
 
 
 def test_private_verify_public_still_requires_manage_scope_for_future_use():
@@ -61,11 +63,14 @@ def read_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def run_publish(catalogue, monkeypatch, remote="REVIEW_PENDING", scopes=UPLOAD_ONLY):
+def run_publish(catalogue, monkeypatch, remote="REVIEW_PENDING", scopes=UPLOAD_AND_READ):
     youtube = MagicMock()
     videos = youtube.videos.return_value
     videos.insert.return_value.next_chunk.return_value = (None, {"id": "yt_palmyra"})
-    youtube.search.return_value.list.return_value.execute.side_effect = Exception("insufficient scope")
+    youtube.search.return_value.list.return_value.execute.side_effect = Exception("search temporarily unavailable")
+    youtube.videos.return_value.list.return_value.execute.return_value = {
+        "items": [{"status": {"uploadStatus": "processed", "privacyStatus": "public"}}]
+    }
     ia_item = MagicMock()
     ia_item.modify_metadata.return_value = MagicMock(status_code=200)
     sent, remote_updates = [], []

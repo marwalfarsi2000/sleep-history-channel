@@ -433,6 +433,12 @@ def publish(identifier: str) -> dict:
                 "تعذر الاتصال بـ YouTube بسبب صلاحية OAuth. لم يُفقد أي عمل ولا تحتاج الحلقة إلى إعادة اعتماد أو إعادة إنتاج.\n"
                 "بعد إعادة ربط YouTube يمكن استكمال النشر من نفس الفيديو مباشرة."
             )
+        if result.get("action") in {"RECONCILE_POSSIBLE_YOUTUBE_UPLOAD", "CHECK_YOUTUBE_PRIVACY"}:
+            send_message(
+                "<b>⏸️ نشر الحلقة موقوف لحماية القناة من التكرار</b>\n"
+                "لم يؤكد YouTube أن الفيديو منشور للعامة، أو قد توجد نسخة مرفوعة دون معرّف محفوظ. "
+                "سجّل النظام الحالة ولن يعيد رفع الفيديو تلقائيًا قبل التحقق."
+            )
         return result
 
     advance_index_status(
