@@ -38,7 +38,7 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 CHANNEL_URL = "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true"
 
 
-def load_client(path: Path) -> tuple[dict, str, str]:
+def load_client(path: Path, redirect_override: str = "") -> tuple[dict, str, str]:
     data = json.loads(path.read_text(encoding="utf-8"))
     kind = "web" if "web" in data else "installed" if "installed" in data else ""
     if not kind:
@@ -55,9 +55,11 @@ def load_client(path: Path) -> tuple[dict, str, str]:
                 "The OAuth web client has no registered localhost redirect URI. "
                 "Register a loopback callback in Google Cloud or use an installed client."
             )
-        redirect = PREFERRED_REDIRECT if PREFERRED_REDIRECT in redirects else redirects[0]
+        redirect = redirect_override or (PREFERRED_REDIRECT if PREFERRED_REDIRECT in redirects else redirects[0])
+        if redirect not in redirects:
+            raise ValueError("Chosen callback must be registered in the OAuth web client JSON")
     else:
-        redirect = PREFERRED_REDIRECT if PREFERRED_REDIRECT in uris else "http://localhost:5679/"
+        redirect = redirect_override or (PREFERRED_REDIRECT if PREFERRED_REDIRECT in uris else "http://localhost:5679/")
     if not allowed_loopback(redirect):
         raise ValueError("Refusing a non-local or invalid Google redirect URI")
     return client, kind, redirect
@@ -210,10 +212,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Secure local Google YouTube reauthorization")
     parser.add_argument("--client-json", type=Path, required=True, help="Google OAuth client JSON, kept outside Git")
     parser.add_argument("--expected-channel-id", help="Fail if a different YouTube channel is authorized")
+    parser.add_argument("--redirect-uri", default="", help="Registered localhost callback to use if port 5679 is busy")
     args = parser.parse_args()
 
     github_preflight()  # Before consent, confirm we can actually save the new credentials.
-    client, kind, redirect = load_client(args.client_json.expanduser().resolve())
+    client, kind, redirect = load_client(args.client_json.expanduser().resolve(), args.redirect_uri)
     code, verifier = receive_authorization(redirect, client["client_id"])
     token = post_token({
         "code": code,
