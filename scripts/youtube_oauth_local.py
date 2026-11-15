@@ -5,7 +5,7 @@ authorization code as a workflow_dispatch input. Requires GitHub CLI login and
 a Google OAuth client JSON exported from the matching Google Cloud project.
 
 Example:
-    python scripts/youtube_oauth_local.py --client-json C:\Users\Me\Downloads\client_secret.json
+    python scripts/youtube_oauth_local.py --client-json C:/Users/Me/Downloads/client_secret.json
 
 The downloaded client JSON must remain outside Git and is never modified.
 """
