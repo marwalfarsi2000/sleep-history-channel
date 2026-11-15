@@ -129,10 +129,13 @@ class OutlineRetryTests(unittest.TestCase):
         self.assertEqual(sections, second)
         self.assertEqual(len(sections), 10)
 
-    def test_9_signature_unchanged(self) -> None:
+    def test_9_existing_positional_signature_preserved(self) -> None:
         self.assertEqual(
-            list(inspect.signature(generate_daily.make_outline).parameters), ["topic", "research"]
+            list(inspect.signature(generate_daily.make_outline).parameters)[:2], ["topic", "research"]
         )
+        checkpoint = inspect.signature(generate_daily.make_outline).parameters["checkpoint_dir"]
+        self.assertIsNone(checkpoint.default)
+        self.assertEqual(checkpoint.kind, inspect.Parameter.KEYWORD_ONLY)
 
     def test_validator_contract_not_loosened(self) -> None:
         for count in (6, 11):

@@ -1,0 +1,71 @@
+{
+  "base_sha": "51b363fe4c675465415863a412348ce4f11e85d5",
+  "branch": "fix/youtube-outline-recovery-20261115",
+  "created_at": "2026-11-15T03:11:39.346161+00:00",
+  "test_suites": [
+    {
+      "report": "retest.xml",
+      "tests": 77,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "8e27f9a39c1238bd6d18ed22aea39f8c8b9db5a14dd9d8bea75399c47047b8e8",
+      "test_files": [
+        "test_runtime_state_integration.py",
+        "test_publish_recovery_guards.py",
+        "test_youtube_oauth_check.py",
+        "test_youtube_publish_modes.py",
+        "test_direct_public_publish.py",
+        "test_publish_idempotency.py"
+      ]
+    },
+    {
+      "report": "outline-and-contracts.xml",
+      "tests": 96,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "3c2dcdb89b1679185715b942a1d03a7bbd4f164d05468230787cbb1f3a102e2c",
+      "test_files": [
+        "test_outline_checkpoint_recovery.py",
+        "test_outline_retry.py",
+        "test_outline_repair.py",
+        "test_json_parser.py",
+        "test_json_object_schema.py",
+        "test_state_management.py",
+        "test_state_machine.py",
+        "test_restore_failure_checkpoint.py",
+        "test_generator_resume.py",
+        "test_checkpoint_validation.py",
+        "test_production_gates.py",
+        "test_env_and_workflows.py"
+      ]
+    }
+  ],
+  "total_tests": 173,
+  "python_outbound_network": "FORBIDDEN_BY_SOCKET_GUARD",
+  "paid_api_calls": 0,
+  "youtube_uploads": 0,
+  "model_calls": 0,
+  "production_changes": false,
+  "base_failure_reproduced": "Windows text-mode mktree creates state.json\\r; fixed with binary UTF-8 transport",
+  "oauth_live_binding": "NOT_VERIFIED_LOCAL_REFRESH_TOKEN_ABSENT",
+  "tested_working_tree_sha256": {
+    "scripts/generate_daily.py": "f035651f5a217b249cb2be96fd400fe78d02cb6e949c7d7ef45455e095cf3c0c",
+    "scripts/outline_json.py": "4e81dfbdc27b22088759229ee98686b9f1f8cf82e8caeb7585764066a922c2ef",
+    "scripts/youtube_publish.py": "1163426314e27d1569b33583613fcbb7a0f0c6dc645da578fcccdb57562fa2f4",
+    "scripts/youtube_oauth_check.py": "65dbe801e5cb317561dd1222159f247bb065f0d8003ec8f8986a95eaf5907db3",
+    "scripts/cloud_pipeline.py": "79cb24a2395fc3f1210dd2245bd27470788c3f5956dd1e896dc5d3fff1274e71",
+    "scripts/state_store.py": "78f9d3189d6ec42bdd648556e9492b847d038940e10253ce4cef47717b18ffaa"
+  },
+  "git_blob_sha256": {
+    "scripts/generate_daily.py": "6a800bcba2fe0205c9958861be8ecb12f5bffd33a3a05e9c3e251d60a66dcd1a",
+    "scripts/outline_json.py": "4e81dfbdc27b22088759229ee98686b9f1f8cf82e8caeb7585764066a922c2ef",
+    "scripts/youtube_publish.py": "31232ba227d88af44a042f8108632b353c471c8802e8c4a57cc932ee66da023e",
+    "scripts/youtube_oauth_check.py": "65dbe801e5cb317561dd1222159f247bb065f0d8003ec8f8986a95eaf5907db3",
+    "scripts/cloud_pipeline.py": "b840456e5a818fba74fb40657febda9b9cf1f5d02f375ab5bfada394051d768d",
+    "scripts/state_store.py": "c300cfdc22fdb6e17fa1f04e2bee30a65bd555ab1f7024a8a6b2650f74e3d56d"
+  },
+  "python_version": "3.12.14",
+  "platform": "Windows"
+}

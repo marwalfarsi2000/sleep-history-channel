@@ -23,7 +23,6 @@ def test_publish_archive_item_existing_video_id():
     }
     mock_videos.list.return_value = mock_list
     mock_youtube.videos.return_value = mock_videos
-
     with patch("youtube_publish.archive_metadata", return_value=mock_payload), \
          patch("youtube_publish.build", return_value=mock_youtube), \
          patch("youtube_publish.credentials", return_value=MagicMock()), \
@@ -66,6 +65,10 @@ def test_publish_recovery_after_failure_post_youtube_insert(tmp_path, monkeypatc
     mock_search.list.return_value = mock_search_list
     mock_youtube.search.return_value = mock_search
     mock_youtube.videos.return_value = mock_videos
+    monkeypatch.setattr(youtube_publish, "ROOT", tmp_path)
+    monkeypatch.setattr("state_store.load_publish_state", lambda: {"episodes": {}})
+    monkeypatch.setattr(youtube_publish, "record_upload_intent", lambda *args: None)
+    mock_search_list.execute.side_effect = [{"items": []}, mock_search_list.execute.return_value]
 
     def mock_download(identifier, filename, path):
         path.write_bytes(b"X" * 2000)
@@ -94,6 +97,7 @@ def test_publish_recovery_after_failure_post_youtube_insert(tmp_path, monkeypatc
 
         with pytest.raises(RuntimeError):
             youtube_publish.publish_archive_item("item-failure-test")
+        assert mock_videos.insert.call_count == 1
 
     # 2. Hard crash simulation: wipe local .runtime pending record
     pending_file = youtube_publish.pending_youtube_record_path("item-failure-test")

@@ -48,6 +48,8 @@ class Harness:
             patch.object(yp, "download", self.download),
             patch.object(yp, "read_text", side_effect=lambda i, n: METADATA if n == "15_metadata.json" else "title"),
             patch.object(yp, "record_remote_upload", side_effect=lambda *a: self.records.append(a)),
+            patch.object(yp, "record_upload_intent"),
+            patch("state_store.load_publish_state", return_value={"episodes": {}}),
             patch.object(yp, "pending_youtube_record_path", return_value=self.pending),
         ]
 
@@ -239,16 +241,19 @@ def test_resume_direct_mode_with_upload_only_scope_never_uploads_a_second_copy(t
     with harness(tmp_path, monkeypatch, "approved_direct_public", UPLOAD_ONLY, ia_metadata={"youtube_video_id": "yt_old"}) as h:
         result = h.run()
     h.videos.insert.assert_not_called()
-    assert result["video_id"] == "yt_old" and result["already_published"] is True
+    assert result["video_id"] == "yt_old"
+    assert result["action"] == "REAUTHORIZE_YOUTUBE_OAUTH_WITH_READ_SCOPE"
+    assert h.records == []
 
 
-def test_resume_uploads_only_when_youtube_confirms_video_is_gone(tmp_path, monkeypatch):
+def test_missing_known_video_requires_owner_verification_not_reupload(tmp_path, monkeypatch):
     with harness(tmp_path, monkeypatch, "private_verify_public", FULL, ia_metadata={"youtube_video_id": "yt_old"}) as h:
         h.set_video(None)
         h.videos.list.return_value.execute.side_effect = [{"items": []}, {"items": [{"status": {"uploadStatus": "processed", "privacyStatus": "private"}}]}]
         result = h.run()
-    assert h.videos.insert.call_count == 1
-    assert result["video_id"] == "yt_new"
+    h.videos.insert.assert_not_called()
+    assert result["video_id"] == "yt_old"
+    assert result["action"] == "VERIFY_EXISTING_YOUTUBE_UPLOAD"
 
 
 def test_resume_api_error_never_triggers_a_duplicate_upload(tmp_path, monkeypatch):

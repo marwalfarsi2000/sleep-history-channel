@@ -29,6 +29,9 @@ DEFAULT_PUBLISH_MODE = MODE_PRIVATE_VERIFY_PUBLIC
 INSERT_SCOPES = {SCOPE_UPLOAD, SCOPE_MANAGE, SCOPE_FORCE_SSL}
 MANAGE_SCOPES = {SCOPE_MANAGE, SCOPE_FORCE_SSL}
 READ_SCOPES = {SCOPE_READONLY, SCOPE_MANAGE, SCOPE_FORCE_SSL}
+# Legacy code labelled every upload 4xx 'rejected', even after prior chunks.
+# Historical records with that status therefore also require reconciliation.
+UNCERTAIN_UPLOAD_STATES = {"inserting", "processing", "verified", "rejected"}
 # Each requirement is (capability, any-of scopes); every requirement must be met.
 MODE_REQUIREMENTS = {
     MODE_DIRECT_PUBLIC: [("videos.insert", INSERT_SCOPES)],
@@ -58,8 +61,16 @@ def get_granted_scopes(creds: Credentials) -> set[str]:
     scopes = set(getattr(creds, "granted_scopes", None) or [])
     if not scopes and creds.token:
         url = "https://oauth2.googleapis.com/tokeninfo?access_token=" + urllib.parse.quote(creds.token, safe="")
-        with urllib.request.urlopen(url, timeout=30) as response:
-            scopes = set(str(json.loads(response.read().decode("utf-8")).get("scope", "")).split())
+        try:
+            with urllib.request.urlopen(url, timeout=30) as response:
+                info = json.loads(response.read().decode("utf-8"))
+        except Exception:
+            # HTTPError/URLError may contain the URL, including the access token.
+            raise RuntimeError("YOUTUBE_OAUTH_PREFLIGHT_FAILED: token scope lookup failed") from None
+        audience = info.get("aud") or info.get("issued_to")
+        if audience and audience != creds.client_id:
+            raise RuntimeError("YOUTUBE_OAUTH_CLIENT_BINDING_MISMATCH")
+        scopes = set(str(info.get("scope", "")).split())
     if not scopes:
         raise RuntimeError("YOUTUBE_OAUTH_PREFLIGHT_FAILED: could not determine granted OAuth scopes")
     return scopes
@@ -210,48 +221,59 @@ def credentials() -> Credentials:
     )
 
 
-def _record_remote_fields(identifier: str, fields: dict) -> None:
-    """Best-effort durable note on Internet Archive and automation-state (never raises)."""
+def _record_remote_fields(identifier: str, fields: dict) -> bool:
+    """Return whether at least one durable backend acknowledged the write."""
+    saved = False
     try:
         import state_store
-        state_store.save_episode_for_archive(identifier, dict(fields))
+        saved = state_store.save_episode_for_archive(identifier, dict(fields)) is True
     except Exception as exc:
-        print(f"Warning: automation-state update for {identifier} failed: {exc}")
+        print(f"Warning: automation-state update for {identifier} failed: {type(exc).__name__}")
     access, secret = os.environ.get("IAS3_ACCESS_KEY", ""), os.environ.get("IAS3_SECRET_KEY", "")
     if not access or not secret:
-        return
+        return saved
     try:
         from archive_storage import get_archive_item
         from error_classifier import retry_transient
-        retry_transient(lambda: get_archive_item(identifier, access_key=access, secret_key=secret).modify_metadata(dict(fields)))
+        response = retry_transient(lambda: get_archive_item(identifier, access_key=access, secret_key=secret).modify_metadata(dict(fields)))
+        status = getattr(response, "status_code", None)
+        if not saved and isinstance(status, int) and 200 <= status < 300:
+            # IA can queue metadata writes. An HTTP acknowledgement alone must
+            # not authorize insert if the intent is not readable durably yet.
+            actual = archive_metadata(identifier).get("metadata") or {}
+            saved = all(actual.get(key) == value for key, value in fields.items())
     except Exception as exc:
         print(f"Warning: archive metadata update for {identifier} failed: {type(exc).__name__}")
+    return saved
 
 
 def record_upload_intent(identifier: str, status: str) -> None:
     """Written BEFORE videos.insert: if the runner dies mid-upload the next run knows a video may exist."""
-    _record_remote_fields(identifier, {"youtube_upload_status": status})
+    if not _record_remote_fields(identifier, {"youtube_upload_status": status}):
+        raise RuntimeError("YOUTUBE_UPLOAD_INTENT_NOT_DURABLE: upload not started")
 
 
 def upload_intent_pending(identifier: str, metadata: dict) -> bool:
-    if str(metadata.get("youtube_upload_status") or "") == "inserting":
+    if str(metadata.get("youtube_upload_status") or "") in UNCERTAIN_UPLOAD_STATES:
         return True
     try:
         import state_store
-        for episode in (state_store._load_state().get("episodes") or {}).values():
-            if episode.get("archive_identifier") == identifier and episode.get("youtube_upload_status") == "inserting":
+        for episode in (state_store.load_publish_state().get("episodes") or {}).values():
+            if episode.get("archive_identifier") == identifier and episode.get("youtube_upload_status") in UNCERTAIN_UPLOAD_STATES:
                 return True
     except Exception:
-        pass
+        raise RuntimeError("YOUTUBE_PUBLISH_STATE_UNAVAILABLE: no new upload allowed") from None
     return False
 
 
 def set_thumbnail_safely(youtube, identifier: str, video_id: str, thumbnail: Path) -> bool:
     """The video already exists: a thumbnail problem is retried, recorded and never creates a second video."""
     from error_classifier import retry_transient
+    media = MediaFileUpload(str(thumbnail), mimetype="image/jpeg")
     try:
-        retry_transient(lambda: youtube.thumbnails().set(
-            videoId=video_id, media_body=MediaFileUpload(str(thumbnail), mimetype="image/jpeg")).execute())
+        with media.stream():
+            retry_transient(lambda: youtube.thumbnails().set(
+                videoId=video_id, media_body=media).execute())
     except Exception as exc:
         print(f"Warning: YouTube thumbnail upload failed ({type(exc).__name__}); the video is kept: {video_id}")
         _record_remote_fields(identifier, {"youtube_thumbnail_status": "failed"})
@@ -274,9 +296,7 @@ def retry_missing_thumbnail(youtube, identifier: str, video_id: str, metadata: d
 
 
 def pending_youtube_record_path(identifier: str) -> Path:
-    from pathlib import Path
-    root = Path(__file__).resolve().parents[1]
-    runtime = root / ".runtime"
+    runtime = ROOT / ".runtime"
     runtime.mkdir(exist_ok=True)
     return runtime / f"pending_youtube_{identifier}.json"
 
@@ -334,24 +354,28 @@ def finalize_public(youtube, identifier: str, video_id: str, verified: dict, mod
 def resume_existing(youtube, identifier: str, video_id: str, mode: str, granted: set[str]) -> dict | None:
     """Continue publishing a video that is already on YouTube.
 
-    Returns None only when YouTube confirms the video is gone, so a fresh upload
-    can never duplicate a live one. API errors propagate instead of re-uploading.
+    An empty API result may mean a different channel/account, not deletion.
+    An existing ID is never discarded automatically. API errors propagate.
     """
     if not granted & READ_SCOPES:
-        # Direct-public mode with an upload-only token cannot read the video back;
-        # the insert already published it, so never upload a second copy.
-        record_remote_upload(identifier, video_id, "verified")
+        # The ID may belong to a private upload from an earlier mode. Without
+        # read access neither publication nor deletion can be asserted.
         return {
             "video_id": video_id,
             "url": watch_url(video_id),
-            "already_published": True,
-            "verified": {"verification": "skipped_insufficient_scope"},
-            "mode": mode,
+            "requires_owner_action": True, "status": "OWNER_ACTION_REQUIRED",
+            "action": "REAUTHORIZE_YOUTUBE_OAUTH_WITH_READ_SCOPE",
+            "uploaded": False, "mode": mode,
+            "reason": "The existing video is preserved; a read scope is needed to verify its state without uploading another copy.",
         }
     items = youtube.videos().list(part="status,contentDetails,snippet", id=video_id).execute().get("items") or []
     if not items or items[0].get("status", {}).get("uploadStatus") in {"failed", "rejected", "deleted"}:
-        clear_pending_youtube_id(identifier)
-        return None
+        return {
+            "requires_owner_action": True, "status": "OWNER_ACTION_REQUIRED",
+            "action": "VERIFY_EXISTING_YOUTUBE_UPLOAD", "video_id": video_id,
+            "uploaded": False, "mode": mode,
+            "reason": "A saved YouTube ID is missing or unusable. Verify the owning channel and existing upload; no replacement is uploaded automatically.",
+        }
     verified = wait_until_processed(youtube, video_id)
     if verified.get("status", {}).get("privacyStatus") == "public":
         record_remote_upload(identifier, video_id, "verified")
@@ -378,15 +402,16 @@ def find_existing_video_id(identifier: str, metadata: dict) -> str:
         except Exception:
             continue
         for rec in data if isinstance(data, list) else []:
-            if (rec.get("identifier") == identifier or rec.get("archive_identifier") == identifier or rec.get("slug") in identifier) and rec.get("youtube_video_id"):
+            if (rec.get("identifier") == identifier or rec.get("archive_identifier") == identifier
+                    or (rec.get("slug") and identifier.endswith("-" + rec["slug"]))) and rec.get("youtube_video_id"):
                 return rec["youtube_video_id"]
     try:
         import state_store
-        for episode in (state_store._load_state().get("episodes") or {}).values():
+        for episode in (state_store.load_publish_state().get("episodes") or {}).values():
             if episode.get("archive_identifier") == identifier and episode.get("youtube_video_id"):
                 return episode["youtube_video_id"]
-    except Exception as exc:
-        print(f"Warning: automation-state lookup of YouTube ID failed: {exc}")
+    except Exception:
+        raise RuntimeError("YOUTUBE_PUBLISH_STATE_UNAVAILABLE: no new upload allowed") from None
     return ""
 
 
@@ -413,7 +438,8 @@ def publish_archive_item(identifier: str) -> dict:
     if existing:
         outcome = resume_existing(youtube, identifier, existing, mode, granted)
         if outcome is not None:
-            retry_missing_thumbnail(youtube, identifier, outcome.get("video_id") or existing, metadata)
+            if not outcome.get("requires_owner_action"):
+                retry_missing_thumbnail(youtube, identifier, outcome.get("video_id") or existing, metadata)
             return outcome
 
     title = read_text(identifier, "01_title.txt")
@@ -433,31 +459,33 @@ def publish_archive_item(identifier: str) -> dict:
 
     # Hard-crash recovery: look for a video already uploaded with this exact title
     if not existing:
+        discovered = []
         try:
             search_response = youtube.search().list(
                 part="id,snippet", forMine=True, type="video", q=title, maxResults=5,
             ).execute()
-            for item in search_response.get("items") or []:
-                item_title = item.get("snippet", {}).get("title", "").strip()
-                item_id = item.get("id", {}).get("videoId", "")
-                if item_id and item_title == title.strip():
-                    outcome = resume_existing(youtube, identifier, item_id, mode, granted)
-                    if outcome is not None:
-                        return outcome
+            discovered = search_response.get("items") or []
         except Exception as search_exc:
-            print(f"Warning: YouTube search discovery failed: {search_exc}")
-        if not granted & READ_SCOPES and upload_intent_pending(identifier, metadata):
+            print(f"Warning: YouTube search discovery failed: {type(search_exc).__name__}")
+        for item in discovered:
+            item_title = item.get("snippet", {}).get("title", "").strip()
+            item_id = item.get("id", {}).get("videoId", "")
+            if item_id and item_title == title.strip():
+                # Verification failure MUST propagate, not fall into a new insert.
+                save_pending_youtube_id(identifier, item_id)
+                return resume_existing(youtube, identifier, item_id, mode, granted)
+        if upload_intent_pending(identifier, metadata):
             # A previous attempt started videos.insert and never recorded a video ID, and this token
             # cannot search YouTube to check. YouTube has no idempotency key, so never guess.
             return {
                 "requires_owner_action": True,
                 "status": "OWNER_ACTION_REQUIRED",
-                "action": "REAUTHORIZE_YOUTUBE_OAUTH_WITH_READ_SCOPE",
+                "action": ("VERIFY_EXISTING_YOUTUBE_UPLOAD" if granted & READ_SCOPES
+                           else "REAUTHORIZE_YOUTUBE_OAUTH_WITH_READ_SCOPE"),
                 "mode": mode,
                 "video_id": None,
                 "uploaded": False,
-                "reason": "A previous upload may have created the video; without a read scope it cannot be "
-                          "verified, so a second copy is not uploaded. Check the channel, or re-authorize with a read scope.",
+                "reason": "A previous upload may have created the video. A failed or empty title search cannot prove absence; verify the channel before any new upload.",
             }
 
     with tempfile.TemporaryDirectory(prefix="sleep-history-youtube-") as folder:
@@ -471,22 +499,21 @@ def publish_archive_item(identifier: str) -> dict:
 
         privacy = "public" if mode == MODE_DIRECT_PUBLIC else "private"
         record_upload_intent(identifier, "inserting")
-        request = youtube.videos().insert(
-            part="snippet,status",
-            body={
-                "snippet": {"title": title, "description": description, "categoryId": "27", "defaultLanguage": "ar"},
-                "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False},
-            },
-            media_body=MediaFileUpload(str(video), mimetype="video/mp4", resumable=True, chunksize=8 * 1024 * 1024),
-        )
-        response = None
-        try:
+        media = MediaFileUpload(str(video), mimetype="video/mp4", resumable=True, chunksize=8 * 1024 * 1024)
+        with media.stream():
+            request = youtube.videos().insert(
+                part="snippet,status",
+                body={
+                    "snippet": {"title": title, "description": description, "categoryId": "27", "defaultLanguage": "ar"},
+                    "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False},
+                },
+                media_body=media,
+            )
+            response = None
+            # Exceptions retain the durable 'inserting' fence, including 4xx:
+            # an error cannot prove that no previous chunk/final request committed.
             while response is None:
                 _, response = request.next_chunk()
-        except HttpError as exc:
-            if 400 <= getattr(exc.resp, "status", 0) < 500:
-                record_upload_intent(identifier, "rejected")  # YouTube refused it outright: nothing was created
-            raise
         video_id = response.get("id")
         if not video_id:
             raise RuntimeError("YouTube upload finished without a video ID")
