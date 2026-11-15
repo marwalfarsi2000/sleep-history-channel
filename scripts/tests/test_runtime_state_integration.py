@@ -82,6 +82,16 @@ def test_ensure_is_idempotent(repos):
     assert git(repos.bare, "rev-parse", "automation-state") == tip
 
 
+def test_git_plumbing_preserves_exact_utf8_names_and_bytes(repos):
+    text = json.dumps({"episodes": {"arabic": "حكاية"}}, ensure_ascii=False) + "\n"
+    _, commit = state_store._commit_files({"state.json": text}, None, "byte protocol regression")
+    tree = subprocess.check_output(["git", "ls-tree", "-z", commit], cwd=repos.work)
+    names = [row.split(b"\t", 1)[1] for row in tree.split(b"\0") if row]
+    assert names == [b"state.json"]  # never b'state.json\r' on Windows
+    content = subprocess.check_output(["git", "show", commit + ":state.json"], cwd=repos.work)
+    assert content == text.encode("utf-8")
+
+
 def test_remote_state_is_read_while_current_branch_stays_code_branch(repos, tmp_path, monkeypatch):
     assert state_store.save_episode_state("ep_1", {"approval_status": "REVIEW_PENDING"})
     other = clone(repos.bare, tmp_path / "other")

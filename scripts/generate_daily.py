@@ -17,6 +17,7 @@ from pathlib import Path
 import episode_selection
 import llm_router
 import outline_repair
+import outline_json
 import quest_rules
 import research_alignment
 import run_summary
@@ -1436,7 +1437,7 @@ def quest_brief(topic: dict) -> str:
     return "\n".join(lines) or "- (لا premise محفوظ: ابنِ مهمة صغيرة لطيفة من الزاوية نفسها)"
 
 
-def make_outline(topic: dict, research: str) -> list[dict]:
+def make_outline(topic: dict, research: str, *, checkpoint_dir: Path | None = None) -> list[dict]:
     rules = production_rules(17, 22, 62, 64, 65)
     prompt = f"""التزم بالقواعد التالية التزامًا إلزاميًا:
 {rules}
@@ -1455,6 +1456,38 @@ Premise الحلقة (لا تغيّره):
 {{"sections":[{{"title":"...","phase":"CALM_HOOK","brief":"...","quest_beat":"ما الذي تحاوله الشخصية الآن","quest_state":"introduced","new_questions_opened":1,"dialogue_level":"light","named_characters":["..."],"scenes":[{{"place_or_anchor":"...","action":"...","main_idea":"...","gentle_question":"...","transition":"..."}}],"target_words":700}}]}}
 اجعل الأقسام غير متكررة، ومجموع target_words لا يقل عن 5500 كلمة عربية بلا حشو (ولا حشو للوصول إلى الطول).
 """
+    fingerprint = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    checkpoint = checkpoint_dir / "outline_checkpoint.json" if checkpoint_dir else None
+
+    def decode(text: str) -> tuple[object, list[str], list[str]]:
+        result = parse_json_object(outline_json.repair_json_syntax(text), "OUTLINE_SCHEMA_FAILED")
+        sections, repairs = outline_repair.repair_outline(
+            result.get("sections") or [], phases=STORY_PHASES,
+            min_sections=MIN_MACRO_SECTIONS, max_sections=MAX_MACRO_SECTIONS,
+            min_scenes=2, max_scenes=4, min_total_words=MIN_OUTLINE_TARGET_WORDS,
+        )
+        return sections, repairs, collect_outline_errors(sections)
+
+    def save_attempt(text: str, attempt: int, errors: list[str]) -> None:
+        if checkpoint is None:
+            return
+        write(checkpoint, json.dumps({
+            "input_sha256": fingerprint, "raw_response": text,
+            "attempt": attempt, "validation_errors": errors,
+            "status": "invalid" if errors else "validated",
+        }, ensure_ascii=False, indent=2))
+        durable_checkpoint(checkpoint_dir.parent, "research_alignment", "outline")
+
+    if checkpoint and checkpoint.exists():
+        try:
+            saved = json.loads(checkpoint.read_text(encoding="utf-8"))
+            if saved.get("input_sha256") == fingerprint:
+                sections, _, errors = decode(saved["raw_response"])
+                if not errors:
+                    run_summary.reused("outline_response")
+                    return sections
+        except (ValueError, KeyError, TypeError):
+            pass  # preserve the checkpoint until a new response is safely saved
     feedback = ""
     last_error = ""
     for attempt in range(1, OUTLINE_MAX_MODEL_CALLS + 1):
@@ -1463,26 +1496,17 @@ Premise الحلقة (لا تغيّره):
         final = attempt == OUTLINE_MAX_MODEL_CALLS
         text, _ = gemini(prompt + feedback, json_mode=True, max_tokens=6000, temperature=0.5 if final else 0.3)
         try:
-            result = parse_json_object(text, "OUTLINE_SCHEMA_FAILED")
+            sections, repairs, errors = decode(text)
         except ValueError as exc:  # json.JSONDecodeError is a ValueError
             last_error = f"{type(exc).__name__}: {exc}"[:300]
+            save_attempt(text, attempt, [last_error])
             print(f"OUTLINE_ATTEMPT={attempt} PARSE=FAIL VALIDATION=NOT_RUN ERROR={last_error}", file=sys.stderr, flush=True)
             feedback = (
                 f"\n\nPrevious outline response was invalid JSON: {last_error}. Return one complete valid "
                 "JSON object only. Do not use Markdown, code fences, commentary, or text outside the JSON object."
             )
             continue
-        if not isinstance(result, dict):
-            errors = ["Outline response must be a JSON object with a sections list"]
-            sections = None
-            repairs: list[str] = []
-        else:
-            sections, repairs = outline_repair.repair_outline(
-                result.get("sections") or [], phases=STORY_PHASES,
-                min_sections=MIN_MACRO_SECTIONS, max_sections=MAX_MACRO_SECTIONS,
-                min_scenes=2, max_scenes=4, min_total_words=MIN_OUTLINE_TARGET_WORDS,
-            )
-            errors = collect_outline_errors(sections)
+        save_attempt(text, attempt, errors)
         if repairs:
             print(f"OUTLINE_LOCAL_REPAIRS={len(repairs)} {' | '.join(repairs)[:600]}", file=sys.stderr, flush=True)
         if not errors:
@@ -1715,8 +1739,47 @@ def ensure_minimum_story_length(
         )
     return repaired
 
+def saved_content_for_packaging(story: Path) -> tuple[str, dict, dict] | None:
+    """Reuse completed content only with its passing, hash-bound gate receipt.
+
+    Older receipts bind the draft rather than final bytes. Verify the saved
+    assembled draft (or exact ordered chapters) for that legacy contract.
+    An unverified final file is never permission to skip quality checks.
+    """
+    logs = story / "logs"
+    final = logs / "final_story_after_gates.md"
+    if not final.exists():
+        return None
+    try:
+        manifest = json.loads((logs / "content_gates.json").read_text(encoding="utf-8"))
+        text = final.read_text(encoding="utf-8").strip()
+        valid = bool(text) and all(manifest.get(key, {}).get("status") == "PASS"
+                                   for key in ("quality_gate", "fact_check"))
+        if manifest.get("final_sha256"):
+            valid = valid and hashlib.sha256(text.encode("utf-8")).hexdigest() == manifest["final_sha256"]
+        else:
+            assembled = logs / "assembled_story.md"
+            draft = (assembled.read_text(encoding="utf-8").strip() if assembled.exists() else
+                     "\n\n".join(p.read_text(encoding="utf-8").strip()
+                                 for p in sorted(logs.glob("chapter_[0-9][0-9].md"))))
+            valid = valid and bool(draft) and hashlib.sha256(draft.encode("utf-8")).hexdigest() == manifest.get("draft_sha256")
+        if valid:
+            return text, manifest["quality_gate"], manifest["fact_check"]
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    raise RuntimeError("FINAL_CONTENT_CHECKPOINT_UNVERIFIED: preserve saved content; review its gate receipt")
+
+
 def resume_partial_story(story: Path) -> Path:
     _remember_story(story)
+    metadata_path = story / "15_metadata.json"
+    if metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata.get("approval_status") in {
+            "MEDIA_READY", "REVIEW_PENDING", "APPROVED_FOR_PUBLISH", "PUBLISHING", "PUBLISHED",
+        }:
+            run_summary.reused("completed_episode")
+            return story
     if (story / "logs/topic.json").exists():
         run_summary.update(checkpoint_saved=True)  # the saved topic is already a resumable checkpoint
     topic_path = story / "logs/topic.json"
@@ -1726,24 +1789,36 @@ def resume_partial_story(story: Path) -> Path:
     topic = json.loads(topic_path.read_text(encoding="utf-8"))
     research_path = story / "logs/research_notes_draft.md"
     sources_path = story / "logs/research_grounding_sources.json"
+    saved_content = saved_content_for_packaging(story)
     if research_path.exists():
         research = research_path.read_text(encoding="utf-8")
         sources = json.loads(sources_path.read_text(encoding="utf-8")) if sources_path.exists() else []
         run_summary.reused("research")
     else:
+        if saved_content is not None:
+            raise RuntimeError("FINAL_CONTENT_CHECKPOINT_UNVERIFIED: saved research is missing; do not regenerate completed content")
         run_summary.stage("research")
         research, sources = research_topic(topic, story)
         write(research_path, research)
         write(sources_path, json.dumps(sources, ensure_ascii=False, indent=2))
-    if not (story / "logs/final_story_after_gates.md").exists():  # a finished story is past this gate
-        topic, research, sources = ensure_research_alignment(
-            story, topic, research, sources, ROOT / "config/topics_history.json")
+    if saved_content is not None:
+        run_summary.reused("quality_gates")
+        durable_checkpoint(story, "quality_gates", "packaging")
+        build_metadata_files(story, topic, research, sources, *saved_content)
+        from state_machine import State
+        upsert_history_checkpoint(ROOT / "config/topics_history.json", story, topic, State.GENERATING)
+        return story
+    topic, research, sources = ensure_research_alignment(
+        story, topic, research, sources, ROOT / "config/topics_history.json")
     if outline_path.exists():
-        sections = json.loads(outline_path.read_text(encoding="utf-8"))["sections"]
+        sections = validate_outline_sections(parse_json_object(
+            outline_json.repair_json_syntax(outline_path.read_text(encoding="utf-8")),
+            "OUTLINE_CHECKPOINT_SCHEMA_FAILED",
+        )["sections"])
         run_summary.reused("outline")
     else:
         run_summary.stage("outline")
-        sections = make_outline(topic, research)
+        sections = make_outline(topic, research, checkpoint_dir=story / "logs")
         write(outline_path, json.dumps({"sections": sections}, ensure_ascii=False, indent=2))
         durable_checkpoint(story, "outline", "chapters")
     run_summary.stage("chapters")
@@ -2318,7 +2393,7 @@ def create_daily_story(dry_run: bool = False) -> Path | None:
     write(story / "logs/research_grounding_sources.json", json.dumps(sources, ensure_ascii=False, indent=2))
     topic, research, sources = ensure_research_alignment(story, topic, research, sources, history_path)
     run_summary.stage("outline")
-    outline = make_outline(topic, research)
+    outline = make_outline(topic, research, checkpoint_dir=story / "logs")
     write(story / "logs/outline.json", json.dumps({"sections": outline}, ensure_ascii=False, indent=2))
     durable_checkpoint(story, "outline", "chapters")
     run_summary.stage("chapters")

@@ -420,7 +420,7 @@ def publish(identifier: str) -> dict:
             approval_status=current_remote,
             publish_blocked=result.get("status", "OWNER_ACTION_REQUIRED"),
             publish_blocked_action=result.get("action"),
-            youtube_video_id=result.get("video_id"),
+            **({"youtube_video_id": result["video_id"]} if result.get("video_id") else {}),
         )
         modify_remote(identifier, {
             "approval_status": current_remote,

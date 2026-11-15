@@ -77,6 +77,8 @@ def run_publish(catalogue, monkeypatch, remote="REVIEW_PENDING", scopes=UPLOAD_O
         patch.object(yp, "credentials", return_value=MagicMock()),
         patch.object(yp, "get_granted_scopes", return_value=set(scopes)),
         patch.object(yp, "build", return_value=youtube),
+        patch("state_store.load_publish_state", return_value={"episodes": {}}),
+        patch("state_store.save_episode_for_archive", return_value=True),
         patch.object(yp, "archive_metadata", return_value={"metadata": metadata}),
         patch.object(yp, "download", side_effect=lambda i, n, path: path.write_bytes(b"X" * 2000)),
         patch.object(yp, "read_text", side_effect=lambda i, n: METADATA if n == "15_metadata.json" else "title"),

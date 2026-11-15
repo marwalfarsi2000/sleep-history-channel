@@ -148,8 +148,9 @@ def story(tmp_path, monkeypatch):
 def test_tripoli_resume_reanchors_then_builds_the_outline_from_the_reanchored_topic(story):
     seen = {}
 
-    def outline(topic, research):
+    def outline(topic, research, *, checkpoint_dir):
         seen["topic"] = topic
+        assert checkpoint_dir == story / "logs"
         raise RuntimeError("stop-after-outline")
 
     fake = gemini_of(verdict(ra.REANCHOR_REQUIRED, ["السجاد"]), (json.dumps(REANCHORED, ensure_ascii=False), []),
@@ -188,12 +189,12 @@ def test_reanchoring_discards_an_outline_written_for_the_old_angle(story):
     assert not (story / "logs/outline.json").exists() and not (story / "logs/chapter_01.md").exists()
 
 
-def test_gate_is_skipped_for_a_finished_story(story):
+def test_finished_content_without_gate_receipt_is_preserved_but_not_trusted(story):
     (story / "logs/final_story_after_gates.md").write_text("نص", encoding="utf-8")
     (story / "logs/outline.json").write_text('{"sections": []}', encoding="utf-8")
     with mock.patch.object(generate_daily, "ensure_research_alignment") as gate_mock, \
             mock.patch.object(generate_daily, "draft_story", side_effect=RuntimeError("stop")):
-        with pytest.raises(RuntimeError, match="stop"):
+        with pytest.raises(RuntimeError, match="FINAL_CONTENT_CHECKPOINT_UNVERIFIED"):
             generate_daily.resume_partial_story(story)
     gate_mock.assert_not_called()
 

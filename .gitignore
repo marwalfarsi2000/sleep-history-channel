@@ -16,6 +16,8 @@ tools/arabic-diacritization-venv/
 tools/python-runtime/
 assets/audio/pink-noise.m4a
 .pytest_cache/
+.venv/
+.worktrees/
 __pycache__/
 *.pyc
 .runtime/

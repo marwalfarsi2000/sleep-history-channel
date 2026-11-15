@@ -478,6 +478,7 @@ def youtube_fixture(*, scopes, metadata, search_items=None, thumbnail_error=None
         mock.patch.object(youtube_publish, "read_text", side_effect=lambda i, f: {
             "01_title.txt": "title", "02_description.txt": "desc", "15_metadata.json": GOOD_PACKAGING}[f]),
         mock.patch.object(youtube_publish, "MediaFileUpload"),
+        mock.patch("state_store.load_publish_state", return_value={"episodes": {}}),
         mock.patch.object(youtube_publish.time, "sleep"),
     ]
     return youtube, insert, patches
@@ -492,7 +493,7 @@ def isolated_pending_record(tmp_path, monkeypatch):
 def run_publish(patches, recorded=None):
     sink = recorded if recorded is not None else []
     patches = patches + [mock.patch.object(youtube_publish, "_record_remote_fields",
-                                           side_effect=lambda ident, fields: sink.append(dict(fields)))]
+                                           side_effect=lambda ident, fields: sink.append(dict(fields)) or True)]
     for patch in patches:
         patch.start()
     try:
@@ -515,9 +516,9 @@ def test_an_existing_video_id_in_any_store_prevents_a_second_upload(tmp_path, mo
         (tmp_path / "config" / "topics_history.json").write_text(
             json.dumps([{"archive_identifier": "item-1", "youtube_video_id": "OLD1"}]), encoding="utf-8")
     state = {"episodes": {"e": {"archive_identifier": "item-1", "youtube_video_id": "OLD1"}}} if where == "state" else {}
-    with mock.patch("state_store._load_state", return_value=state):
-        youtube, insert, patches = youtube_fixture(scopes=READ, metadata=metadata)
-        result = run_publish(patches)
+    youtube, insert, patches = youtube_fixture(scopes=READ, metadata=metadata)
+    patches.append(mock.patch("state_store.load_publish_state", return_value=state))
+    result = run_publish(patches)
     assert result["video_id"] == "OLD1"
     youtube.videos.return_value.insert.assert_not_called()
 
@@ -556,16 +557,19 @@ def test_intent_is_recorded_before_insert_and_a_crash_without_read_scope_does_no
     youtube2.videos.return_value.insert.assert_not_called()
 
 
-def test_with_a_read_scope_the_marker_is_resolved_by_search_and_a_clean_miss_uploads_once():
+def test_read_scope_resolves_a_found_upload_but_an_empty_search_still_blocks_reupload():
     found = [{"id": {"videoId": "OLD9"}, "snippet": {"title": "title"}}]
     youtube, insert, patches = youtube_fixture(scopes=READ, metadata={"youtube_upload_status": "inserting"}, search_items=found)
     assert run_publish(patches)["video_id"] == "OLD9"
     youtube.videos.return_value.insert.assert_not_called()
     youtube2, insert2, patches2 = youtube_fixture(scopes=READ, metadata={"youtube_upload_status": "inserting"})
-    assert run_publish(patches2)["video_id"] == "NEW123" and insert2.next_chunk.call_count == 1
+    patches2.append(mock.patch.object(youtube_publish, "get_pending_youtube_id", return_value=""))
+    blocked = run_publish(patches2)
+    assert blocked["action"] == "VERIFY_EXISTING_YOUTUBE_UPLOAD"
+    insert2.next_chunk.assert_not_called()
 
 
-def test_a_clean_4xx_rejection_clears_the_intent_marker():
+def test_upload_4xx_does_not_clear_the_uncertain_intent_marker():
     from googleapiclient.errors import HttpError
     youtube, insert, patches = youtube_fixture(scopes=READ, metadata={})
     insert.next_chunk.side_effect = HttpError(mock.Mock(status=403, reason="quotaExceeded"), b"{}")
@@ -573,7 +577,7 @@ def test_a_clean_4xx_rejection_clears_the_intent_marker():
     patches.append(mock.patch.object(youtube_publish, "record_upload_intent", side_effect=lambda i, s: intents.append(s)))
     with pytest.raises(HttpError):
         run_publish(patches)
-    assert intents == ["inserting", "rejected"]
+    assert intents == ["inserting"]
 
 
 # ---- 16. review workflow reliability ----------------------------------------------------------------
@@ -664,6 +668,9 @@ def test_tripoli_resumes_the_same_episode_reanchors_repairs_the_outline_and_reac
     assert saved_topic["research_topic_alignment_status"] == "PASS"
     outline = json.loads((folder / "logs/outline.json").read_text(encoding="utf-8"))["sections"]
     assert sum(s["target_words"] for s in outline) >= 5500
-    assert stages == [("research_alignment", "outline"), ("outline", "chapters")]
+    # Alignment plus each raw outline response is a real durable checkpoint.
+    assert stages == [("research_alignment", "outline")] * 3 + [("outline", "chapters")]
+    checkpoint = json.loads((folder / "logs/outline_checkpoint.json").read_text(encoding="utf-8"))
+    assert checkpoint["status"] == "validated" and checkpoint["attempt"] == 2
     saved_history = json.loads((tmp_path / "config/topics_history.json").read_text(encoding="utf-8"))
     assert len(saved_history) == 1 and saved_history[0]["angle_ar"] == anchored["angle_ar"]

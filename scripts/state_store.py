@@ -61,12 +61,14 @@ def _git(*args: str, input: str | None = None, check: bool = True) -> subprocess
     result = subprocess.run(
         ["git", *args],
         cwd=ROOT,
-        input=input,
+        # Git plumbing is a byte protocol: Windows text-mode stdin would turn
+        # mktree's LF into CRLF and create a file literally named 'state.json\r'.
+        input=input.encode("utf-8") if input is not None else None,
         capture_output=True,
-        text=True,
-        encoding="utf-8",
         env={**os.environ, **IDENTITY},
     )
+    result.stdout = result.stdout.decode("utf-8")
+    result.stderr = result.stderr.decode("utf-8")
     if check and result.returncode != 0:
         raise StateStoreError(f"git {' '.join(args)} failed ({result.returncode}): {result.stderr.strip()}")
     return result
@@ -94,11 +96,13 @@ def _tip() -> str | None:
     return result.stdout.strip() or None if result.returncode == 0 else None
 
 
-def _fetch() -> str | None:
+def _fetch(*, strict: bool = False) -> str | None:
     """Update the remote-tracking ref without touching the working tree."""
     refspec = f"+refs/heads/{AUTOMATION_STATE_BRANCH}:{_remote_ref()}"
     result = _git("fetch", "--no-tags", REMOTE, refspec, check=False)
     if result.returncode != 0:
+        if strict:
+            raise StateStoreError("Fresh automation-state unavailable; publishing must wait")
         print(f"Warning: could not fetch {REMOTE}/{AUTOMATION_STATE_BRANCH}: {result.stderr.strip()}", file=sys.stderr)
     return _tip()
 
@@ -232,6 +236,20 @@ def _mirror_local(name: str, value: object) -> None:
 def _load_state() -> dict:
     state = _loads(_read_remote(STATE_FILE), None)
     return state if isinstance(state, dict) else _empty_state()
+
+
+def load_publish_state() -> dict:
+    """Fresh authoritative state only: cached/unknown absence cannot authorize an upload."""
+    tip = _fetch(strict=True)
+    if tip is None:
+        raise StateStoreError("automation-state branch unavailable; publishing must wait")
+    entries = _tree_entries(tip)
+    if STATE_FILE not in entries:
+        raise StateStoreError("Missing authoritative state.json; publishing must wait")
+    state = json.loads(_blob(entries[STATE_FILE]))
+    if not isinstance(state, dict) or not isinstance(state.get("episodes"), dict):
+        raise StateStoreError("Invalid automation-state; publishing must wait")
+    return state
 
 
 def load_episode_state(episode_id: str) -> dict:
