@@ -13,6 +13,7 @@ from googleapiclient.errors import HttpError
 import youtube_publish as yp
 
 UPLOAD_ONLY = {yp.SCOPE_UPLOAD}
+UPLOAD_AND_READ = {yp.SCOPE_UPLOAD, yp.SCOPE_READONLY}
 FULL = {yp.SCOPE_MANAGE}
 METADATA = json.dumps({
     "youtube_packaging_status": "passed", "final_youtube_title": "title", "title": "title",
@@ -174,7 +175,8 @@ def test_undeterminable_scopes_fail_closed_without_upload(tmp_path, monkeypatch)
 
 
 def test_direct_public_mode_uploads_public_and_never_updates_privacy(tmp_path, monkeypatch):
-    with harness(tmp_path, monkeypatch, "approved_direct_public", UPLOAD_ONLY) as h:
+    with harness(tmp_path, monkeypatch, "approved_direct_public", UPLOAD_AND_READ,
+                 video_state={"uploadStatus": "processed", "privacyStatus": "public"}) as h:
         result = h.run()
     assert h.insert_privacy == "public"
     h.videos.update.assert_not_called()
@@ -239,7 +241,7 @@ def test_resume_direct_mode_with_upload_only_scope_never_uploads_a_second_copy(t
     with harness(tmp_path, monkeypatch, "approved_direct_public", UPLOAD_ONLY, ia_metadata={"youtube_video_id": "yt_old"}) as h:
         result = h.run()
     h.videos.insert.assert_not_called()
-    assert result["video_id"] == "yt_old" and result["already_published"] is True
+    assert result["status"] == "OWNER_ACTION_REQUIRED" and result["uploaded"] is False
 
 
 def test_resume_uploads_only_when_youtube_confirms_video_is_gone(tmp_path, monkeypatch):
