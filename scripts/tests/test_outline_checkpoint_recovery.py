@@ -80,3 +80,52 @@ def test_completed_episode_is_never_regenerated(tmp_path, status):
          patch.object(gd, "draft_story", side_effect=AssertionError("NO_REGEN")):
         assert gd.resume_partial_story(tmp_path) == tmp_path
     assert metadata.read_bytes() == before
+
+
+def test_validated_final_content_resumes_packaging_without_outline_or_chapters(tmp_path):
+    import hashlib
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "topic.json").write_text(json.dumps({**TOPIC, "slug": "saved"}))
+    (logs / "research_notes_draft.md").write_text("saved research")
+    text = "نص محفوظ تم التحقق منه"
+    final = logs / "final_story_after_gates.md"
+    final.write_text(text, encoding="utf-8")
+    receipt = {"quality_gate": {"status": "PASS"}, "fact_check": {"status": "PASS"},
+               "final_sha256": hashlib.sha256(text.encode()).hexdigest()}
+    (logs / "content_gates.json").write_text(json.dumps(receipt))
+    before = final.read_bytes()
+    with patch.object(gd, "gemini", side_effect=AssertionError("NO_AI")), \
+         patch.object(gd, "draft_story", side_effect=AssertionError("NO_REGEN")), \
+         patch.object(gd, "make_outline", side_effect=AssertionError("NO_REGEN")), \
+         patch.object(gd, "build_metadata_files") as package, \
+         patch.object(gd, "upsert_history_checkpoint"):
+        assert gd.resume_partial_story(tmp_path) == tmp_path
+    assert package.call_args.args[4:] == (text, receipt["quality_gate"], receipt["fact_check"])
+    assert final.read_bytes() == before
+
+
+@pytest.mark.parametrize("defect", ["tampered", "failed_gate", "missing_receipt"])
+def test_unverified_final_content_never_bypasses_gates_or_gets_regenerated(tmp_path, defect):
+    import hashlib
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "topic.json").write_text(json.dumps(TOPIC))
+    final = logs / "final_story_after_gates.md"
+    final.write_text("saved content")
+    receipt = {"quality_gate": {"status": "PASS"}, "fact_check": {"status": "PASS"},
+               "final_sha256": hashlib.sha256(b"saved content").hexdigest()}
+    if defect == "tampered":
+        final.write_text("modified content")
+    if defect == "failed_gate":
+        receipt["fact_check"]["status"] = "FAIL"
+    if defect != "missing_receipt":
+        (logs / "content_gates.json").write_text(json.dumps(receipt))
+    before = final.read_bytes()
+    with patch.object(gd, "gemini", side_effect=AssertionError("NO_AI")), \
+         patch.object(gd, "research_topic", side_effect=AssertionError("NO_RESEARCH")), \
+         patch.object(gd, "build_metadata_files") as package:
+        with pytest.raises(RuntimeError, match="FINAL_CONTENT_CHECKPOINT_UNVERIFIED"):
+            gd.resume_partial_story(tmp_path)
+    package.assert_not_called()
+    assert final.read_bytes() == before

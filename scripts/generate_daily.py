@@ -1739,6 +1739,37 @@ def ensure_minimum_story_length(
         )
     return repaired
 
+def saved_content_for_packaging(story: Path) -> tuple[str, dict, dict] | None:
+    """Reuse completed content only with its passing, hash-bound gate receipt.
+
+    Older receipts bind the draft rather than final bytes. Verify the saved
+    assembled draft (or exact ordered chapters) for that legacy contract.
+    An unverified final file is never permission to skip quality checks.
+    """
+    logs = story / "logs"
+    final = logs / "final_story_after_gates.md"
+    if not final.exists():
+        return None
+    try:
+        manifest = json.loads((logs / "content_gates.json").read_text(encoding="utf-8"))
+        text = final.read_text(encoding="utf-8").strip()
+        valid = bool(text) and all(manifest.get(key, {}).get("status") == "PASS"
+                                   for key in ("quality_gate", "fact_check"))
+        if manifest.get("final_sha256"):
+            valid = valid and hashlib.sha256(text.encode("utf-8")).hexdigest() == manifest["final_sha256"]
+        else:
+            assembled = logs / "assembled_story.md"
+            draft = (assembled.read_text(encoding="utf-8").strip() if assembled.exists() else
+                     "\n\n".join(p.read_text(encoding="utf-8").strip()
+                                 for p in sorted(logs.glob("chapter_[0-9][0-9].md"))))
+            valid = valid and bool(draft) and hashlib.sha256(draft.encode("utf-8")).hexdigest() == manifest.get("draft_sha256")
+        if valid:
+            return text, manifest["quality_gate"], manifest["fact_check"]
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    raise RuntimeError("FINAL_CONTENT_CHECKPOINT_UNVERIFIED: preserve saved content; review its gate receipt")
+
+
 def resume_partial_story(story: Path) -> Path:
     _remember_story(story)
     metadata_path = story / "15_metadata.json"
@@ -1758,18 +1789,27 @@ def resume_partial_story(story: Path) -> Path:
     topic = json.loads(topic_path.read_text(encoding="utf-8"))
     research_path = story / "logs/research_notes_draft.md"
     sources_path = story / "logs/research_grounding_sources.json"
+    saved_content = saved_content_for_packaging(story)
     if research_path.exists():
         research = research_path.read_text(encoding="utf-8")
         sources = json.loads(sources_path.read_text(encoding="utf-8")) if sources_path.exists() else []
         run_summary.reused("research")
     else:
+        if saved_content is not None:
+            raise RuntimeError("FINAL_CONTENT_CHECKPOINT_UNVERIFIED: saved research is missing; do not regenerate completed content")
         run_summary.stage("research")
         research, sources = research_topic(topic, story)
         write(research_path, research)
         write(sources_path, json.dumps(sources, ensure_ascii=False, indent=2))
-    if not (story / "logs/final_story_after_gates.md").exists():  # a finished story is past this gate
-        topic, research, sources = ensure_research_alignment(
-            story, topic, research, sources, ROOT / "config/topics_history.json")
+    if saved_content is not None:
+        run_summary.reused("quality_gates")
+        durable_checkpoint(story, "quality_gates", "packaging")
+        build_metadata_files(story, topic, research, sources, *saved_content)
+        from state_machine import State
+        upsert_history_checkpoint(ROOT / "config/topics_history.json", story, topic, State.GENERATING)
+        return story
+    topic, research, sources = ensure_research_alignment(
+        story, topic, research, sources, ROOT / "config/topics_history.json")
     if outline_path.exists():
         sections = validate_outline_sections(parse_json_object(
             outline_json.repair_json_syntax(outline_path.read_text(encoding="utf-8")),

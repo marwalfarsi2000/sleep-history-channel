@@ -84,3 +84,15 @@ def test_tokeninfo_wrong_client_is_denied():
     with patch("urllib.request.urlopen", return_value=response):
         with pytest.raises(RuntimeError, match="BINDING_MISMATCH"):
             yp.get_granted_scopes(credentials)
+
+
+def test_manual_oauth_workflow_cannot_execute_publish_or_write_state():
+    import pathlib, re
+    text = (pathlib.Path(__file__).resolve().parents[2] / ".github/workflows/review.yml").read_text(encoding="utf-8")
+    oauth, decide = text.split("  oauth-preflight:\n", 1)[1].split("  decide:\n", 1)
+    assert "if: inputs.action == 'oauth-preflight'" in oauth
+    assert "if: inputs.action != 'oauth-preflight'" in decide
+    assert "contents: read" in oauth and "contents: write" not in oauth
+    assert "python scripts/youtube_oauth_check.py" in oauth
+    assert not any(command in oauth for command in ("cloud_pipeline.py", "state_store.py", "git_sync.py", "upload-artifact"))
+    assert set(re.findall(r"secrets\.([A-Z_]+)", oauth)) == set(check.FIELDS)
