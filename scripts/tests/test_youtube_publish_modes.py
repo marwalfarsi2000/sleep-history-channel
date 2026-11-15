@@ -268,3 +268,23 @@ def test_hard_crash_discovery_by_title_prevents_duplicate_upload(tmp_path, monke
         result = h.run()
     h.videos.insert.assert_not_called()
     assert result["video_id"] == "yt_found"
+
+
+def test_direct_public_never_marks_private_video_verified(tmp_path, monkeypatch):
+    with harness(tmp_path, monkeypatch, "approved_direct_public", UPLOAD_AND_READ,
+                 video_state={"uploadStatus": "processed", "privacyStatus": "private"}) as h:
+        result = h.run()
+    assert result["status"] == "PUBLISH_BLOCKED_VISIBILITY"
+    assert result["action"] == "CHECK_YOUTUBE_PRIVACY"
+    assert result["video_id"] == "yt_new"
+    assert not any(status == "verified" for _, _, status in h.records)
+
+
+def test_pending_inserting_without_video_id_never_uploads_duplicate(tmp_path, monkeypatch):
+    with harness(tmp_path, monkeypatch, "approved_direct_public", UPLOAD_AND_READ,
+                 ia_metadata={"youtube_upload_status": "inserting"}) as h:
+        result = h.run()
+    assert result["action"] == "RECONCILE_POSSIBLE_YOUTUBE_UPLOAD"
+    assert result["requires_owner_action"] is True
+    h.videos.insert.assert_not_called()
+
