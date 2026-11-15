@@ -1,71 +1,26 @@
-name: YouTube Reauthorize
+name: YouTube Connection Check
 
 on:
   workflow_dispatch:
-    inputs:
-      auth_code:
-        description: "Google authorization code (the value after code= in the localhost URL)"
-        required: true
 
 permissions:
   contents: read
 
 jobs:
-  reauth:
+  check:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Exchange code, store refresh token, verify channel
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Verify saved YouTube OAuth and correct channel (no upload)
         env:
-          AUTH_CODE: ${{ github.event.inputs.auth_code }}
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
-          GH_TOKEN: ${{ secrets.GH_SECRETS_PAT }}
-          REDIRECT_URI: http://localhost:5679/rest/oauth2-credential/callback
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          YOUTUBE_EXPECTED_CHANNEL_ID: ${{ secrets.YOUTUBE_EXPECTED_CHANNEL_ID }}
         run: |
-          set -euo pipefail
-          echo "::add-mask::$AUTH_CODE"
-          python3 - <<'PY'
-          import json, os, subprocess, urllib.parse, urllib.request, urllib.error
-
-          def post(url, data):
-              req = urllib.request.Request(url, data=urllib.parse.urlencode(data).encode())
-              try:
-                  with urllib.request.urlopen(req, timeout=30) as r:
-                      return json.load(r)
-              except urllib.error.HTTPError as e:
-                  body = json.loads(e.read().decode() or "{}")
-                  raise SystemExit(f"FAIL token endpoint: {body.get('error')} {body.get('error_description','')}")
-
-          code = urllib.parse.unquote(os.environ["AUTH_CODE"].strip())
-          cid, csec = os.environ["YOUTUBE_CLIENT_ID"], os.environ["YOUTUBE_CLIENT_SECRET"]
-          tok = post("https://oauth2.googleapis.com/token", {
-              "code": code, "client_id": cid, "client_secret": csec,
-              "redirect_uri": os.environ["REDIRECT_URI"], "grant_type": "authorization_code"})
-          rt = tok.get("refresh_token")
-          if not rt:
-              raise SystemExit("FAIL: no refresh_token returned (consent must use access_type=offline&prompt=consent)")
-          print(f"::add-mask::{rt}")
-          print(f"::add-mask::{tok['access_token']}")
-          print("PASS code exchange. scopes:", tok.get("scope"))
-
-          # Prove the refresh token works on its own (this is what the pipeline does).
-          fresh = post("https://oauth2.googleapis.com/token", {
-              "client_id": cid, "client_secret": csec, "refresh_token": rt, "grant_type": "refresh_token"})
-          at = fresh["access_token"]
-          print(f"::add-mask::{at}")
-          print("PASS refresh-token exchange")
-
-          req = urllib.request.Request(
-              "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
-              headers={"Authorization": f"Bearer {at}"})
-          with urllib.request.urlopen(req, timeout=30) as r:
-              items = json.load(r).get("items", [])
-          if not items:
-              raise SystemExit("FAIL: authorized account has no YouTube channel")
-          print("PASS channel:", items[0]["snippet"]["title"], "| id:", items[0]["id"])
-
-          subprocess.run(["gh", "secret", "set", "YOUTUBE_REFRESH_TOKEN",
-                          "--repo", os.environ["GITHUB_REPOSITORY"]],
-                         input=rt.encode(), check=True)
-          print("PASS YOUTUBE_REFRESH_TOKEN updated")
-          PY
+          python -m pip install --quiet 'google-auth>=2.40,<3'
+          python scripts/youtube_connection_check.py
