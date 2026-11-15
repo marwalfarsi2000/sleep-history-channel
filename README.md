@@ -1,6 +1,6 @@
 # لن تُكمل هذه القصة — Cloud Production
 
-نظام سحابي مجاني-أولًا ينتج حلقة تاريخية عربية طويلة، يحفظها كحزمة مراجعة خاصة في GitHub Actions، ثم ينتظر قرارًا صريحًا من Telegram قبل رفعها إلى Internet Archive وYouTube.
+نظام سحابي مجاني-أولًا ينتج حلقة تاريخية عربية طويلة، ثم يرفع نسخة المراجعة إلى Internet Archive وينتظر قرارًا صريحًا من Telegram قبل رفعها إلى YouTube. **تنبيه: رابط مراجعة Internet Archive قد يكون عامًا قبل اعتماد YouTube؛ لا تعتبره حزمة خاصة.**
 
 ## المسار
 
@@ -59,3 +59,7 @@ python scripts/cloud_pipeline.py produce
 - **حلقة واحدة نشطة:** طلب «🎬 فيديو جديد» لا يبدأ موضوعًا ثانيًا ما دامت حلقة غير مكتملة؛ يستأنف النظام الحلقة المحفوظة (`scripts/episode_selection.py`).
 - **التشخيص:** `.runtime/run_summary.json` هو مصدر الحقيقة لرسائل Telegram (السبب النهائي، المرحلة، هل ستستأنف، هل يلزم إجراء). السجلات احتياط للتشغيلات القديمة فقط.
 - **زر Telegram:** لوحة دائمة «🎬 فيديو جديد» في `cloudflare/telegram-worker.js`، ونشر الـWorker يدويًا عبر `.github/workflows/deploy-telegram-worker.yml`.
+
+## إعادة ربط YouTube بأمان
+
+لا تنسخي رمز `code=` إلى GitHub Actions. استخدمي طريقة الموافقة المحلية المبينة في [`docs/YOUTUBE_OAUTH_ONE_TIME_SETUP.md`](docs/YOUTUBE_OAUTH_ONE_TIME_SETUP.md)؛ ثم شغّلي فحص **YouTube Connection Check** من Actions. يبقى النشر السحابي كما هو ولا تُنشأ حلقة جديدة للاختبار.
